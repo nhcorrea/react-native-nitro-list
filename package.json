@@ -1,6 +1,6 @@
 {
   "name": "@nhcorrea/react-native-nitro-list",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "High-performance drop-in FlatList replacement for React Native, powered by Nitro Modules.",
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
