@@ -1,0 +1,110 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+}
+
+def reactNativeArchitectures() {
+  def value = rootProject.getProperties().get("reactNativeArchitectures")
+  return value ? value.split(",") : ["x86", "x86_64", "armeabi-v7a", "arm64-v8a"]
+}
+
+def isNewArchitectureEnabled() {
+  return rootProject.hasProperty("newArchEnabled") && rootProject.getProperty("newArchEnabled") == "true"
+}
+
+apply plugin: "com.android.library"
+apply plugin: 'org.jetbrains.kotlin.android'
+apply from: '../nitrogen/generated/android/NitroList+autolinking.gradle'
+
+if (isNewArchitectureEnabled()) {
+  apply plugin: "com.facebook.react"
+}
+
+def getExtOrDefault(name) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties["NitroList_" + name]
+}
+
+def getExtOrIntegerDefault(name) {
+  return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["NitroList_" + name]).toInteger()
+}
+
+android {
+  namespace "com.margelo.nitro.nitrolist"
+
+  ndkVersion getExtOrDefault("ndkVersion")
+  compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+
+  defaultConfig {
+    minSdkVersion getExtOrIntegerDefault("minSdkVersion")
+    targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+    buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
+
+    externalNativeBuild {
+      cmake {
+        // -fstack-protector-strong (not -all): -all pays a canary in EVERY
+        // function frame — including the per-scroll-tick JSI hot path — for
+        // marginal coverage gain over -strong.
+        cppFlags "-frtti -fexceptions -Wall -Wextra -fstack-protector-strong"
+        arguments "-DANDROID_STL=c++_shared"
+        abiFilters (*reactNativeArchitectures())
+
+        buildTypes {
+          debug {
+            cppFlags "-O1 -g"
+          }
+          release {
+            cppFlags "-O3"
+          }
+        }
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+    }
+  }
+
+  packagingOptions {
+    excludes = [
+      "META-INF",
+      "META-INF/**",
+      "**/libNitroModules.so",
+      "**/libjsi.so",
+      "**/libreact_nativemodule_core.so",
+      "**/libturbomodulejsijni.so",
+      "**/libreactnative.so",
+      "**/libreactnativejni.so",
+    ]
+  }
+
+  buildFeatures {
+    buildConfig true
+    prefab true
+  }
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+  if (findProject(':react-native-nitro-modules') != null) {
+    implementation project(":react-native-nitro-modules")
+  }
+  implementation "androidx.core:core-ktx:1.13.1"
+}
+
+afterEvaluate {
+  def nitroProject = rootProject.findProject(':react-native-nitro-modules')
+  if (nitroProject) {
+    tasks.configureEach { task ->
+      if (task.name.startsWith('buildCMake')) {
+        def nitroTask = nitroProject.tasks.findByName(task.name)
+        if (nitroTask) {
+          task.dependsOn(nitroTask)
+        }
+      }
+    }
+  }
+}
