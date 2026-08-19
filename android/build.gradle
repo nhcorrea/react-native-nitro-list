@@ -18,9 +18,12 @@ apply plugin: "com.android.library"
 apply plugin: 'org.jetbrains.kotlin.android'
 apply from: '../nitrogen/generated/android/NitroList+autolinking.gradle'
 
-if (isNewArchitectureEnabled()) {
-  apply plugin: "com.facebook.react"
-}
+// NOTE: no `com.facebook.react` plugin here. NitroList has no RN codegen specs
+// (the view is a Nitro HybridView), and without a `codegenConfig` in
+// package.json the react plugin falls back to app-mode codegen — it sweeps
+// node_modules and bakes core/Reanimated codegen classes into this library's
+// AAR, which then collide at :app:mergeLibDex. react-android version
+// substitution is handled by the consumer app's `com.facebook.react.rootproject`.
 
 def getExtOrDefault(name) {
   return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties["NitroList_" + name]
