@@ -28,6 +28,16 @@
         "default": "./lib/commonjs/keyboard/index.js"
       }
     },
+    "./dev": {
+      "import": {
+        "types": "./lib/typescript/module/src/dev/index.d.ts",
+        "default": "./lib/module/dev/index.js"
+      },
+      "require": {
+        "types": "./lib/typescript/commonjs/src/dev/index.d.ts",
+        "default": "./lib/commonjs/dev/index.js"
+      }
+    },
     "./package.json": "./package.json",
     "./section-list": {
       "import": {

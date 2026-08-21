@@ -9,6 +9,11 @@ import {
   type NitroListRenderItem,
 } from '@nhcorrea/react-native-nitro-list';
 
+import {
+  NITRO_LIST_PERF_COMPILED,
+  NitroListBenchmarkScreen,
+} from '@nhcorrea/react-native-nitro-list/dev';
+
 import QAFixturesScreen from './QAFixturesScreen';
 
 type RowKind = 'plain' | 'text' | 'image' | 'gallery' | 'card' | 'header';
@@ -355,15 +360,66 @@ const ListHeader = () => <Text style={styles.listEdge}>— list header —</Text
 const ListFooter = () => <Text style={styles.listEdge}>— list footer —</Text>;
 const Separator = () => <View style={styles.separator} />;
 
-function App(): React.JSX.Element {
-  const [qaMode, setQaMode] = useState(false);
-  if (qaMode) {
-    return <QAFixturesScreen onExit={() => setQaMode(false)} />;
-  }
-  return <StressLab onOpenQA={() => setQaMode(true)} />;
+type ScreenKey = 'bench' | 'stress' | 'qa';
+
+const SCREEN_TABS: { key: ScreenKey; label: string }[] = [
+  { key: 'bench', label: 'Bench' },
+  { key: 'stress', label: 'Stress lab' },
+  { key: 'qa', label: 'QA' },
+];
+
+function ScreenTabs({
+  screen,
+  onSelect,
+}: {
+  screen: ScreenKey;
+  onSelect: (key: ScreenKey) => void;
+}): React.JSX.Element {
+  return (
+    <View style={styles.tabRow}>
+      {SCREEN_TABS.filter(tab => tab.key !== 'bench' || NITRO_LIST_PERF_COMPILED).map(tab => (
+        <Pressable
+          key={tab.key}
+          onPress={() => onSelect(tab.key)}
+          style={[styles.tab, screen === tab.key && styles.tabActive]}
+        >
+          <Text style={styles.tabLabel}>{tab.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
 }
 
-function StressLab({ onOpenQA }: { onOpenQA: () => void }): React.JSX.Element {
+function App(): React.JSX.Element {
+  // Bancada primeiro: o APK existe para rodar a matriz do docs/PERF.md.
+  const [screen, setScreen] = useState<ScreenKey>(
+    NITRO_LIST_PERF_COMPILED ? 'bench' : 'stress'
+  );
+  if (screen === 'qa') {
+    return <QAFixturesScreen onExit={() => setScreen('stress')} />;
+  }
+  if (screen === 'bench') {
+    return (
+      <NitroListBenchmarkScreen
+        headerAccessory={<ScreenTabs screen={screen} onSelect={setScreen} />}
+      />
+    );
+  }
+  return (
+    <StressLab
+      onOpenQA={() => setScreen('qa')}
+      onOpenBench={() => setScreen('bench')}
+    />
+  );
+}
+
+function StressLab({
+  onOpenQA,
+  onOpenBench,
+}: {
+  onOpenQA: () => void;
+  onOpenBench: () => void;
+}): React.JSX.Element {
   const serialRef = useRef({ current: 0 });
   const [dataState, setDataState] = useState<ListData>(() =>
     buildDataset('plain-100k', serialRef.current)
@@ -704,6 +760,9 @@ function StressLab({ onOpenQA }: { onOpenQA: () => void }): React.JSX.Element {
             }}
           />
           <Chip label="QA" active={false} tone="debug" onPress={onOpenQA} />
+          {NITRO_LIST_PERF_COMPILED ? (
+            <Chip label="Bench" active={false} tone="debug" onPress={onOpenBench} />
+          ) : null}
         </View>
       </View>
       <View style={styles.listContainer}>
@@ -762,6 +821,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
+  },
+  tabRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 6,
+  },
+  tab: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#5a5a5e',
+  },
+  tabActive: {
+    backgroundColor: '#0a84ff',
+    borderColor: '#0a84ff',
+  },
+  tabLabel: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   chip: {
     paddingHorizontal: 10,

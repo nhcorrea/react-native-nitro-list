@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Image, Platform, Pressable, StyleSheet, Text, View} from 'react-native';
+import {Image, Platform, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {NitroList, type NitroListHandle, type NitroListRenderItem} from '../NitroList';
 import {
@@ -20,6 +20,12 @@ const benchLog: (...args: unknown[]) => void = __DEV__
 const FIXED_RUN_DURATION_MS = 30_000;
 const DRAW_DISTANCE_OPTIONS = [500, 375, 250] as const;
 
+const MATRIX_REPS = 3;
+const MATRIX_SETTLE_MS = 900;
+const MATRIX_IMAGE_SETTLE_MS = 2_500;
+const MATRIX_COOLDOWN_MS = 1_500;
+const LIST_READY_TIMEOUT_MS = 8_000;
+
 interface BenchItem {
   key: string;
   type: string;
@@ -35,6 +41,20 @@ const DATASETS: Record<DatasetKey, {count: number; estimatedItemSize: number}> =
   'dynamic-10k': {count: 10_000, estimatedItemSize: 80},
   'images-500': {count: 500, estimatedItemSize: 240},
 };
+
+interface MatrixCell {
+  id: number;
+  dataset: DatasetKey;
+  velocityDpPerSec: number | null;
+}
+
+const MATRIX: MatrixCell[] = [
+  {id: 1, dataset: 'fixed-1k', velocityDpPerSec: 2_000},
+  {id: 2, dataset: 'dynamic-1k', velocityDpPerSec: 2_000},
+  {id: 3, dataset: 'dynamic-10k', velocityDpPerSec: 6_000},
+  {id: 4, dataset: 'images-500', velocityDpPerSec: 2_000},
+  {id: 5, dataset: 'dynamic-10k', velocityDpPerSec: null},
+];
 
 function deterministicHeight(index: number): number {
   return 40 + (((index * 2654435761) >>> 0) % 161);
@@ -83,42 +103,159 @@ interface RunReport {
   perf: NitroListPerfSnapshot;
 }
 
+interface RunTiming {
+  jsAvgTickMs: number;
+  jsMaxTickMs: number;
+  jsTickP95Ms: number;
+  jsTickP99Ms: number;
+}
+
+/**
+ * Uma linha da tabela de resultados do PERF.md, ainda em números — separar as
+ * colunas da formatação é o que permite tirar a mediana coluna a coluna entre
+ * as execuções de uma mesma célula da matriz.
+ */
+interface RowCols {
+  blankSamples: number;
+  blankPxMax: number;
+  blankPxSum: number;
+  rangeLatAvg: number | null;
+  rangeLatMax: number | null;
+  jsiPerSec: number;
+  batchAvg: number | null;
+  batchMax: number | null;
+  mounts: number;
+  jsTickAvg: number | null;
+  jsTickMax: number | null;
+  firstRange: number | null;
+  stiMs: number | null;
+  stiPasses: number | null;
+  rangeLatP95: number | null;
+  rangeLatP99: number | null;
+  jsTickP95: number | null;
+  jsTickP99: number | null;
+  burstP95: number | null;
+  burstMax: number | null;
+}
+
+function colsFrom(s: NitroListPerfSnapshot, run?: RunTiming): RowCols {
+  return {
+    blankSamples: s.blankSamples,
+    blankPxMax: s.blankPxMax,
+    blankPxSum: s.blankPxSum,
+    rangeLatAvg: s.rangeLatencySamples > 0 ? s.rangeLatencySumMs / s.rangeLatencySamples : null,
+    rangeLatMax: s.rangeLatencySamples > 0 ? s.rangeLatencyMaxMs : null,
+    jsiPerSec: s.windowMs > 0 ? (s.jsiCalls / s.windowMs) * 1000 : 0,
+    batchAvg: s.batchFlushes > 0 ? s.batchPairsSum / s.batchFlushes : null,
+    batchMax: s.batchFlushes > 0 ? s.batchPairsMax : null,
+    mounts: s.itemMounts,
+    jsTickAvg: run ? run.jsAvgTickMs : null,
+    jsTickMax: run ? run.jsMaxTickMs : null,
+    firstRange: s.firstRangeLatencyMs,
+    stiMs: s.lastScrollToIndex ? s.lastScrollToIndex.durationMs : null,
+    stiPasses: s.lastScrollToIndex ? s.lastScrollToIndex.correctionPasses : null,
+    rangeLatP95: s.rangeLatencyTail.count > 0 ? s.rangeLatencyTail.p95 : null,
+    rangeLatP99: s.rangeLatencyTail.count > 0 ? s.rangeLatencyTail.p99 : null,
+    jsTickP95: run ? run.jsTickP95Ms : null,
+    jsTickP99: run ? run.jsTickP99Ms : null,
+    burstP95: s.mountBurst.count > 0 ? s.mountBurst.p95 : null,
+    burstMax: s.mountBurst.count > 0 ? s.mountBurst.max : null,
+  };
+}
+
+function median(values: number[]): number {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function medianCols(runs: RowCols[]): RowCols {
+  const pick = (read: (c: RowCols) => number | null): number | null => {
+    const values: number[] = [];
+    for (const run of runs) {
+      const value = read(run);
+      if (value != null) values.push(value);
+    }
+    return values.length > 0 ? median(values) : null;
+  };
+  const req = (read: (c: RowCols) => number): number => median(runs.map(read));
+  return {
+    blankSamples: req((c) => c.blankSamples),
+    blankPxMax: req((c) => c.blankPxMax),
+    blankPxSum: req((c) => c.blankPxSum),
+    rangeLatAvg: pick((c) => c.rangeLatAvg),
+    rangeLatMax: pick((c) => c.rangeLatMax),
+    jsiPerSec: req((c) => c.jsiPerSec),
+    batchAvg: pick((c) => c.batchAvg),
+    batchMax: pick((c) => c.batchMax),
+    mounts: req((c) => c.mounts),
+    jsTickAvg: pick((c) => c.jsTickAvg),
+    jsTickMax: pick((c) => c.jsTickMax),
+    firstRange: pick((c) => c.firstRange),
+    stiMs: pick((c) => c.stiMs),
+    stiPasses: pick((c) => c.stiPasses),
+    rangeLatP95: pick((c) => c.rangeLatP95),
+    rangeLatP99: pick((c) => c.rangeLatP99),
+    jsTickP95: pick((c) => c.jsTickP95),
+    jsTickP99: pick((c) => c.jsTickP99),
+    burstP95: pick((c) => c.burstP95),
+    burstMax: pick((c) => c.burstMax),
+  };
+}
+
+/**
+ * Campo Device no formato usado pela tabela do PERF.md: modelo + se é físico
+ * + em que build foi medido. Nunca comparar uma linha (dev) com uma (rel).
+ */
+function deviceLabel(): string {
+  const build = __DEV__ ? 'dev' : 'rel';
+  if (Platform.OS === 'android') {
+    const c = Platform.constants as {Model?: string; Brand?: string; Fingerprint?: string};
+    const model = c.Model ?? 'android';
+    const emulated = /generic|emulator|sdk_gphone|vbox|goldfish/i.test(
+      `${model} ${c.Brand ?? ''} ${c.Fingerprint ?? ''}`,
+    );
+    return `${model} (${emulated ? 'emu' : 'fís.'}, ${build})`;
+  }
+  return `iOS ${Platform.Version} (${build})`;
+}
+
+function renderRow(dataset: DatasetKey, scenario: string, c: RowCols): string {
+  const r0 = (n: number | null) => (n == null ? '–' : `${Math.round(n)}`);
+  const r1 = (n: number | null) => (n == null ? '–' : `${Math.round(n * 10) / 10}`);
+  const pair = (a: number | null, b: number | null, fmt: (n: number | null) => string) =>
+    a == null && b == null ? '–' : `${fmt(a)}/${fmt(b)}`;
+  const date = new Date().toISOString().slice(0, 10);
+  const blank = `${Math.round(c.blankSamples)}/${r0(c.blankPxMax)}/${r0(c.blankPxSum)}`;
+  return (
+    `| ${date} | ${deviceLabel()} | ${dataset} | ${scenario} | ${blank} | ` +
+    `${pair(c.rangeLatAvg, c.rangeLatMax, r1)} | ${r0(c.jsiPerSec)} | ` +
+    `${pair(c.batchAvg, c.batchMax, r1)} | ${r0(c.mounts)} | ` +
+    `${pair(c.jsTickAvg, c.jsTickMax, r1)} | ${r0(c.firstRange)} | ` +
+    `${pair(c.stiMs, c.stiPasses, r0)} | ${pair(c.rangeLatP95, c.rangeLatP99, r1)} | ` +
+    `${pair(c.jsTickP95, c.jsTickP99, r1)} | ${pair(c.burstP95, c.burstMax, r0)} |`
+  );
+}
+
 function toPerfRow(
   dataset: DatasetKey,
   scenario: string,
   s: NitroListPerfSnapshot,
-  run?: {jsAvgTickMs: number; jsMaxTickMs: number; jsTickP95Ms: number; jsTickP99Ms: number},
+  run?: RunTiming,
 ): string {
-  const r1 = (n: number) => Math.round(n * 10) / 10;
-  const date = new Date().toISOString().slice(0, 10);
-  const device =
-    Platform.OS === 'android'
-      ? ((Platform.constants as {Model?: string}).Model ?? 'android')
-      : `iOS ${Platform.Version}`;
-  const blank = `${s.blankSamples}/${Math.round(s.blankPxMax)}/${Math.round(s.blankPxSum)}`;
-  const rangeLat =
-    s.rangeLatencySamples > 0
-      ? `${r1(s.rangeLatencySumMs / s.rangeLatencySamples)}/${r1(s.rangeLatencyMaxMs)}`
-      : '–';
-  const jsiPerSec = s.windowMs > 0 ? Math.round((s.jsiCalls / s.windowMs) * 1000) : 0;
-  const batch =
-    s.batchFlushes > 0 ? `${r1(s.batchPairsSum / s.batchFlushes)}/${s.batchPairsMax}` : '–';
-  const jsTick = run ? `${run.jsAvgTickMs}/${run.jsMaxTickMs}` : '–';
-  const firstRange = s.firstRangeLatencyMs != null ? `${Math.round(s.firstRangeLatencyMs)}` : '–';
-  const sti = s.lastScrollToIndex
-    ? `${s.lastScrollToIndex.durationMs}/${s.lastScrollToIndex.correctionPasses}`
-    : '–';
-  const rangeLatTail =
-    s.rangeLatencyTail.count > 0
-      ? `${r1(s.rangeLatencyTail.p95)}/${r1(s.rangeLatencyTail.p99)}`
-      : '–';
-  const jsTickTail = run ? `${r1(run.jsTickP95Ms)}/${r1(run.jsTickP99Ms)}` : '–';
-  const burst =
-    s.mountBurst.count > 0 ? `${Math.round(s.mountBurst.p95)}/${Math.round(s.mountBurst.max)}` : '–';
-  return `| ${date} | ${device} | ${dataset} | ${scenario} | ${blank} | ${rangeLat} | ${jsiPerSec} | ${batch} | ${s.itemMounts} | ${jsTick} | ${firstRange} | ${sti} | ${rangeLatTail} | ${jsTickTail} | ${burst} |`;
+  return renderRow(dataset, scenario, colsFrom(s, run));
 }
 
-export function NitroListBenchmarkScreen() {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface NitroListBenchmarkScreenProps {
+  /** Slot no topo dos controles — usado pelo app de exemplo para a barra de telas. */
+  headerAccessory?: React.ReactNode;
+}
+
+export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkScreenProps = {}) {
   const [dataset, setDataset] = useState<DatasetKey>('dynamic-1k');
   const [remountKey, setRemountKey] = useState(0);
   const [snapshot, setSnapshot] = useState<NitroListPerfSnapshot | null>(null);
@@ -128,10 +265,14 @@ export function NitroListBenchmarkScreen() {
   const [lastRow, setLastRow] = useState<string | null>(null);
   const [drawDistance, setDrawDistance] = useState<number>(DRAW_DISTANCE_OPTIONS[0]);
   const [uiThreadScroll, setUiThreadScroll] = useState(false);
+  const [matrixProgress, setMatrixProgress] = useState<string | null>(null);
+  const [matrixRows, setMatrixRows] = useState<string[]>([]);
   const scenarioSuffix = `@dd${drawDistance}${uiThreadScroll ? ' f4' : ''}`;
 
   const listRef = useRef<NitroListHandle>(null);
   const runAbortRef = useRef(false);
+  const runningRef = useRef(false);
+  const matrixRunningRef = useRef(false);
 
   const items = useMemo(() => makeItems(dataset), [dataset]);
   const {estimatedItemSize} = DATASETS[dataset];
@@ -168,110 +309,233 @@ export function NitroListBenchmarkScreen() {
   const keyExtractor = useCallback((item: BenchItem) => item.key, []);
   const getItemType = useCallback((item: BenchItem) => item.type, []);
 
+  const markRunning = useCallback((value: boolean) => {
+    runningRef.current = value;
+    setRunning(value);
+  }, []);
+
+  /**
+   * Dirige o scroll por `scrollToOffset` a velocidade constante e resolve com o
+   * relatório do run. Promise (e não callback) porque o runner da matriz
+   * encadeia dezenas destes runs.
+   */
+  const runScrollRun = useCallback(
+    (ds: DatasetKey, velocityDpPerSec: number, mode: RunMode, scenario: string) =>
+      new Promise<{row: string; report: RunReport} | null>((resolve) => {
+        const list = listRef.current;
+        if (!list) {
+          resolve(null);
+          return;
+        }
+        markRunning(true);
+        runAbortRef.current = false;
+        NitroListPerfMonitor.reset();
+
+        const viewportH = list.getWindowSize().height;
+        const startedAt = Date.now();
+        let offset = 0;
+        let direction: 1 | -1 = 1;
+        let lastTick = Date.now();
+        let ticks = 0;
+        let maxGap = 0;
+        const tickGaps = new LatencyDistribution();
+
+        list.scrollToOffset({offset: 0, animated: false});
+
+        const finish = () => {
+          const durationMs = Date.now() - startedAt;
+          const gapTail = tickGaps.snapshot();
+          const report: RunReport = {
+            dataset: ds,
+            mode,
+            velocityDpPerSec,
+            durationMs,
+            jsTicks: ticks,
+            jsAvgTickMs: ticks > 0 ? Math.round((durationMs / ticks) * 10) / 10 : 0,
+            jsMaxTickMs: Math.round(maxGap * 10) / 10,
+            jsTickP50Ms: Math.round(gapTail.p50 * 10) / 10,
+            jsTickP95Ms: Math.round(gapTail.p95 * 10) / 10,
+            jsTickP99Ms: Math.round(gapTail.p99 * 10) / 10,
+            perf: NitroListPerfMonitor.getSnapshot(),
+          };
+          setLastReport(report);
+          markRunning(false);
+          const row = toPerfRow(ds, scenario, report.perf, report);
+          setLastRow(row);
+          resolve({row, report});
+        };
+
+        const step = () => {
+          if (runAbortRef.current || !listRef.current) {
+            finish();
+            return;
+          }
+          const now = Date.now();
+          if (mode === 'fixed-30s' && now - startedAt >= FIXED_RUN_DURATION_MS) {
+            finish();
+            return;
+          }
+          const dt = Math.min(now - lastTick, 64);
+          if (now !== lastTick) {
+            maxGap = Math.max(maxGap, now - lastTick);
+            tickGaps.record(now - lastTick);
+          }
+          lastTick = now;
+          ticks++;
+          offset += (direction * (velocityDpPerSec * dt)) / 1000;
+          const maxOffset = Math.max(0, listRef.current.getTotalSize() - viewportH);
+          if (direction === 1 && offset >= maxOffset) {
+            offset = maxOffset;
+            direction = -1;
+          } else if (direction === -1 && offset <= 0) {
+            listRef.current.scrollToOffset({offset: 0, animated: false});
+            finish();
+            return;
+          }
+          listRef.current.scrollToOffset({offset, animated: false});
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }),
+    [markRunning],
+  );
+
+  const runStiRun = useCallback(
+    async (
+      ds: DatasetKey,
+      scenario: string,
+    ): Promise<{row: string; snapshot: NitroListPerfSnapshot} | null> => {
+      const list = listRef.current;
+      if (!list) return null;
+      NitroListPerfMonitor.reset();
+      const target = Math.floor(DATASETS[ds].count * 0.85);
+      await list.scrollToIndex({index: target, animated: false, viewPosition: 0.5}).catch(() => {});
+      const snap = NitroListPerfMonitor.getSnapshot();
+      setSnapshot(snap);
+      const row = toPerfRow(ds, scenario, snap);
+      setLastRow(row);
+      return {row, snapshot: snap};
+    },
+    [],
+  );
+
   const runScrollTest = useCallback(
     (velocityDpPerSec: number) => {
-      const list = listRef.current;
-      if (!list || running) return;
-      setRunning(true);
-      runAbortRef.current = false;
-      NitroListPerfMonitor.reset();
-
-      const mode = runMode;
+      if (runningRef.current || matrixRunningRef.current) return;
       const scenario = `${velocityDpPerSec / 1000}k dp/s ${
-        mode === 'fixed-30s' ? '30s' : 'sweep'
+        runMode === 'fixed-30s' ? '30s' : 'sweep'
       } ${scenarioSuffix}`;
-      const viewportH = list.getWindowSize().height;
-      const startedAt = Date.now();
-      let offset = 0;
-      let direction: 1 | -1 = 1;
-      let lastTick = Date.now();
-      let ticks = 0;
-      let maxGap = 0;
-      const tickGaps = new LatencyDistribution();
-
-      list.scrollToOffset({offset: 0, animated: false});
-
-      const finish = () => {
-        const durationMs = Date.now() - startedAt;
-        const gapTail = tickGaps.snapshot();
-        const report: RunReport = {
-          dataset,
-          mode,
-          velocityDpPerSec,
-          durationMs,
-          jsTicks: ticks,
-          jsAvgTickMs: ticks > 0 ? Math.round((durationMs / ticks) * 10) / 10 : 0,
-          jsMaxTickMs: Math.round(maxGap * 10) / 10,
-          jsTickP50Ms: Math.round(gapTail.p50 * 10) / 10,
-          jsTickP95Ms: Math.round(gapTail.p95 * 10) / 10,
-          jsTickP99Ms: Math.round(gapTail.p99 * 10) / 10,
-          perf: NitroListPerfMonitor.getSnapshot(),
-        };
-        setLastReport(report);
-        setRunning(false);
-        const row = toPerfRow(dataset, scenario, report.perf, report);
-        setLastRow(row);
-        benchLog('[NitroListBenchmark]', JSON.stringify(report, null, 2));
-        benchLog('[NitroListBenchmark] results row:\n' + row);
-      };
-
-      const step = () => {
-        if (runAbortRef.current || !listRef.current) {
-          finish();
-          return;
-        }
-        const now = Date.now();
-        if (mode === 'fixed-30s' && now - startedAt >= FIXED_RUN_DURATION_MS) {
-          finish();
-          return;
-        }
-        const dt = Math.min(now - lastTick, 64);
-        if (now !== lastTick) {
-          maxGap = Math.max(maxGap, now - lastTick);
-          tickGaps.record(now - lastTick);
-        }
-        lastTick = now;
-        ticks++;
-        offset += direction * (velocityDpPerSec * dt) / 1000;
-        const maxOffset = Math.max(0, listRef.current.getTotalSize() - viewportH);
-        if (direction === 1 && offset >= maxOffset) {
-          offset = maxOffset;
-          direction = -1;
-        } else if (direction === -1 && offset <= 0) {
-          listRef.current.scrollToOffset({offset: 0, animated: false});
-          finish();
-          return;
-        }
-        listRef.current.scrollToOffset({offset, animated: false});
-        requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
+      void runScrollRun(dataset, velocityDpPerSec, runMode, scenario).then((result) => {
+        if (!result) return;
+        benchLog('[NitroListBenchmark]', JSON.stringify(result.report, null, 2));
+        benchLog('[NitroListBenchmark] results row:\n' + result.row);
+      });
     },
-    [dataset, running, runMode, scenarioSuffix],
+    [dataset, runMode, runScrollRun, scenarioSuffix],
   );
 
   const runScrollToIndexTest = useCallback(() => {
-    const list = listRef.current;
-    if (!list || running) return;
-    NitroListPerfMonitor.reset();
-    const target = Math.floor(items.length * 0.85);
-    void list.scrollToIndex({index: target, animated: false, viewPosition: 0.5}).then(() => {
-      const snap = NitroListPerfMonitor.getSnapshot();
-      setSnapshot(snap);
-      const row = toPerfRow(dataset, `scrollToIndex ${scenarioSuffix}`, snap);
-      setLastRow(row);
-      benchLog('[NitroListBenchmark] results row:\n' + row);
+    if (runningRef.current || matrixRunningRef.current) return;
+    void runStiRun(dataset, `scrollToIndex ${scenarioSuffix}`).then((result) => {
+      if (result) benchLog('[NitroListBenchmark] results row:\n' + result.row);
     });
-  }, [dataset, items.length, running, scenarioSuffix]);
+  }, [dataset, runStiRun, scenarioSuffix]);
 
   const stop = useCallback(() => {
     runAbortRef.current = true;
   }, []);
 
   const remount = useCallback(() => {
+    if (runningRef.current || matrixRunningRef.current) return;
     NitroListPerfMonitor.reset();
     setRemountKey((k) => k + 1);
   }, []);
+
+  /** Trocar dataset/drawDistance/F4 no meio de um run invalidaria o run. */
+  const applyConfig = useCallback((change: () => void) => {
+    if (runningRef.current || matrixRunningRef.current) return;
+    change();
+    NitroListPerfMonitor.reset();
+    setRemountKey((k) => k + 1);
+  }, []);
+
+  /** Troca o dataset, remonta e espera a lista existir de novo antes do run. */
+  const mountDataset = useCallback(async (ds: DatasetKey) => {
+    setDataset(ds);
+    setRemountKey((k) => k + 1);
+    const deadline = Date.now() + LIST_READY_TIMEOUT_MS;
+    for (;;) {
+      await delay(100);
+      const list = listRef.current;
+      if (list != null && list.getTotalSize() > 0) break;
+      if (Date.now() > deadline) break;
+    }
+    await delay(ds === 'images-500' ? MATRIX_IMAGE_SETTLE_MS : MATRIX_SETTLE_MS);
+  }, []);
+
+  /**
+   * Matriz padrão do PERF.md: 5 células × 3 execuções, mediana coluna a coluna.
+   * Cada execução remonta a lista para partir sempre do mesmo estado.
+   */
+  const runMatrix = useCallback(async () => {
+    if (runningRef.current || matrixRunningRef.current) return;
+    matrixRunningRef.current = true;
+    runAbortRef.current = false;
+    setMatrixRows([]);
+    const medians: string[] = [];
+    const allRows: string[] = [];
+
+    for (let cellIdx = 0; cellIdx < MATRIX.length; cellIdx++) {
+      const cell = MATRIX[cellIdx];
+      const scenario =
+        cell.velocityDpPerSec == null
+          ? `scrollToIndex ${scenarioSuffix}`
+          : `${cell.velocityDpPerSec / 1000}k dp/s 30s ${scenarioSuffix}`;
+      const cols: RowCols[] = [];
+
+      for (let rep = 0; rep < MATRIX_REPS; rep++) {
+        if (runAbortRef.current) break;
+        setMatrixProgress(
+          `matriz ${cellIdx + 1}/${MATRIX.length} · ${cell.dataset} · run ${rep + 1}/${MATRIX_REPS}`,
+        );
+        await mountDataset(cell.dataset);
+        if (runAbortRef.current) break;
+        if (cell.velocityDpPerSec == null) {
+          const result = await runStiRun(cell.dataset, scenario);
+          if (result) {
+            allRows.push(result.row);
+            cols.push(colsFrom(result.snapshot));
+          }
+        } else {
+          const result = await runScrollRun(
+            cell.dataset,
+            cell.velocityDpPerSec,
+            'fixed-30s',
+            scenario,
+          );
+          if (result) {
+            allRows.push(result.row);
+            cols.push(colsFrom(result.report.perf, result.report));
+          }
+        }
+        await delay(MATRIX_COOLDOWN_MS);
+      }
+
+      if (cols.length > 0) {
+        const row = renderRow(cell.dataset, scenario, medianCols(cols));
+        medians.push(row);
+        setMatrixRows(medians.slice());
+      }
+      if (runAbortRef.current) break;
+    }
+
+    matrixRunningRef.current = false;
+    setMatrixProgress(runAbortRef.current ? 'matriz abortada (parcial)' : null);
+    benchLog(
+      `[NitroListBenchmark] matrix runs (${MATRIX_REPS}x por célula):\n` + allRows.join('\n'),
+    );
+    benchLog('[NitroListBenchmark] matrix median rows:\n' + medians.join('\n'));
+  }, [mountDataset, runScrollRun, runStiRun, scenarioSuffix]);
 
   const dump = useCallback(() => {
     const snap = NitroListPerfMonitor.getSnapshot();
@@ -294,14 +558,12 @@ export function NitroListBenchmarkScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.controls}>
+        {headerAccessory}
         <View style={styles.buttonRow}>
           {(Object.keys(DATASETS) as DatasetKey[]).map((key) => (
             <Pressable
               key={key}
-              onPress={() => {
-                setDataset(key);
-                remount();
-              }}
+              onPress={() => applyConfig(() => setDataset(key))}
               style={[styles.button, dataset === key && styles.buttonActive]}>
               <Text style={styles.buttonText}>{key}</Text>
             </Pressable>
@@ -324,7 +586,7 @@ export function NitroListBenchmarkScreen() {
               {runMode === 'fixed-30s' ? 'mode: 30s' : 'mode: sweep'}
             </Text>
           </Pressable>
-          {running ? (
+          {running || matrixProgress != null ? (
             <Pressable onPress={stop} style={[styles.button, styles.buttonStop]}>
               <Text style={styles.buttonText}>Stop</Text>
             </Pressable>
@@ -341,23 +603,25 @@ export function NitroListBenchmarkScreen() {
           {DRAW_DISTANCE_OPTIONS.map((dd) => (
             <Pressable
               key={dd}
-              onPress={() => {
-                setDrawDistance(dd);
-                remount();
-              }}
+              onPress={() => applyConfig(() => setDrawDistance(dd))}
               style={[styles.button, drawDistance === dd && styles.buttonActive]}>
               <Text style={styles.buttonText}>dd{dd}</Text>
             </Pressable>
           ))}
           <Pressable
-            onPress={() => {
-              setUiThreadScroll((v) => !v);
-              remount();
-            }}
+            onPress={() => applyConfig(() => setUiThreadScroll((v) => !v))}
             style={[styles.button, uiThreadScroll && styles.buttonActive]}>
             <Text style={styles.buttonText}>F4: {uiThreadScroll ? 'on' : 'off'}</Text>
           </Pressable>
+          <Pressable
+            onPress={() => void runMatrix()}
+            style={[styles.button, styles.buttonMatrix]}>
+            <Text style={styles.buttonText}>Run matrix (~8min)</Text>
+          </Pressable>
         </View>
+        {matrixProgress != null ? (
+          <Text style={styles.progress}>{matrixProgress}</Text>
+        ) : null}
         {s ? (
           <Text style={styles.stats}>
             blank: {s.blankSamples}/{s.scrollSamples} samples · max {Math.round(s.blankPxMax)}dp ·
@@ -385,7 +649,13 @@ export function NitroListBenchmarkScreen() {
               : ''}
           </Text>
         ) : null}
-        {lastRow != null ? (
+        {matrixRows.length > 0 ? (
+          <ScrollView style={styles.rowsBox}>
+            <Text selectable style={styles.rowOutput}>
+              {matrixRows.join('\n')}
+            </Text>
+          </ScrollView>
+        ) : lastRow != null ? (
           <Text selectable style={styles.rowOutput}>
             {lastRow}
           </Text>
@@ -437,14 +707,26 @@ const styles = StyleSheet.create({
   buttonStop: {
     backgroundColor: '#ff453a',
   },
+  buttonMatrix: {
+    backgroundColor: '#30d158',
+  },
   buttonText: {
     color: '#fff',
     fontSize: 12,
+  },
+  progress: {
+    color: '#30d158',
+    fontSize: 11,
+    marginBottom: 4,
   },
   stats: {
     color: '#7dff9b',
     fontSize: 11,
     fontVariant: ['tabular-nums'],
+  },
+  rowsBox: {
+    maxHeight: 150,
+    marginTop: 4,
   },
   rowOutput: {
     color: '#ffd60a',

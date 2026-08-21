@@ -3347,7 +3347,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     ],
   );
 
-  const alwaysRenderKeysJoined = alwaysRender?.keys != null ? alwaysRender.keys.join(' ') : '';
+  const alwaysRenderKeysJoined = alwaysRender?.keys != null ? alwaysRender.keys.join('\0') : '';
   const alwaysRenderKeyIndices = useMemo<number[] | null>(() => {
     const keys = alwaysRender?.keys;
     if (keys == null || keys.length === 0 || keyExtractor == null) return null;

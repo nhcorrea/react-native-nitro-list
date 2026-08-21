@@ -11,6 +11,14 @@ module.exports = api => {
         {
           extensions: ['.js', '.ts', '.json', '.jsx', '.tsx'],
           alias: {
+            // Subpaths primeiro (`.../dev`) — a raiz do source é o diretório de
+            // `pak.source` ("src/index"), não o próprio arquivo de entrada.
+            [`^${pak.name}/(.+)$`]: path.join(
+              __dirname,
+              '..',
+              path.dirname(pak.source),
+              '\\1'
+            ),
             [pak.name]: path.join(__dirname, '..', pak.source),
           },
         },

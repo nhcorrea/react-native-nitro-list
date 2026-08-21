@@ -13,6 +13,9 @@
     "paths": {
       "@nhcorrea/react-native-nitro-list": [
         "../lib/typescript/module/src"
+      ],
+      "@nhcorrea/react-native-nitro-list/*": [
+        "../lib/typescript/module/src/*"
       ]
     }
   }

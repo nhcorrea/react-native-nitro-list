@@ -8,7 +8,15 @@
     "lint": "eslint .",
     "start": "react-native start --reset-cache",
     "test": "jest",
-    "pod": "bundle install && bundle exec pod install --project-directory=ios"
+    "pod": "bundle install && bundle exec pod install --project-directory=ios",
+    "apk": "cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a",
+    "apk:all-abis": "cd android && ./gradlew assembleRelease",
+    "apk:clean": "cd android && ./gradlew clean",
+    "apk:install": "adb install -r android/app/build/outputs/apk/release/app-release.apk",
+    "apk:launch": "adb shell am start -n com.nitrolistexample/.MainActivity",
+    "bench:logcat": "adb logcat -c && adb logcat -s ReactNativeJS:V",
+    "bench:gfx:reset": "adb shell dumpsys gfxinfo com.nitrolistexample reset",
+    "bench:gfx": "adb shell dumpsys gfxinfo com.nitrolistexample"
   },
   "dependencies": {
     "@react-native/new-app-screen": "0.86.0",

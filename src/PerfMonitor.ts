@@ -1,5 +1,13 @@
 
-export const NITRO_LIST_PERF_COMPILED = (typeof __DEV__ !== 'undefined' && __DEV__) || process.env.EXPO_PUBLIC_NITRO_BENCH === '1';
+function benchGlobalFlag(): boolean {
+  const g = globalThis as {__NITRO_LIST_PERF__?: boolean};
+  return g.__NITRO_LIST_PERF__ === true;
+}
+
+export const NITRO_LIST_PERF_COMPILED =
+  (typeof __DEV__ !== 'undefined' && __DEV__) ||
+  process.env.EXPO_PUBLIC_NITRO_BENCH === '1' ||
+  benchGlobalFlag();
 
 export interface NitroListScrollToIndexStats {
   durationMs: number;

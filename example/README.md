@@ -1,6 +1,28 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+App de exemplo **e bancada de performance** da NitroList. Três telas:
 
-# Getting Started
+| Tela | Para que serve |
+|---|---|
+| **Bench** (inicial) | Runs reprodutíveis que emitem linhas prontas da tabela do [`docs/PERF.md`](../docs/PERF.md), incluindo `Run matrix` (a matriz padrão inteira, 5 células × 3 execuções, mediana por coluna). |
+| **Stress lab** | Uso interativo: 100k itens, imagens, sticky, churn de dados, torture, auto-scroll, HUD. Expõe bug, não número comparável. |
+| **QA** | Fixtures de comportamento. |
+
+## Medir performance (APK de release)
+
+```sh
+npm run apk          # release arm64
+npm run apk:install
+npm run apk:launch
+npm run bench:logcat # copiar as linhas "matrix median rows:"
+```
+
+O procedimento completo — condições do device, o que cada coluna acusa, como
+colar no PERF.md — está em [`docs/PROFILE.md`](../docs/PROFILE.md). O APK de
+release compila o `NitroListPerfMonitor` por causa de `perfFlag.ts`
+(importado antes de tudo no `index.js`).
+
+# Getting Started (template React Native)
+
+This is a [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
 
 > **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
 
