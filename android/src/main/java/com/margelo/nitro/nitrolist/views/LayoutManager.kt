@@ -26,6 +26,11 @@ class LayoutManager {
 
   fun setItemTypes(types: ShortBuffer?, count: Int) = nativeSetItemTypes(nativeHandle, types, count)
 
+  fun setColumnCount(columns: Int) = nativeSetColumnCount(nativeHandle, columns)
+
+  fun setItemSpans(spans: ShortBuffer?, count: Int): Boolean =
+    nativeSetItemSpans(nativeHandle, spans, count)
+
   fun fillLayoutSlab(
     slab: DoubleBuffer,
     capacityDoubles: Int,
@@ -36,6 +41,9 @@ class LayoutManager {
   ): Int = nativeFillLayoutSlab(
     nativeHandle, slab, capacityDoubles, scrollOffsetPx, viewportHPx, drawDistancePx, outputScale,
   )
+
+  fun fillTypeStats(out: DoubleBuffer, capacityDoubles: Int, outputScale: Float): Int =
+    nativeFillTypeStats(nativeHandle, out, capacityDoubles, outputScale)
 
   fun setItemSize(index: Int, sizePx: Float): Boolean = nativeSetItemSize(nativeHandle, index, sizePx)
 
@@ -88,6 +96,8 @@ class LayoutManager {
   private external fun nativeSetEstimatesFrozen(handle: Long, frozen: Boolean): Boolean
   private external fun nativeSetTypeAverages(handle: Long, enabled: Boolean)
   private external fun nativeSetItemTypes(handle: Long, types: ShortBuffer?, count: Int)
+  private external fun nativeSetColumnCount(handle: Long, columns: Int)
+  private external fun nativeSetItemSpans(handle: Long, spans: ShortBuffer?, count: Int): Boolean
   private external fun nativeFillLayoutSlab(
     handle: Long,
     slab: DoubleBuffer,
@@ -95,6 +105,12 @@ class LayoutManager {
     scrollOffset: Float,
     viewportHeight: Float,
     drawDistance: Float,
+    outputScale: Float,
+  ): Int
+  private external fun nativeFillTypeStats(
+    handle: Long,
+    out: DoubleBuffer,
+    capacityDoubles: Int,
     outputScale: Float,
   ): Int
   private external fun nativeSetItemSize(handle: Long, index: Int, size: Float): Boolean

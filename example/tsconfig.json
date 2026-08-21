@@ -12,7 +12,7 @@
     "strict": true,
     "paths": {
       "@nhcorrea/react-native-nitro-list": [
-        "../lib/typescript/src"
+        "../lib/typescript/module/src"
       ]
     }
   }

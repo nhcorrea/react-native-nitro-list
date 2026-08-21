@@ -47,6 +47,12 @@ bool LayoutCore::setItemCount(int32_t count) {
     measured_.resize(count, 0);
     types_.resize(count, 0);
   }
+  if (static_cast<int32_t>(spans_.size()) < count) {
+    spans_.resize(count, 1);
+  }
+  if (count > itemCount_) {
+    std::fill(spans_.begin() + itemCount_, spans_.begin() + count, 1);
+  }
   if (count > itemCount_) {
     // Fill every newly-exposed slot with the estimate. Unlike the previous
     // Swift/Kotlin managers, this also covers re-growing within an old
@@ -287,7 +293,10 @@ void LayoutCore::resetAll() {
   std::vector<float>().swap(offsets_);
   std::vector<uint8_t>().swap(measured_);
   std::vector<uint16_t>().swap(types_);
+  std::vector<uint16_t>().swap(spans_);
+  std::vector<int32_t>().swap(rowStart_);
   std::vector<TypeStats>().swap(typeStats_);
+  columnCount_ = 1;
   itemCount_ = 0;
   estimate_ = 0.0f;
   totalSize_ = 0.0f;
@@ -392,6 +401,33 @@ void LayoutCore::setTypeAverages(bool enabled) {
   }
   typeAverages_ = enabled;
   typeStats_.clear();
+}
+
+int32_t LayoutCore::fillTypeStats(double* out, int32_t capacityDoubles, float outputScale) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (out == nullptr) {
+    return -1;
+  }
+  int32_t count = 0;
+  for (const TypeStats& stats : typeStats_) {
+    if (stats.num > 0) {
+      count++;
+    }
+  }
+  if (capacityDoubles < count * 3) {
+    return -1;
+  }
+  double* cursor = out;
+  for (size_t type = 0; type < typeStats_.size(); type++) {
+    const TypeStats& stats = typeStats_[type];
+    if (stats.num == 0) {
+      continue;
+    }
+    *cursor++ = static_cast<double>(type);
+    *cursor++ = stats.mean * static_cast<double>(outputScale);
+    *cursor++ = static_cast<double>(stats.num);
+  }
+  return count;
 }
 
 float LayoutCore::getTotalSize() {
@@ -506,9 +542,11 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
   const float top = std::max(0.0f, scrollOffset - topBuffer);
   const float bottom = std::min(totalSize_, scrollOffset + viewportHeight + bottomBuffer);
   if (totalSize_ <= top) {
-    // Scrolled past the end — clamp to the last item.
+    // Scrolled past the end — clamp to the last item (whole row in grids).
     hasRangeWindow_ = false;
-    return EngagedRange{itemCount_ - 1, itemCount_ - 1, layoutVersion_};
+    const int32_t lastStart =
+        columnCount_ > 1 && !rowStart_.empty() ? rowStart_[itemCount_ - 1] : itemCount_ - 1;
+    return EngagedRange{lastStart, itemCount_ - 1, layoutVersion_};
   }
   // Offsets are contiguous prefix sums (offsets[i] + sizes[i] == offsets[i+1],
   // with totalSize as the virtual last edge), so both bounds binary-search:
@@ -519,10 +557,22 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
   const auto beginIt = offsets_.begin() + 1;
   const auto endIt = offsets_.begin() + itemCount_;
   const auto startIt = std::upper_bound(beginIt, endIt, top);
-  const auto start = static_cast<int32_t>(startIt - offsets_.begin()) - 1;
+  auto start = static_cast<int32_t>(startIt - offsets_.begin()) - 1;
   const auto endSearchIt = std::lower_bound(offsets_.begin() + start, endIt, bottom);
   int32_t end = static_cast<int32_t>(endSearchIt - offsets_.begin()) - 1;
   end = std::clamp(end, start, itemCount_ - 1);
+  if (columnCount_ > 1) {
+    // Items of a row share one offset, so the binary searches land mid-row;
+    // widen to whole rows. The boundary-window cache is skipped in grids —
+    // its edge math is per-item, and O(log n) per event is already cheap.
+    start = rowStart_[start];
+    const int32_t endRow = rowStart_[end];
+    while (end + 1 < itemCount_ && rowStart_[end + 1] == endRow) {
+      end++;
+    }
+    hasRangeWindow_ = false;
+    return EngagedRange{start, end, layoutVersion_};
+  }
   // Cache the scroll window in which this exact range stays valid:
   //   start holds while  bottomEdge(start-1) ≤ scroll-topBuffer < bottomEdge(start)
   //   end   holds while  offsets(end) < scroll+viewport+bottomBuffer ≤ offsets(end+1)
@@ -547,6 +597,51 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
   return EngagedRange{start, end, layoutVersion_};
 }
 
+void LayoutCore::setColumnCount(int32_t columns) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  const int32_t clamped = std::max(1, columns);
+  if (clamped == columnCount_) {
+    return;
+  }
+  columnCount_ = clamped;
+  typeStats_.clear();
+  for (int32_t i = 0; i < itemCount_; i++) {
+    measured_[i] = 0;
+    sizes_[i] = estimate_;
+  }
+  minDirtyIndex_ = 0;
+  hasRangeWindow_ = false;
+}
+
+bool LayoutCore::setItemSpans(const uint16_t* spans, int32_t count) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (static_cast<int32_t>(spans_.size()) < itemCount_) {
+    spans_.resize(itemCount_, 1);
+  }
+  bool anyChanged = false;
+  for (int32_t i = 0; i < itemCount_; i++) {
+    const uint16_t raw = (spans != nullptr && i < count) ? spans[i] : 1;
+    const uint16_t next = raw < 1 ? 1 : raw;
+    if (spans_[i] != next) {
+      spans_[i] = next;
+      anyChanged = true;
+      minDirtyIndex_ = std::min(minDirtyIndex_, i);
+    }
+  }
+  if (anyChanged) {
+    hasRangeWindow_ = false;
+  }
+  return anyChanged;
+}
+
+int32_t LayoutCore::spanAtLocked(int32_t index) const {
+  if (index >= static_cast<int32_t>(spans_.size())) {
+    return 1;
+  }
+  const int32_t span = spans_[index] < 1 ? 1 : spans_[index];
+  return std::min(span, columnCount_);
+}
+
 void LayoutCore::ensureClean() {
   // INT32_MAX means "nothing pending". Note this is deliberately NOT the old
   // `minDirtyIndex_ >= itemCount_` guard the Swift/Kotlin managers used: that
@@ -555,18 +650,71 @@ void LayoutCore::ensureClean() {
   if (minDirtyIndex_ == INT32_MAX) {
     return;
   }
-  float off = minDirtyIndex_ == 0 ? 0.0f : offsets_[minDirtyIndex_ - 1] + sizes_[minDirtyIndex_ - 1];
   bool anyChanged = false;
-  for (int32_t i = minDirtyIndex_; i < itemCount_; i++) {
-    if (offsets_[i] != off) {
-      offsets_[i] = off;
+  if (columnCount_ <= 1) {
+    float off =
+        minDirtyIndex_ == 0 ? 0.0f : offsets_[minDirtyIndex_ - 1] + sizes_[minDirtyIndex_ - 1];
+    for (int32_t i = minDirtyIndex_; i < itemCount_; i++) {
+      if (offsets_[i] != off) {
+        offsets_[i] = off;
+        anyChanged = true;
+      }
+      off += sizes_[i];
+    }
+    if (totalSize_ != off) {
+      totalSize_ = off;
       anyChanged = true;
     }
-    off += sizes_[i];
-  }
-  if (totalSize_ != off) {
-    totalSize_ = off;
-    anyChanged = true;
+  } else {
+    // Grid path: restart at the beginning of the dirty index's row. Row
+    // boundaries at/before minDirtyIndex_ only depend on spans BEFORE it,
+    // which are unchanged (span/count mutations set minDirtyIndex_ at the
+    // first affected index), so the previous pass's rowStart_ entry is
+    // valid as a restart point; setItemCount/reset paths set it to 0.
+    if (static_cast<int32_t>(rowStart_.size()) < itemCount_) {
+      rowStart_.resize(itemCount_, 0);
+    }
+    int32_t start = itemCount_ > 0 ? std::min(minDirtyIndex_, itemCount_ - 1) : 0;
+    if (start > 0) {
+      start = rowStart_[start];
+    }
+    float off = 0.0f;
+    if (start > 0) {
+      const int32_t prevRow = rowStart_[start - 1];
+      float prevRowMax = 0.0f;
+      for (int32_t j = prevRow; j < start; j++) {
+        prevRowMax = std::max(prevRowMax, sizes_[j]);
+      }
+      off = offsets_[prevRow] + prevRowMax;
+    }
+    int32_t i = start;
+    while (i < itemCount_) {
+      const int32_t rowBegin = i;
+      int32_t used = 0;
+      float rowMax = 0.0f;
+      while (i < itemCount_) {
+        const int32_t span = spanAtLocked(i);
+        if (used > 0 && used + span > columnCount_) {
+          break;
+        }
+        if (offsets_[i] != off) {
+          offsets_[i] = off;
+          anyChanged = true;
+        }
+        rowStart_[i] = rowBegin;
+        rowMax = std::max(rowMax, sizes_[i]);
+        used += span;
+        i++;
+        if (used >= columnCount_) {
+          break;
+        }
+      }
+      off += rowMax;
+    }
+    if (totalSize_ != off) {
+      totalSize_ = off;
+      anyChanged = true;
+    }
   }
   minDirtyIndex_ = INT32_MAX;
   // Only bump the version when offsets actually moved. A duplicate
@@ -579,6 +727,10 @@ void LayoutCore::ensureClean() {
 
 float LayoutCore::roundToOctave(float value) {
   return std::round(value * 8.0f) / 8.0f;
+}
+
+float LayoutCore::roundToOctaveFromDouble(double value) {
+  return static_cast<float>(std::round(value * 8.0) / 8.0);
 }
 
 void LayoutCore::updateTypeMeanLocked(int32_t index, bool wasMeasured, float prevSize,
@@ -598,11 +750,12 @@ void LayoutCore::updateTypeMeanLocked(int32_t index, bool wasMeasured, float pre
     // Re-measure of an already-counted item: adjust the mean in place
     // without inflating the sample count (LegendList's trick).
     if (stats.num > 0) {
-      stats.mean += (newSize - prevSize) / static_cast<float>(stats.num);
+      stats.mean += (static_cast<double>(newSize) - static_cast<double>(prevSize)) /
+                    static_cast<double>(stats.num);
     }
   } else {
-    stats.mean = (stats.mean * static_cast<float>(stats.num) + newSize) /
-                 static_cast<float>(stats.num + 1);
+    stats.mean = (stats.mean * static_cast<double>(stats.num) + static_cast<double>(newSize)) /
+                 static_cast<double>(stats.num + 1);
     stats.num++;
   }
 }
@@ -617,7 +770,8 @@ bool LayoutCore::applyTypeMeansLocked() {
   // O(N) pass rewrites the unmeasured items of all of them at once.
   bool anyDrifted = false;
   for (TypeStats& stats : typeStats_) {
-    if (stats.num > 0 && std::abs(stats.mean - stats.appliedMean) > kTypeMeanSweepThreshold) {
+    if (stats.num > 0 &&
+        std::abs(stats.mean - stats.appliedMean) > static_cast<double>(kTypeMeanSweepThreshold)) {
       anyDrifted = true;
     }
   }
@@ -634,10 +788,10 @@ bool LayoutCore::applyTypeMeansLocked() {
       continue;
     }
     const TypeStats& stats = typeStats_[type];
-    if (std::abs(stats.mean - stats.appliedMean) <= kTypeMeanSweepThreshold) {
+    if (std::abs(stats.mean - stats.appliedMean) <= static_cast<double>(kTypeMeanSweepThreshold)) {
       continue;
     }
-    const float rounded = roundToOctave(stats.mean);
+    const float rounded = roundToOctaveFromDouble(stats.mean);
     if (sizes_[i] != rounded) {
       sizes_[i] = rounded;
       anyChanged = true;
@@ -655,7 +809,7 @@ bool LayoutCore::applyTypeMeansLocked() {
 float LayoutCore::estimateForTypeLocked(uint16_t type) const {
   if (typeAverages_ && type < typeStats_.size() &&
       (typeStats_[type].num > 0 || typeStats_[type].seeded)) {
-    return roundToOctave(typeStats_[type].mean);
+    return roundToOctaveFromDouble(typeStats_[type].mean);
   }
   return estimate_;
 }

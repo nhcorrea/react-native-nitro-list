@@ -56,6 +56,10 @@ namespace margelo::nitro::nitrolist {
     void setEstimatedItemSize(double estimatedItemSize) override;
     double getDrawDistance() override;
     void setDrawDistance(double drawDistance) override;
+    bool getHorizontal() override;
+    void setHorizontal(bool horizontal) override;
+    double getNumColumns() override;
+    void setNumColumns(double numColumns) override;
     std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>> getOnRangeChange() override;
     void setOnRangeChange(const std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>& onRangeChange) override;
 
@@ -72,8 +76,10 @@ namespace margelo::nitro::nitrolist {
     void resetItemSizes() override;
     void remapItemSizes(const std::shared_ptr<ArrayBuffer>& pairs) override;
     void setItemTypes(const std::shared_ptr<ArrayBuffer>& types) override;
+    void setItemSpans(const std::shared_ptr<ArrayBuffer>& spans) override;
     void seedTypeMeans(const std::shared_ptr<ArrayBuffer>& pairs) override;
     double fillLayoutSlab(const std::shared_ptr<ArrayBuffer>& slab) override;
+    double fillTypeStats(const std::shared_ptr<ArrayBuffer>& out) override;
     double getItemOffset(double index) override;
     double getItemSize(double index) override;
     double getTotalSize() override;

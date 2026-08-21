@@ -1,0 +1,30 @@
+appId: com.nitrolistexample
+---
+- launchApp
+- tapOn: "QA"
+- tapOn:
+    id: "qa-scroll-to-index-run"
+- extendedWaitUntil:
+    visible:
+      id: "qa-scroll-to-index-pass"
+    timeout: 10000
+- tapOn:
+    id: "qa-scroll-to-end-run"
+- extendedWaitUntil:
+    visible:
+      id: "qa-scroll-to-end-pass"
+    timeout: 10000
+- tapOn:
+    id: "qa-mvcp-prepend-run"
+- extendedWaitUntil:
+    visible:
+      id: "qa-mvcp-prepend-pass"
+    timeout: 30000
+- swipe:
+    start: 50%, 85%
+    end: 50%, 15%
+    duration: 120
+- extendedWaitUntil:
+    visible:
+      id: "qa-fling-blank-pass"
+    timeout: 10000

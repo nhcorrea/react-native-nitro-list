@@ -56,6 +56,26 @@ namespace margelo::nitro::nitrolist::views {
         throw std::runtime_error(std::string("NitroListView.drawDistance: ") + exc.what());
       }
     }()),
+    horizontal([&]() -> CachedProp<bool> {
+      try {
+        const react::RawValue* rawValue = rawProps.at("horizontal", nullptr, nullptr);
+        if (rawValue == nullptr) return sourceProps.horizontal;
+        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
+        return CachedProp<bool>::fromRawValue(*runtime, value, sourceProps.horizontal);
+      } catch (const std::exception& exc) {
+        throw std::runtime_error(std::string("NitroListView.horizontal: ") + exc.what());
+      }
+    }()),
+    numColumns([&]() -> CachedProp<double> {
+      try {
+        const react::RawValue* rawValue = rawProps.at("numColumns", nullptr, nullptr);
+        if (rawValue == nullptr) return sourceProps.numColumns;
+        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
+        return CachedProp<double>::fromRawValue(*runtime, value, sourceProps.numColumns);
+      } catch (const std::exception& exc) {
+        throw std::runtime_error(std::string("NitroListView.numColumns: ") + exc.what());
+      }
+    }()),
     onRangeChange([&]() -> CachedProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>> {
       try {
         const react::RawValue* rawValue = rawProps.at("onRangeChange", nullptr, nullptr);
@@ -82,6 +102,8 @@ namespace margelo::nitro::nitrolist::views {
       case hashString("itemCount"): return true;
       case hashString("estimatedItemSize"): return true;
       case hashString("drawDistance"): return true;
+      case hashString("horizontal"): return true;
+      case hashString("numColumns"): return true;
       case hashString("onRangeChange"): return true;
       case hashString("hybridRef"): return true;
       default: return false;

@@ -91,6 +91,34 @@ Java_com_margelo_nitro_nitrolist_views_LayoutManager_nativeFillLayoutSlab(
                                             drawDistance, outputScale);
 }
 
+JNIEXPORT void JNICALL
+Java_com_margelo_nitro_nitrolist_views_LayoutManager_nativeSetColumnCount(
+    JNIEnv*, jobject, jlong handle, jint columns) {
+  fromHandle(handle)->setColumnCount(columns);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_margelo_nitro_nitrolist_views_LayoutManager_nativeSetItemSpans(
+    JNIEnv* env, jobject, jlong handle, jobject spansBuffer, jint count) {
+  const auto* spans =
+      spansBuffer != nullptr
+          ? static_cast<const uint16_t*>(env->GetDirectBufferAddress(spansBuffer))
+          : nullptr;
+  return fromHandle(handle)->setItemSpans(spans, spans != nullptr ? count : 0) ? JNI_TRUE
+                                                                               : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_margelo_nitro_nitrolist_views_LayoutManager_nativeFillTypeStats(
+    JNIEnv* env, jobject, jlong handle, jobject outBuffer, jint capacityDoubles,
+    jfloat outputScale) {
+  auto* out = static_cast<double*>(env->GetDirectBufferAddress(outBuffer));
+  if (out == nullptr) {
+    return -1;
+  }
+  return fromHandle(handle)->fillTypeStats(out, capacityDoubles, outputScale);
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_margelo_nitro_nitrolist_views_LayoutManager_nativeSetItemSize(JNIEnv*,
                                                                        jobject,

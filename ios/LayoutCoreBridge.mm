@@ -40,6 +40,14 @@ using margelo::nitro::nitrolist::LayoutCore;
   _core.setItemTypes(types, count);
 }
 
+- (void)setColumnCount:(int32_t)columns {
+  _core.setColumnCount(columns);
+}
+
+- (BOOL)setItemSpans:(nullable const uint16_t *)spans count:(int32_t)count {
+  return _core.setItemSpans(spans, count);
+}
+
 - (int32_t)fillLayoutSlab:(double *)out
                  capacity:(int32_t)capacityDoubles
              scrollOffset:(float)scrollOffset
@@ -48,6 +56,12 @@ using margelo::nitro::nitrolist::LayoutCore;
               outputScale:(float)outputScale {
   return _core.fillLayoutSlab(out, capacityDoubles, scrollOffset, viewportHeight, drawDistance,
                               outputScale);
+}
+
+- (int32_t)fillTypeStats:(double *)out
+                capacity:(int32_t)capacityDoubles
+             outputScale:(float)outputScale {
+  return _core.fillTypeStats(out, capacityDoubles, outputScale);
 }
 
 - (BOOL)setItemSize:(int32_t)index size:(float)size {

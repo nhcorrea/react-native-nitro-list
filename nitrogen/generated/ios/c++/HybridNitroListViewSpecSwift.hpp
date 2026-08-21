@@ -84,6 +84,18 @@ namespace margelo::nitro::nitrolist {
     inline void setDrawDistance(double drawDistance) noexcept override {
       _swiftPart.setDrawDistance(std::forward<decltype(drawDistance)>(drawDistance));
     }
+    inline bool getHorizontal() noexcept override {
+      return _swiftPart.getHorizontal();
+    }
+    inline void setHorizontal(bool horizontal) noexcept override {
+      _swiftPart.setHorizontal(std::forward<decltype(horizontal)>(horizontal));
+    }
+    inline double getNumColumns() noexcept override {
+      return _swiftPart.getNumColumns();
+    }
+    inline void setNumColumns(double numColumns) noexcept override {
+      _swiftPart.setNumColumns(std::forward<decltype(numColumns)>(numColumns));
+    }
     inline std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>> getOnRangeChange() noexcept override {
       auto __result = _swiftPart.getOnRangeChange();
       return __result;
@@ -164,6 +176,12 @@ namespace margelo::nitro::nitrolist {
         std::rethrow_exception(__result.error());
       }
     }
+    inline void setItemSpans(const std::shared_ptr<ArrayBuffer>& spans) override {
+      auto __result = _swiftPart.setItemSpans(ArrayBufferHolder(spans));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
     inline void seedTypeMeans(const std::shared_ptr<ArrayBuffer>& pairs) override {
       auto __result = _swiftPart.seedTypeMeans(ArrayBufferHolder(pairs));
       if (__result.hasError()) [[unlikely]] {
@@ -172,6 +190,14 @@ namespace margelo::nitro::nitrolist {
     }
     inline double fillLayoutSlab(const std::shared_ptr<ArrayBuffer>& slab) override {
       auto __result = _swiftPart.fillLayoutSlab(ArrayBufferHolder(slab));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+      auto __value = std::move(__result.value());
+      return __value;
+    }
+    inline double fillTypeStats(const std::shared_ptr<ArrayBuffer>& out) override {
+      auto __result = _swiftPart.fillTypeStats(ArrayBufferHolder(out));
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }

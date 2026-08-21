@@ -1,7 +1,10 @@
 export {NitroList} from './NitroList';
 export type {
+  NitroListAlwaysRenderConfig,
+  NitroListAnchoredEndSpaceConfig,
   NitroListHandle,
   NitroListItemLayout,
+  NitroListMaintainVisibleContentPositionConfig,
   NitroListOnViewableItemsChanged,
   NitroListProps,
   NitroListRenderItem,

@@ -4,6 +4,8 @@ export interface NitroListViewProps extends HybridViewProps {
   itemCount: number;
   estimatedItemSize: number;
   drawDistance: number;
+  horizontal: boolean;
+  numColumns: number;
   onRangeChange?: (start: number, end: number, layoutVersion: number, offset: number) => void;
 }
 
@@ -19,8 +21,10 @@ export interface NitroListViewMethods extends HybridViewMethods {
   resetItemSizes(): void;
   remapItemSizes(pairs: ArrayBuffer): void;
   setItemTypes(types: ArrayBuffer): void;
+  setItemSpans(spans: ArrayBuffer): void;
   seedTypeMeans(pairs: ArrayBuffer): void;
   fillLayoutSlab(slab: ArrayBuffer): number;
+  fillTypeStats(out: ArrayBuffer): number;
   getItemOffset(index: number): number;
   getItemSize(index: number): number;
   getTotalSize(): number;

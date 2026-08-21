@@ -43,6 +43,14 @@ final class LayoutManager {
     core.setItemTypes(types, count: Int32(count))
   }
 
+  func setColumnCount(_ columns: Int) {
+    core.setColumnCount(Int32(columns))
+  }
+
+  func setItemSpans(_ spans: UnsafePointer<UInt16>?, count: Int) -> Bool {
+    core.setItemSpans(spans, count: Int32(count))
+  }
+
   func fillLayoutSlab(
     _ out: UnsafeMutablePointer<Double>,
     capacity: Int,
@@ -59,6 +67,10 @@ final class LayoutManager {
         drawDistance: Float(drawDistance),
         outputScale: 1
       ))
+  }
+
+  func fillTypeStats(_ out: UnsafeMutablePointer<Double>, capacity: Int) -> Int {
+    Int(core.fillTypeStats(out, capacity: Int32(capacity), outputScale: 1))
   }
 
   func setItemSize(_ index: Int, _ size: CGFloat) -> Bool {

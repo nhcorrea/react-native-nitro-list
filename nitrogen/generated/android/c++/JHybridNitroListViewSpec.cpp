@@ -73,6 +73,24 @@ namespace margelo::nitro::nitrolist {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* drawDistance */)>("setDrawDistance");
     method(_javaPart, drawDistance);
   }
+  bool JHybridNitroListViewSpec::getHorizontal() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<jboolean()>("getHorizontal");
+    auto __result = method(_javaPart);
+    return static_cast<bool>(__result);
+  }
+  void JHybridNitroListViewSpec::setHorizontal(bool horizontal) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jboolean /* horizontal */)>("setHorizontal");
+    method(_javaPart, horizontal);
+  }
+  double JHybridNitroListViewSpec::getNumColumns() {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<double()>("getNumColumns");
+    auto __result = method(_javaPart);
+    return __result;
+  }
+  void JHybridNitroListViewSpec::setNumColumns(double numColumns) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* numColumns */)>("setNumColumns");
+    method(_javaPart, numColumns);
+  }
   std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>> JHybridNitroListViewSpec::getOnRangeChange() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<JFunc_void_double_double_double_double::javaobject>()>("getOnRangeChange_cxx");
     auto __result = method(_javaPart);
@@ -138,6 +156,10 @@ namespace margelo::nitro::nitrolist {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<JArrayBuffer::javaobject> /* types */)>("setItemTypes");
     method(_javaPart, JArrayBuffer::wrap(types));
   }
+  void JHybridNitroListViewSpec::setItemSpans(const std::shared_ptr<ArrayBuffer>& spans) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<JArrayBuffer::javaobject> /* spans */)>("setItemSpans");
+    method(_javaPart, JArrayBuffer::wrap(spans));
+  }
   void JHybridNitroListViewSpec::seedTypeMeans(const std::shared_ptr<ArrayBuffer>& pairs) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jni::alias_ref<JArrayBuffer::javaobject> /* pairs */)>("seedTypeMeans");
     method(_javaPart, JArrayBuffer::wrap(pairs));
@@ -145,6 +167,11 @@ namespace margelo::nitro::nitrolist {
   double JHybridNitroListViewSpec::fillLayoutSlab(const std::shared_ptr<ArrayBuffer>& slab) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<double(jni::alias_ref<JArrayBuffer::javaobject> /* slab */)>("fillLayoutSlab");
     auto __result = method(_javaPart, JArrayBuffer::wrap(slab));
+    return __result;
+  }
+  double JHybridNitroListViewSpec::fillTypeStats(const std::shared_ptr<ArrayBuffer>& out) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<double(jni::alias_ref<JArrayBuffer::javaobject> /* out */)>("fillTypeStats");
+    auto __result = method(_javaPart, JArrayBuffer::wrap(out));
     return __result;
   }
   double JHybridNitroListViewSpec::getItemOffset(double index) {

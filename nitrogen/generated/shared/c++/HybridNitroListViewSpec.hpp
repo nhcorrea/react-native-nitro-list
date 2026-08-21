@@ -52,6 +52,10 @@ namespace margelo::nitro::nitrolist {
       virtual void setEstimatedItemSize(double estimatedItemSize) = 0;
       virtual double getDrawDistance() = 0;
       virtual void setDrawDistance(double drawDistance) = 0;
+      virtual bool getHorizontal() = 0;
+      virtual void setHorizontal(bool horizontal) = 0;
+      virtual double getNumColumns() = 0;
+      virtual void setNumColumns(double numColumns) = 0;
       virtual std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>> getOnRangeChange() = 0;
       virtual void setOnRangeChange(const std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>& onRangeChange) = 0;
 
@@ -68,8 +72,10 @@ namespace margelo::nitro::nitrolist {
       virtual void resetItemSizes() = 0;
       virtual void remapItemSizes(const std::shared_ptr<ArrayBuffer>& pairs) = 0;
       virtual void setItemTypes(const std::shared_ptr<ArrayBuffer>& types) = 0;
+      virtual void setItemSpans(const std::shared_ptr<ArrayBuffer>& spans) = 0;
       virtual void seedTypeMeans(const std::shared_ptr<ArrayBuffer>& pairs) = 0;
       virtual double fillLayoutSlab(const std::shared_ptr<ArrayBuffer>& slab) = 0;
+      virtual double fillTypeStats(const std::shared_ptr<ArrayBuffer>& out) = 0;
       virtual double getItemOffset(double index) = 0;
       virtual double getItemSize(double index) = 0;
       virtual double getTotalSize() = 0;

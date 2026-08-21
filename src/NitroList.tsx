@@ -48,7 +48,15 @@ import {
   pushVelocitySample,
   resetVelocityRing,
 } from './scrollVelocity';
-import {warnDevOnce} from './devWarnings';
+import {
+  accumulateEstimateDriftSample,
+  checkDuplicateKeyDev,
+  maybeWarnJsOnScrollUnderUiDriver,
+  maybeWarnMissingKeyExtractor,
+  maybeWarnZeroViewport,
+  warnDevOnce,
+  type EstimateDriftStats,
+} from './devWarnings';
 
 export interface NitroListRangeChangeEvent {
   start: number;
@@ -58,10 +66,13 @@ export interface NitroListRangeChangeEvent {
 
 export type NitroListRenderTarget = 'Cell' | 'StickyHeader';
 
+export type NitroListRenderMode = 'normal' | 'fast';
+
 export type NitroListRenderItem<T> = (info: {
   item: T;
   index: number;
   target: NitroListRenderTarget;
+  renderMode?: NitroListRenderMode;
 }) => React.ReactElement | null;
 
 export type NitroListScrollToOffsetParams = {
@@ -89,9 +100,9 @@ export type NitroListWindowSize = {
 };
 
 export type NitroListHandle = {
-  scrollToOffset: (params: NitroListScrollToOffsetParams) => void;
+  scrollToOffset: (params: NitroListScrollToOffsetParams) => Promise<void>;
   scrollToIndex: (params: NitroListScrollToIndexParams) => Promise<void>;
-  scrollToEnd: (animated?: boolean) => void;
+  scrollToEnd: (animated?: boolean) => Promise<void>;
   getAbsoluteLastScrollOffset: () => number;
   getItemOffset: (index: number) => number;
   getItemSize: (index: number) => number;
@@ -101,10 +112,20 @@ export type NitroListHandle = {
   getFirstItemOffset: () => number;
   getScrollableNode: () => unknown;
   getNativeScrollRef: () => unknown;
+  getAverageItemSizes: () => Record<string, {average: number; count: number}>;
+  reportContentInset: (insets: {bottom?: number}) => void;
+  scrollIndexIntoView: (params: {
+    index: number;
+    animated?: boolean;
+    viewOffset?: number;
+  }) => Promise<void>;
+  scrollItemIntoView: (params: {item: unknown; animated?: boolean; viewOffset?: number}) => Promise<void>;
 };
 
 export type NitroListRenderScrollComponentProps = {
   ref: React.Ref<ScrollView>;
+  horizontal?: boolean;
+  snapToOffsets?: number[];
   onScroll:
     | ((e: NativeSyntheticEvent<NativeScrollEvent>) => void)
     | ScrollHandlerProcessed<Record<string, unknown>>;
@@ -127,6 +148,27 @@ export type NitroListRenderScrollComponent = (
 export interface NitroListStickyHeaderConfig {
   offset?: number;
   hideRelatedCell?: boolean;
+}
+
+export interface NitroListMaintainVisibleContentPositionConfig<T> {
+  data?: boolean;
+  size?: boolean;
+  shouldRestorePosition?: (item: T, index: number) => boolean;
+}
+
+export interface NitroListAlwaysRenderConfig {
+  top?: number;
+  bottom?: number;
+  indices?: readonly number[];
+  keys?: readonly string[];
+}
+
+export interface NitroListAnchoredEndSpaceConfig {
+  anchorIndex: number;
+  anchorOffset?: number;
+  anchorMaxSize?: number;
+  onSizeChanged?: (size: number) => void;
+  onReady?: () => void;
 }
 
 export interface NitroListViewabilityConfig {
@@ -159,6 +201,12 @@ export interface NitroListProps<T> {
   itemsAreEqual?: (prev: T, next: T, index: number) => boolean;
   dataVersion?: unknown;
   drawDistance?: number;
+  horizontal?: boolean;
+  numColumns?: number;
+  overrideItemLayout?: (layout: {span: number}, item: T, index: number) => void;
+  columnWrapperStyle?: {rowGap?: number; columnGap?: number};
+  snapToIndices?: readonly number[];
+  adaptiveRenderMode?: boolean;
   style?: StyleProp<ViewStyle>;
   renderScrollComponent?: NitroListRenderScrollComponent;
   stickyHeaderIndices?: number[];
@@ -171,28 +219,35 @@ export interface NitroListProps<T> {
   onScrollEndDrag?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onMomentumScrollBegin?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onMomentumScrollEnd?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
-  onLoad?: () => void;
+  onLoad?: (info: {elapsedTimeInMs: number}) => void;
+  onFirstVisibleItemChanged?: (info: {index: number; item: T; key: string}) => void;
+  onItemSizeChanged?: (info: {index: number; size: number}) => void;
   onEndReached?: (info: {distanceFromEnd: number}) => void;
   onEndReachedThreshold?: number;
   onStartReached?: (info: {distanceFromStart: number}) => void;
   onStartReachedThreshold?: number;
-  maintainVisibleContentPosition?: boolean;
+  maintainVisibleContentPosition?: boolean | NitroListMaintainVisibleContentPositionConfig<T>;
   experimentalUiThreadScroll?: boolean;
   initialScrollIndex?: number;
   initialScrollOffset?: number;
+  initialScrollAtEnd?: boolean;
   alignItemsAtEnd?: boolean;
   maintainScrollAtEnd?: boolean | {threshold?: number; animated?: boolean};
+  anchoredEndSpace?: NitroListAnchoredEndSpaceConfig;
   ListHeaderComponent?: React.ComponentType<unknown> | React.ReactElement | null;
   ListFooterComponent?: React.ComponentType<unknown> | React.ReactElement | null;
   ListEmptyComponent?: React.ComponentType<unknown> | React.ReactElement | null;
   ItemSeparatorComponent?: React.ComponentType<{leadingItem: T}> | null;
   viewabilityConfig?: NitroListViewabilityConfig;
   onViewableItemsChanged?: NitroListOnViewableItemsChanged<T>;
+  alwaysRender?: NitroListAlwaysRenderConfig;
   contentContainerStyle?: StyleProp<ViewStyle>;
 }
 
 const defaultRenderScrollComponent: NitroListRenderScrollComponent = ({
   ref,
+  horizontal,
+  snapToOffsets,
   onScroll,
   onScrollBeginDrag,
   onScrollEndDrag,
@@ -207,6 +262,8 @@ const defaultRenderScrollComponent: NitroListRenderScrollComponent = ({
 }) => (
   <ScrollView
     ref={ref}
+    horizontal={horizontal}
+    snapToOffsets={snapToOffsets}
     style={StyleSheet.absoluteFill}
     contentContainerStyle={contentContainerStyle}
     contentOffset={contentOffset}
@@ -224,6 +281,8 @@ const defaultRenderScrollComponent: NitroListRenderScrollComponent = ({
 
 const defaultAnimatedRenderScrollComponent: NitroListRenderScrollComponent = ({
   ref,
+  horizontal,
+  snapToOffsets,
   onScroll,
   onScrollBeginDrag,
   onScrollEndDrag,
@@ -238,6 +297,8 @@ const defaultAnimatedRenderScrollComponent: NitroListRenderScrollComponent = ({
 }) => (
   <Animated.ScrollView
     ref={ref as unknown as React.ComponentProps<typeof Animated.ScrollView>['ref']}
+    horizontal={horizontal}
+    snapToOffsets={snapToOffsets}
     style={StyleSheet.absoluteFill}
     contentContainerStyle={contentContainerStyle}
     contentOffset={contentOffset}
@@ -257,7 +318,13 @@ const EMPTY: readonly never[] = Object.freeze([]);
 const NO_STICKY: readonly number[] = Object.freeze([]);
 const MVCP_SCROLL_VIEW_CONFIG = Object.freeze({minIndexForVisible: 0});
 const INITIAL_DRAW_DISTANCE_DP = 50;
+const ZERO_VIEWPORT_WARNING_FRAMES = 10;
 const PROGRAMMATIC_ANIMATED_SETTLE_FALLBACK_MS = 700;
+const SCROLL_READINESS_TIMEOUT_MS = 800;
+const SCROLL_READINESS_STABLE_FRAMES = 2;
+const INITIAL_REVEAL_MAX_PASSES = 6;
+const INITIAL_REVEAL_STABLE_PASSES = 2;
+const INITIAL_REVEAL_TIMEOUT_MS = 1500;
 const SCROLL_TO_INDEX_STEPS = 1;
 const SCROLL_TO_INDEX_BUFFER_MULTIPLIER = 2;
 const SCROLL_TO_INDEX_MAX_RESTARTS = 3;
@@ -270,6 +337,9 @@ const FLING_MIN_VELOCITY_DP_S = 1500;
 const FLING_TRAVEL_FACTOR = Platform.OS === 'ios' ? 0.4995 : 0.3;
 const FLING_MAX_TRAVEL_VIEWPORTS = 4;
 const FLING_PREWARM_MAX_ITEMS = 80;
+const ADAPTIVE_ENTER_DP_S = 3000;
+const ADAPTIVE_EXIT_DP_S = 1000;
+const ADAPTIVE_EXIT_DELAY_MS = 250;
 
 type ItemTypeKey = string | number;
 
@@ -282,15 +352,25 @@ function readNumericPadding(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function extractVerticalPadding(style: StyleProp<ViewStyle>): {top: number; bottom: number} {
+function extractAxisPadding(
+  style: StyleProp<ViewStyle>,
+  horizontal: boolean,
+): {start: number; end: number} {
   const flat = StyleSheet.flatten(style) as ViewStyle | undefined;
-  if (!flat) return {top: 0, bottom: 0};
+  if (!flat) return {start: 0, end: 0};
   const fallback = readNumericPadding(flat.padding);
-  const vertical =
-    flat.paddingVertical != null ? readNumericPadding(flat.paddingVertical) : fallback;
+  if (horizontal) {
+    const axis =
+      flat.paddingHorizontal != null ? readNumericPadding(flat.paddingHorizontal) : fallback;
+    return {
+      start: flat.paddingLeft != null ? readNumericPadding(flat.paddingLeft) : axis,
+      end: flat.paddingRight != null ? readNumericPadding(flat.paddingRight) : axis,
+    };
+  }
+  const axis = flat.paddingVertical != null ? readNumericPadding(flat.paddingVertical) : fallback;
   return {
-    top: flat.paddingTop != null ? readNumericPadding(flat.paddingTop) : vertical,
-    bottom: flat.paddingBottom != null ? readNumericPadding(flat.paddingBottom) : vertical,
+    start: flat.paddingStart != null ? readNumericPadding(flat.paddingStart) : axis,
+    end: flat.paddingEnd != null ? readNumericPadding(flat.paddingEnd) : axis,
   };
 }
 
@@ -515,6 +595,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     getFixedItemSize,
     itemsAreEqual,
     dataVersion,
+    horizontal,
+    numColumns,
+    overrideItemLayout,
+    columnWrapperStyle,
+    snapToIndices,
+    adaptiveRenderMode,
     drawDistance = 250,
     style,
     renderScrollComponent,
@@ -529,6 +615,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     onMomentumScrollBegin,
     onMomentumScrollEnd,
     onLoad,
+    onFirstVisibleItemChanged,
+    onItemSizeChanged,
     onEndReached,
     onEndReachedThreshold,
     onStartReached,
@@ -537,14 +625,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     experimentalUiThreadScroll,
     initialScrollIndex,
     initialScrollOffset,
+    initialScrollAtEnd,
     alignItemsAtEnd = false,
     maintainScrollAtEnd,
+    anchoredEndSpace,
     ListHeaderComponent,
     ListFooterComponent,
     ListEmptyComponent,
     ItemSeparatorComponent,
     viewabilityConfig,
     onViewableItemsChanged,
+    alwaysRender,
     contentContainerStyle,
   } = props;
 
@@ -556,39 +647,117 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const items = (data ?? EMPTY) as ReadonlyArray<T>;
   const itemCount = items.length;
-  const stickyIndices = stickyHeaderIndices ?? NO_STICKY;
+  const latestStickyHeaderIndicesRef = useRef(stickyHeaderIndices);
+  latestStickyHeaderIndicesRef.current = stickyHeaderIndices;
+  const stickyIndicesKey = stickyHeaderIndices != null ? stickyHeaderIndices.join(',') : '';
+  const stickyIndices = useMemo<readonly number[]>(() => {
+    const latest = latestStickyHeaderIndicesRef.current;
+    return latest != null && latest.length > 0 ? latest.slice() : NO_STICKY;
+  }, [stickyIndicesKey]);
   const stickyOffset = stickyHeaderConfig?.offset ?? 0;
   const hideRelatedCell = stickyHeaderConfig?.hideRelatedCell ?? false;
 
-  const {top: paddingTop, bottom: paddingBottom} = useMemo(
-    () => extractVerticalPadding(contentContainerStyle),
-    [contentContainerStyle],
+  const isHorizontal = horizontal === true;
+  const isHorizontalRef = useRef(isHorizontal);
+  isHorizontalRef.current = isHorizontal;
+  const {start: paddingStart, end: paddingEnd} = useMemo(
+    () => extractAxisPadding(contentContainerStyle, isHorizontal),
+    [contentContainerStyle, isHorizontal],
   );
+
+  const requestedColumns = Math.max(1, Math.trunc(numColumns ?? 1));
+  const resolvedColumns = isHorizontal ? 1 : requestedColumns;
+  useEffect(() => {
+    if (isHorizontal && requestedColumns > 1) {
+      warnDevOnce(
+        'columns-with-horizontal',
+        'numColumns is ignored with horizontal — the grid lays out rows along the y axis only.',
+      );
+    }
+  }, [isHorizontal, requestedColumns]);
+  const mainAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.rowGap ?? 0) : 0;
+  const crossAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.columnGap ?? 0) : 0;
+  const columnsRef = useRef(resolvedColumns);
+  columnsRef.current = resolvedColumns;
+  const columnLayout = useMemo(() => {
+    if (resolvedColumns <= 1 || itemCount === 0) return null;
+    const spans = new Uint16Array(itemCount);
+    const colOf = new Uint16Array(itemCount);
+    const rowStarts = new Int32Array(itemCount);
+    const layoutProbe = {span: 1};
+    let used = 0;
+    let rowStartIdx = 0;
+    for (let i = 0; i < itemCount; i++) {
+      let span = 1;
+      if (overrideItemLayout != null) {
+        layoutProbe.span = 1;
+        overrideItemLayout(layoutProbe, items[i], i);
+        span = Math.max(1, Math.min(resolvedColumns, Math.trunc(layoutProbe.span || 1)));
+      }
+      if (used > 0 && used + span > resolvedColumns) used = 0;
+      if (used === 0) rowStartIdx = i;
+      colOf[i] = used;
+      spans[i] = span;
+      rowStarts[i] = rowStartIdx;
+      used += span;
+      if (used >= resolvedColumns) used = 0;
+    }
+    return {spans, colOf, rowStarts};
+  }, [resolvedColumns, itemCount, items, overrideItemLayout]);
 
   const [headerSize, setHeaderSize] = useState(0);
   const [footerSize, setFooterSize] = useState(0);
   const [alignPad, setAlignPad] = useState(0);
+  const [endSpace, setEndSpace] = useState(0);
+  const endSpaceRef = useRef(0);
+  const anchoredEndSpaceRef = useRef(anchoredEndSpace);
+  anchoredEndSpaceRef.current = anchoredEndSpace;
+  const measuredTailIndicesRef = useRef<Set<number>>(new Set());
+  const anchoredReadyRef = useRef<{anchorIndex: number; fired: boolean}>({
+    anchorIndex: -1,
+    fired: false,
+  });
+  const updateEndSpaceRef = useRef<() => void>(() => {});
 
-  const effectivePaddingTop = paddingTop + headerSize + alignPad;
-  const effectivePaddingTopRef = useRef(effectivePaddingTop);
-  effectivePaddingTopRef.current = effectivePaddingTop;
+  const effectivePaddingStart = paddingStart + headerSize + alignPad;
+  const effectivePaddingStartRef = useRef(effectivePaddingStart);
+  effectivePaddingStartRef.current = effectivePaddingStart;
 
-  const initialTargetRef = useRef<{offset: number; index: number | null; settled: boolean} | null>(
-    null,
-  );
+  const initialTargetRef = useRef<{
+    offset: number;
+    index: number | null;
+    settled: boolean;
+    endAligned: boolean;
+  } | null>(null);
   if (initialTargetRef.current === null) {
-    if (initialScrollOffset != null && initialScrollOffset > 0) {
-      initialTargetRef.current = {offset: initialScrollOffset, index: null, settled: false};
+    if (initialScrollAtEnd === true) {
+      initialTargetRef.current = {
+        offset: paddingStart + itemCount * estimatedItemSize,
+        index: itemCount > 0 ? itemCount - 1 : null,
+        settled: false,
+        endAligned: true,
+      };
+    } else if (initialScrollOffset != null && initialScrollOffset > 0) {
+      initialTargetRef.current = {
+        offset: initialScrollOffset,
+        index: null,
+        settled: false,
+        endAligned: false,
+      };
     } else if (initialScrollIndex != null && initialScrollIndex > 0) {
       initialTargetRef.current = {
-        offset: paddingTop + initialScrollIndex * estimatedItemSize,
+        offset: paddingStart + initialScrollIndex * estimatedItemSize,
         index: initialScrollIndex,
         settled: false,
+        endAligned: false,
       };
     } else {
-      initialTargetRef.current = {offset: 0, index: null, settled: true};
+      initialTargetRef.current = {offset: 0, index: null, settled: true, endAligned: false};
     }
   }
+  const [initialRevealPending, setInitialRevealPending] = useState(
+    () => initialTargetRef.current?.settled === false,
+  );
 
   const capInitialDrawRef = useRef<boolean | null>(null);
   if (capInitialDrawRef.current === null) {
@@ -602,8 +771,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const initialContentOffset = useMemo<{x: number; y: number} | undefined>(() => {
     const initial = initialTargetRef.current;
-    return initial != null && initial.offset > 0 ? {x: 0, y: initial.offset} : undefined;
-  }, []);
+    if (initial == null || initial.offset <= 0) return undefined;
+    return isHorizontal ? {x: initial.offset, y: 0} : {x: 0, y: initial.offset};
+  }, [isHorizontal]);
 
   const scrollRef = useRef<ScrollView>(null);
   const hybridRef = useRef<NitroListViewMethods | null>(null);
@@ -627,7 +797,27 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     layoutCacheRef.current.gen++;
   }, []);
 
-  const mvcpEnabled = maintainVisibleContentPosition === true;
+  const mvcpConfigObject =
+    typeof maintainVisibleContentPosition === 'object' && maintainVisibleContentPosition != null
+      ? maintainVisibleContentPosition
+      : null;
+  const mvcpSizeEnabled =
+    maintainVisibleContentPosition === false
+      ? false
+      : mvcpConfigObject != null
+        ? (mvcpConfigObject.size ?? true)
+        : true;
+  const mvcpDataEnabled =
+    maintainVisibleContentPosition === true
+      ? true
+      : mvcpConfigObject != null
+        ? (mvcpConfigObject.data ?? false)
+        : false;
+  const mvcpEnabled = mvcpSizeEnabled || mvcpDataEnabled;
+  const mvcpResolvedRef = useRef({size: mvcpSizeEnabled, data: mvcpDataEnabled});
+  mvcpResolvedRef.current = {size: mvcpSizeEnabled, data: mvcpDataEnabled};
+  const mvcpShouldRestoreRef = useRef<((item: T, index: number) => boolean) | null>(null);
+  mvcpShouldRestoreRef.current = mvcpConfigObject?.shouldRestorePosition ?? null;
   const mvcpStateRef = useRef<{
     enabled: boolean;
     anchor: {index: number; key: string | null; offset: number} | null;
@@ -647,13 +837,22 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     pendingAdjust: number;
   }>({dragging: false, momentum: false, programmaticAnimated: false, pendingAdjust: 0});
   const programmaticAnimatedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animatedScrollResolverRef = useRef<(() => void) | null>(null);
+  const resolveAnimatedScrollCommand = useCallback(() => {
+    const resolver = animatedScrollResolverRef.current;
+    if (resolver != null) {
+      animatedScrollResolverRef.current = null;
+      resolver();
+    }
+  }, []);
   const endProgrammaticAnimatedScroll = useCallback(() => {
     if (programmaticAnimatedTimerRef.current != null) {
       clearTimeout(programmaticAnimatedTimerRef.current);
       programmaticAnimatedTimerRef.current = null;
     }
     scrollActivityRef.current.programmaticAnimated = false;
-  }, []);
+    resolveAnimatedScrollCommand();
+  }, [resolveAnimatedScrollCommand]);
   useEffect(() => endProgrammaticAnimatedScroll, [endProgrammaticAnimatedScroll]);
   const scrollVelocityRef = useRef<{offset: number; time: number; velocity: number}>({
     offset: 0,
@@ -661,6 +860,42 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     velocity: 0,
   });
   const velocityRingRef = useRef(createVelocityRing());
+  const [renderMode, setRenderMode] = useState<NitroListRenderMode>('normal');
+  const adaptiveEnabledRef = useRef(adaptiveRenderMode === true);
+  adaptiveEnabledRef.current = adaptiveRenderMode === true;
+  const adaptiveStateRef = useRef<{
+    mode: NitroListRenderMode;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({mode: 'normal', timer: null});
+  const noteVelocityForAdaptive = useCallback((velocityDpS: number) => {
+    if (!adaptiveEnabledRef.current) return;
+    const speed = Math.abs(velocityDpS);
+    const state = adaptiveStateRef.current;
+    if (speed >= ADAPTIVE_ENTER_DP_S) {
+      if (state.timer != null) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      if (state.mode !== 'fast') {
+        state.mode = 'fast';
+        setRenderMode('fast');
+      }
+    } else if (speed <= ADAPTIVE_EXIT_DP_S && state.mode === 'fast' && state.timer == null) {
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        state.mode = 'normal';
+        setRenderMode('normal');
+      }, ADAPTIVE_EXIT_DELAY_MS);
+    }
+  }, []);
+  useEffect(
+    () => () => {
+      if (adaptiveStateRef.current.timer != null) {
+        clearTimeout(adaptiveStateRef.current.timer);
+      }
+    },
+    [],
+  );
   const suppressEdgeRearmRef = useRef(false);
   const prewarmFlingDestinationRef = useRef<() => void>(() => {});
   const recordFlingOutcomeRef = useRef<(finalAbsoluteY: number) => void>(() => {});
@@ -689,9 +924,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const measurementCtxRef = useRef<{
     items: ReadonlyArray<T>;
     getItemType?: (item: T, index: number) => ItemTypeKey;
-  }>({items, getItemType});
+    estimatedItemSize: number;
+  }>({items, getItemType, estimatedItemSize});
   useEffect(() => {
-    measurementCtxRef.current = {items, getItemType};
+    measurementCtxRef.current = {items, getItemType, estimatedItemSize};
+  });
+  const estimateDriftStatsRef = useRef<Map<string, EstimateDriftStats> | null>(null);
+  const onItemSizeChangedRef = useRef(onItemSizeChanged);
+  useEffect(() => {
+    onItemSizeChangedRef.current = onItemSizeChanged;
   });
 
   const flushPendingItemSizes = useCallback(
@@ -715,7 +956,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         NitroListPerfMonitor.recordJsiCall();
       }
       const mvcp = mvcpStateRef.current;
-      const anchor = mvcp.enabled && !isPrewarmingRangeRef.current ? mvcp.anchor : null;
+      const anchor =
+        mvcp.enabled && mvcpResolvedRef.current.size && !isPrewarmingRangeRef.current
+          ? mvcp.anchor
+          : null;
       if (anchor != null) {
         const diff = hybrid.setItemSizesBatchAnchored(tight.buffer, anchor.index, emitRange);
         invalidateLayoutCache();
@@ -725,19 +969,49 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       } else {
         hybrid.setItemSizesBatch(tight.buffer, emitRange);
         invalidateLayoutCache();
+        const staleAnchor = mvcp.enabled ? mvcp.anchor : null;
+        if (staleAnchor != null) {
+          staleAnchor.offset = readItemOffset(staleAnchor.index);
+        }
+      }
+      const sizeChanged = onItemSizeChangedRef.current;
+      if (sizeChanged != null) {
+        for (let k = 0; k < pairCount; k++) {
+          sizeChanged({index: tight[k * 2] | 0, size: tight[k * 2 + 1]});
+        }
+      }
+      if (anchoredEndSpaceRef.current != null) {
+        updateEndSpaceRef.current();
       }
       const ctx = measurementCtxRef.current;
-      const widthDp = viewportSizeRef.current.width;
-      if (ctx.getItemType != null && widthDp > 0) {
-        const fontScale = PixelRatio.getFontScale();
+      const widthDp = crossViewportRef.current / columnsRef.current;
+      const recordToCache = ctx.getItemType != null && widthDp > 0;
+      if (recordToCache || IS_DEV) {
+        const fontScale = recordToCache ? PixelRatio.getFontScale() : 1;
+        let driftStats = estimateDriftStatsRef.current;
+        if (IS_DEV && driftStats == null) {
+          driftStats = new Map();
+          estimateDriftStatsRef.current = driftStats;
+        }
         for (let k = 0; k < pairCount; k++) {
           const idx = tight[k * 2] | 0;
           const item = ctx.items[idx];
           if (item === undefined) continue;
-          recordMeasurement(
-            measurementCacheKey(ctx.getItemType(item, idx), widthDp, fontScale),
-            tight[k * 2 + 1],
-          );
+          const type = ctx.getItemType?.(item, idx);
+          if (recordToCache) {
+            recordMeasurement(
+              measurementCacheKey(type as ItemTypeKey, widthDp, fontScale),
+              tight[k * 2 + 1],
+            );
+          }
+          if (driftStats != null) {
+            accumulateEstimateDriftSample(
+              driftStats,
+              type != null ? String(type) : '',
+              tight[k * 2 + 1],
+              ctx.estimatedItemSize,
+            );
+          }
         }
       }
     },
@@ -757,6 +1031,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       state.buffer[offset] = index;
       state.buffer[offset + 1] = sizeDp;
       state.count++;
+      measuredTailIndicesRef.current.add(index);
       if (state.rafId === null) {
         state.rafId = requestAnimationFrame(() => {
           flushPendingItemSizes();
@@ -867,6 +1142,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const lastScrollOffsetRef = useRef(initialTargetRef.current?.offset ?? 0);
   const viewportSizeRef = useRef<{width: number; height: number}>({width: 0, height: 0});
+  const mainViewportRef = useRef(0);
+  const crossViewportRef = useRef(0);
   const hasFiredOnLoadRef = useRef(false);
   const mountTimestampRef = useRef(Date.now());
   const stickyIndexRef = useRef(-1);
@@ -892,42 +1169,82 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         animated: typeof maintainScrollAtEnd === 'object' && maintainScrollAtEnd.animated === true,
       }
     : null;
-  const stickToEndRef = useRef<{wasAtEnd: boolean; lastContent: number; pending: boolean}>({
+  const stickToEndRef = useRef<{
+    wasAtEnd: boolean;
+    lastContent: number;
+    pending: boolean;
+    regrow: boolean;
+  }>({
     wasAtEnd: false,
     lastContent: 0,
     pending: false,
+    regrow: false,
   });
-  const scrollToEndForMaintainRef = useRef<(animated: boolean) => void>(() => {});
+  const scrollToEndForMaintainRef = useRef<(animated: boolean) => void | Promise<void>>(() => {});
   const updateAlignPadRef = useRef<() => void>(() => {});
+  const cancelPendingStickToEnd = useCallback(() => {
+    const stick = stickToEndRef.current;
+    stick.wasAtEnd = false;
+    stick.pending = false;
+    stick.regrow = false;
+  }, []);
+  const scheduleStickToEnd = useCallback((animated: boolean) => {
+    const stick = stickToEndRef.current;
+    stick.pending = true;
+    requestAnimationFrame(() => {
+      const current = stickToEndRef.current;
+      const activity = scrollActivityRef.current;
+      if (!current.wasAtEnd || activity.dragging || activity.momentum) {
+        current.pending = false;
+        current.regrow = false;
+        return;
+      }
+      Promise.resolve(scrollToEndForMaintainRef.current(animated)).then(() => {
+        const settled = stickToEndRef.current;
+        settled.pending = false;
+        if (settled.regrow) {
+          settled.regrow = false;
+          if (settled.wasAtEnd) {
+            scheduleStickToEnd(animated);
+          }
+        }
+      });
+    });
+  }, []);
+
+  const itemCountRef = useRef(itemCount);
+  itemCountRef.current = itemCount;
 
   const checkEdgeCallbacks = useCallback(() => {
     const allowRearm = !suppressEdgeRearmRef.current;
     suppressEdgeRearmRef.current = false;
-    const maintain = maintainAtEndRef.current;
+    const maintain = anchoredEndSpaceRef.current == null ? maintainAtEndRef.current : null;
     if (!onEndReached && !onStartReached && maintain == null) return;
-    const viewportH = viewportSizeRef.current.height;
-    if (viewportH <= 0 || itemCount === 0) return;
+    const liveItemCount = itemCountRef.current;
+    const viewportH = mainViewportRef.current;
+    if (viewportH <= 0 || liveItemCount === 0) return;
     const totalContent =
-      effectivePaddingTopRef.current + readTotalSize() + footerSize + paddingBottom;
+      effectivePaddingStartRef.current +
+      readTotalSize() +
+      footerSize +
+      paddingEnd +
+      endSpaceRef.current;
     const scrollY = lastScrollOffsetRef.current;
     if (maintain != null) {
       const stick = stickToEndRef.current;
       const contentGrew = totalContent > stick.lastContent + 1;
       if (!contentGrew) {
-        stick.wasAtEnd =
-          totalContent - scrollY - viewportH <= maintain.threshold * viewportH ||
-          totalContent <= viewportH;
-      } else if (stick.wasAtEnd && !stick.pending) {
+        if (!stick.pending) {
+          stick.wasAtEnd =
+            totalContent - scrollY - viewportH <= maintain.threshold * viewportH ||
+            totalContent <= viewportH;
+        }
+      } else if (stick.pending) {
+        stick.regrow = true;
+      } else if (stick.wasAtEnd) {
         const activity = scrollActivityRef.current;
         if (!activity.dragging && !activity.momentum) {
-          const animated = maintain.animated;
-          stick.pending = true;
-          requestAnimationFrame(() => {
-            stick.pending = false;
-            const act = scrollActivityRef.current;
-            if (!stickToEndRef.current.wasAtEnd || act.dragging || act.momentum) return;
-            scrollToEndForMaintainRef.current(animated);
-          });
+          scheduleStickToEnd(maintain.animated);
         }
       }
       stick.lastContent = totalContent;
@@ -938,7 +1255,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         totalContent - scrollY - viewportH,
         (onEndReachedThreshold ?? 0.5) * viewportH,
         totalContent,
-        itemCount,
+        liveItemCount,
         allowRearm,
         (distanceFromEnd) => onEndReached({distanceFromEnd}),
       );
@@ -951,7 +1268,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         scrollY,
         (onStartReachedThreshold ?? 0.5) * viewportH,
         totalContent,
-        itemCount,
+        liveItemCount,
         allowRearm,
         (distanceFromStart) => onStartReached({distanceFromStart}),
       );
@@ -965,8 +1282,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     onStartReachedThreshold,
     itemCount,
     footerSize,
-    paddingBottom,
+    paddingEnd,
     readTotalSize,
+    scheduleStickToEnd,
   ]);
 
   const checkEdgeCallbacksRef = useRef(checkEdgeCallbacks);
@@ -993,7 +1311,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const hybrid = hybridRef.current;
     if (!hybrid) return;
     const map = typeIdMapRef.current;
-    const widthDp = viewportSizeRef.current.width;
+    const widthDp = crossViewportRef.current / columnsRef.current;
     if (map.size === 0 || widthDp <= 0) return;
     const fontScale = PixelRatio.getFontScale();
     let seedCount = 0;
@@ -1023,6 +1341,60 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     newlyViewable: [],
   });
   const scrollCommandIdRef = useRef(0);
+  const pendingScrollResolversRef = useRef<Map<number, () => void>>(new Map());
+  const resolveScrollCommand = useCallback((commandId: number) => {
+    const resolver = pendingScrollResolversRef.current.get(commandId);
+    if (resolver != null) {
+      pendingScrollResolversRef.current.delete(commandId);
+      resolver();
+    }
+  }, []);
+  const beginScrollCommand = useCallback(() => {
+    const pending = pendingScrollResolversRef.current;
+    if (pending.size > 0) {
+      const resolvers = Array.from(pending.values());
+      pending.clear();
+      for (const resolve of resolvers) resolve();
+    }
+    return ++scrollCommandIdRef.current;
+  }, []);
+  const trackScrollCommand = useCallback((commandId: number) => {
+    return new Promise<void>((resolve) => {
+      if (commandId !== scrollCommandIdRef.current) {
+        resolve();
+        return;
+      }
+      pendingScrollResolversRef.current.set(commandId, resolve);
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      const pending = pendingScrollResolversRef.current;
+      const resolvers = Array.from(pending.values());
+      pending.clear();
+      for (const resolve of resolvers) resolve();
+    },
+    [],
+  );
+  const dataJustChangedRef = useRef(false);
+  const awaitScrollReadiness = useCallback(async (commandId: number) => {
+    if (!dataJustChangedRef.current) return;
+    dataJustChangedRef.current = false;
+    const deadline = Date.now() + SCROLL_READINESS_TIMEOUT_MS;
+    let stableFrames = 0;
+    let lastVersion = lastSeenLayoutVersionRef.current;
+    while (stableFrames < SCROLL_READINESS_STABLE_FRAMES && Date.now() < deadline) {
+      await waitForNextFrame();
+      if (commandId !== scrollCommandIdRef.current) return;
+      const version = lastSeenLayoutVersionRef.current;
+      if (version === lastVersion) {
+        stableFrames++;
+      } else {
+        stableFrames = 0;
+        lastVersion = version;
+      }
+    }
+  }, []);
   const estimateFreezeDepthRef = useRef(0);
   const acquireEstimateFreeze = useCallback(() => {
     if (++estimateFreezeDepthRef.current === 1 && hybridRef.current) {
@@ -1085,6 +1457,36 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     pushItemTypes();
   }, [pushItemTypes]);
 
+  const lastSentSpansRef = useRef<Uint16Array | null>(null);
+  const pushItemSpans = useCallback(() => {
+    const hybrid = hybridRef.current;
+    if (!hybrid) return;
+    const spans = columnLayout != null ? columnLayout.spans : new Uint16Array(0);
+    const last = lastSentSpansRef.current;
+    if (last != null && last.length === spans.length) {
+      let equal = true;
+      for (let i = 0; i < spans.length; i++) {
+        if (last[i] !== spans[i]) {
+          equal = false;
+          break;
+        }
+      }
+      if (equal) return;
+    }
+    if (last == null && spans.length === 0) {
+      lastSentSpansRef.current = spans;
+      return;
+    }
+    lastSentSpansRef.current = spans;
+    hybrid.setItemSpans(spans.buffer as ArrayBuffer);
+    if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
+  }, [columnLayout]);
+  const pushItemSpansRef = useRef(pushItemSpans);
+  useEffect(() => {
+    pushItemSpansRef.current = pushItemSpans;
+    pushItemSpans();
+  }, [pushItemSpans]);
+
   const handleHybridRef = useCallback(
     (value: NitroListViewMethods | null) => {
       hybridRef.current = value;
@@ -1096,12 +1498,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         value.setViewport(width, height);
         if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
       }
-      const replayEngineOffset = lastScrollOffsetRef.current - effectivePaddingTopRef.current;
+      const replayEngineOffset = lastScrollOffsetRef.current - effectivePaddingStartRef.current;
       value.setScrollOffset(replayEngineOffset);
       lastPushedEngineOffsetRef.current = replayEngineOffset;
       if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
       lastSentTypesRef.current = null;
       pushItemTypesRef.current();
+      lastSentSpansRef.current = null;
+      pushItemSpansRef.current();
       if (estimateFreezeDepthRef.current > 0) {
         value.setEstimatesFrozen(true);
         if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
@@ -1122,10 +1526,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const uiPaddingTopSv = useSharedValue(0);
   useEffect(() => {
-    uiPaddingTopSv.value = effectivePaddingTop;
-  }, [effectivePaddingTop, uiPaddingTopSv]);
+    uiPaddingTopSv.value = effectivePaddingStart;
+  }, [effectivePaddingStart, uiPaddingTopSv]);
   const uiScrollOffsetSv = useSharedValue(
-    (initialTargetRef.current?.offset ?? 0) - paddingTop,
+    (initialTargetRef.current?.offset ?? 0) - paddingStart,
   );
   useEffect(() => {
     lastJsStickyTyRef.current = null;
@@ -1189,6 +1593,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const lastSeenLayoutVersionRef = useRef<number>(-1);
   const captureMvcpAnchorRef = useRef<(engineOffset: number) => void>(() => {});
+  const emitFirstVisibleRef = useRef<() => void>(() => {});
+  const lastFirstVisibleIndexRef = useRef(-1);
+  const onFirstVisibleItemChangedRef = useRef(onFirstVisibleItemChanged);
+  useEffect(() => {
+    onFirstVisibleItemChangedRef.current = onFirstVisibleItemChanged;
+  });
   const handleRangeChange = useCallback(
     (start: number, end: number, layoutVersion: number, engineOffset: number) => {
       const event: NitroListRangeChangeEvent = {start, end, layoutVersion};
@@ -1201,7 +1611,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       const uiDriven = uiThreadDriverActiveRef.current && !isPrewarmingRangeRef.current;
       let offsetConsumed = false;
       if (uiDriven) {
-        lastScrollOffsetRef.current = engineOffset + effectivePaddingTopRef.current;
+        lastScrollOffsetRef.current = engineOffset + effectivePaddingStartRef.current;
         offsetConsumed = true;
       }
       if (event.layoutVersion !== lastSeenLayoutVersionRef.current) {
@@ -1235,8 +1645,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         evaluateViewabilityRef.current();
         checkEdgeCallbacksRef.current();
         captureMvcpAnchorRef.current(engineOffset);
+        emitFirstVisibleRef.current();
         if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
-          const viewportH = viewportSizeRef.current.height;
+          const viewportH = mainViewportRef.current;
           if (viewportH > 0) {
             const visTop = Math.max(0, engineOffset);
             const visBottom = Math.min(
@@ -1395,8 +1806,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       return;
     }
     const hybrid = hybridRef.current;
-    const viewportH = viewportSizeRef.current.height;
-    const offset = lastScrollOffsetRef.current - effectivePaddingTopRef.current;
+    const viewportH = mainViewportRef.current;
+    const offset = lastScrollOffsetRef.current - effectivePaddingStartRef.current;
     if (!hybrid || viewportH <= 0) return;
 
     const minimumViewTime = config.minimumViewTime ?? 0;
@@ -1526,6 +1937,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     evaluateViewabilityRef.current = evaluateViewability;
     const versionChanged = !Object.is(previousDataVersionRef.current, dataVersion);
     if (previousItemsRef.current !== items || versionChanged) {
+      dataJustChangedRef.current = true;
       const prevItems = previousItemsRef.current;
       previousItemsRef.current = items;
       previousDataVersionRef.current = dataVersion;
@@ -1533,19 +1945,31 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         ? didKeysChangeStructurally(prevItems, items, keyExtractor)
         : true;
       if (versionChanged || keysChanged) {
+        if (!versionChanged) {
+          maybeWarnMissingKeyExtractor(keyExtractor != null, prevItems.length, items.length);
+        }
         const mvcpAnchorBefore =
-          mvcpStateRef.current.enabled && keyExtractor != null ? mvcpStateRef.current.anchor : null;
+          mvcpStateRef.current.enabled && mvcpResolvedRef.current.data && keyExtractor != null
+            ? mvcpStateRef.current.anchor
+            : null;
         if (hybridRef.current != null && (versionChanged || keyExtractor)) {
           let remapped = false;
           if (!versionChanged && keyExtractor != null && items.length > 0) {
             const remap = buildKeyRemapPairs(prevItems, items, keyExtractor);
             if (remap != null && remap.mappedCount >= items.length * REMAP_MIN_MAPPED_FRACTION) {
               hybridRef.current.remapItemSizes(remap.pairs.buffer as ArrayBuffer);
+              const translatedTail = new Set<number>();
+              const previousTail = measuredTailIndicesRef.current;
+              for (let p = 0; p < remap.pairs.length; p += 2) {
+                if (previousTail.has(remap.pairs[p])) translatedTail.add(remap.pairs[p + 1]);
+              }
+              measuredTailIndicesRef.current = translatedTail;
               remapped = true;
             }
           }
           if (!remapped) {
             hybridRef.current.resetItemSizes();
+            measuredTailIndicesRef.current = new Set();
           }
           if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
         }
@@ -1626,6 +2050,31 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, [pushFixedItemSizes]);
 
   useEffect(() => {
+    if (!IS_DEV || itemCount === 0) return;
+    let cancelled = false;
+    let framesLeft = ZERO_VIEWPORT_WARNING_FRAMES;
+    let rafId = 0;
+    const tick = () => {
+      if (cancelled) return;
+      if (mainViewportRef.current > 0) return;
+      if (--framesLeft <= 0) {
+        maybeWarnZeroViewport(mainViewportRef.current, itemCount);
+        return;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [itemCount]);
+
+  useEffect(() => {
+    maybeWarnJsOnScrollUnderUiDriver(userOnScroll != null, experimentalUiThreadScroll === true);
+  }, [userOnScroll, experimentalUiThreadScroll]);
+
+  useEffect(() => {
     if (mvcpEnabled && renderScrollComponent != null) {
       warnDevOnce(
         'mvcp-custom-scroll-component',
@@ -1650,15 +2099,28 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (engineOffset: number) => {
       const mvcp = mvcpStateRef.current;
       if (!mvcp.enabled) return;
+      const shouldRestore = mvcpShouldRestoreRef.current;
+      const isEligible = (index: number) => {
+        if (shouldRestore == null) return true;
+        const candidate = items[index];
+        return candidate === undefined || shouldRestore(candidate, index) !== false;
+      };
       const r = latestRangeRef.current;
       let anchorIndex = -1;
       for (let i = Math.max(0, r.start); i <= r.end; i++) {
-        if (readItemOffset(i) >= engineOffset) {
+        if (readItemOffset(i) >= engineOffset && isEligible(i)) {
           anchorIndex = i;
           break;
         }
       }
-      if (anchorIndex < 0) anchorIndex = r.end;
+      if (anchorIndex < 0) {
+        for (let i = r.end; i >= Math.max(0, r.start); i--) {
+          if (isEligible(i)) {
+            anchorIndex = i;
+            break;
+          }
+        }
+      }
       if (anchorIndex >= 0) {
         const anchorItem = items[anchorIndex];
         mvcp.anchor = {
@@ -1669,6 +2131,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
               : null,
           offset: readItemOffset(anchorIndex),
         };
+      } else {
+        mvcp.anchor = null;
       }
     },
     [items, keyExtractor, readItemOffset],
@@ -1679,14 +2143,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const handleOuterScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const scrollY = e.nativeEvent.contentOffset.y;
+      const scrollY = isHorizontalRef.current
+        ? e.nativeEvent.contentOffset.x
+        : e.nativeEvent.contentOffset.y;
       if (!uiThreadDriverActiveRef.current && pendingSizesRef.current.count > 0) {
         flushPendingItemSizes(false);
       }
       const kind = classifyScrollEvent(
         scrollY,
         lastScrollOffsetRef.current,
-        viewportSizeRef.current.height,
+        mainViewportRef.current,
         scrollActivityRef.current.programmaticAnimated,
       );
       if (isPrewarmingRangeRef.current) {
@@ -1712,11 +2178,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       }
       velocitySample.offset = scrollY;
       velocitySample.time = nowMs;
+      noteVelocityForAdaptive(velocitySample.velocity);
       lastScrollOffsetRef.current = scrollY;
       if (scrollOffsetSharedValue != null) {
         scrollOffsetSharedValue.value = scrollY;
       }
-      const engineOffset = scrollY - effectivePaddingTopRef.current;
+      const engineOffset = scrollY - effectivePaddingStartRef.current;
       if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
         NitroListPerfMonitor.markScrollDispatch();
       }
@@ -1728,8 +2195,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       evaluateViewabilityRef.current();
       checkEdgeCallbacksRef.current();
       captureMvcpAnchor(engineOffset);
+      emitFirstVisibleRef.current();
       if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
-        const viewportH = viewportSizeRef.current.height;
+        const viewportH = mainViewportRef.current;
         if (viewportH > 0) {
           const visTop = Math.max(0, engineOffset);
           const visBottom = Math.min(engineOffset + viewportH, readTotalSize());
@@ -1761,6 +2229,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       readTotalSize,
       scrollOffsetSharedValue,
       cancelFlingPrewarm,
+      noteVelocityForAdaptive,
     ],
   );
 
@@ -1768,13 +2237,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (e: LayoutChangeEvent) => {
       const {width, height} = e.nativeEvent.layout;
       viewportSizeRef.current = {width, height};
+      mainViewportRef.current = isHorizontalRef.current ? width : height;
+      crossViewportRef.current = isHorizontalRef.current ? height : width;
       hybridRef.current?.setViewport(width, height);
       if (NITRO_LIST_PERF_COMPILED && hybridRef.current) NitroListPerfMonitor.recordJsiCall();
       seedTypeMeansFromCache();
       updateAlignPadRef.current();
-      updateSticky(lastScrollOffsetRef.current - effectivePaddingTopRef.current);
+      updateEndSpaceRef.current();
+      updateSticky(lastScrollOffsetRef.current - effectivePaddingStartRef.current);
       evaluateViewabilityRef.current();
       checkEdgeCallbacksRef.current();
+      emitFirstVisibleRef.current();
     },
     [updateSticky, seedTypeMeansFromCache],
   );
@@ -1795,7 +2268,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       endProgrammaticAnimatedScroll();
       flushPendingMvcpAdjust();
-      scrollCommandIdRef.current++;
+      beginScrollCommand();
+      cancelPendingStickToEnd();
       const activity = scrollActivityRef.current;
       activity.dragging = true;
       activity.momentum = false;
@@ -1809,18 +2283,28 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       }
       if (!hasInteractedRef.current) {
         hasInteractedRef.current = true;
+        lastViewabilityEvalRef.current.offset = Number.NaN;
         evaluateViewabilityRef.current();
       }
       onScrollBeginDrag?.(e);
     },
-    [onScrollBeginDrag, flushPendingMvcpAdjust, cancelFlingPrewarm, endProgrammaticAnimatedScroll],
+    [
+      onScrollBeginDrag,
+      flushPendingMvcpAdjust,
+      cancelFlingPrewarm,
+      endProgrammaticAnimatedScroll,
+      beginScrollCommand,
+      cancelPendingStickToEnd,
+    ],
   );
   const handleScrollEndDrag = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const activity = scrollActivityRef.current;
       activity.dragging = false;
       if (uiThreadDriverActiveRef.current) {
-        lastScrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+        lastScrollOffsetRef.current = isHorizontalRef.current
+          ? e.nativeEvent.contentOffset.x
+          : e.nativeEvent.contentOffset.y;
       } else {
         const launchVelocity = estimateDirectionalVelocity(velocityRingRef.current, Date.now());
         scrollVelocityRef.current.velocity = launchVelocity;
@@ -1845,21 +2329,26 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       scrollActivityRef.current.momentum = false;
       endProgrammaticAnimatedScroll();
-      recordFlingOutcomeRef.current(e.nativeEvent.contentOffset.y);
+      noteVelocityForAdaptive(0);
+      const momentumOffset = isHorizontalRef.current
+        ? e.nativeEvent.contentOffset.x
+        : e.nativeEvent.contentOffset.y;
+      recordFlingOutcomeRef.current(momentumOffset);
       cancelFlingPrewarm();
       if (!isPrewarmingRangeRef.current) {
         setPrewarmRange(null);
       }
       const uiDriven = uiThreadDriverActiveRef.current;
       if (uiDriven) {
-        lastScrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+        lastScrollOffsetRef.current = momentumOffset;
       }
       flushPendingMvcpAdjust();
       if (uiDriven) {
-        const engineOffset = lastScrollOffsetRef.current - effectivePaddingTopRef.current;
+        const engineOffset = lastScrollOffsetRef.current - effectivePaddingStartRef.current;
         evaluateViewabilityRef.current();
         checkEdgeCallbacksRef.current();
         captureMvcpAnchor(engineOffset);
+        emitFirstVisibleRef.current();
       }
       onMomentumScrollEnd?.(e);
     },
@@ -1869,6 +2358,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       cancelFlingPrewarm,
       captureMvcpAnchor,
       endProgrammaticAnimatedScroll,
+      noteVelocityForAdaptive,
     ],
   );
 
@@ -1898,8 +2388,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   });
   const emitUserScrollFromUi = useCallback((y: number) => {
     lastScrollOffsetRef.current = y;
+    const contentOffset = isHorizontalRef.current ? {x: y, y: 0} : {x: 0, y};
     userOnScrollRef.current?.({
-      nativeEvent: {contentOffset: {x: 0, y}},
+      nativeEvent: {contentOffset},
     } as NativeSyntheticEvent<NativeScrollEvent>);
   }, []);
 
@@ -1911,7 +2402,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     {
       onScroll: (event, ctx) => {
         'worklet';
-        const y = event.contentOffset.y;
+        const y = isHorizontal ? event.contentOffset.x : event.contentOffset.y;
         const engineOffset = y - uiPaddingTopSv.value;
         if (attachedHybrid != null) {
           attachedHybrid.setScrollOffset(engineOffset);
@@ -1964,11 +2455,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       },
       onEndDrag: (event, ctx) => {
         'worklet';
-        scheduleOnRN(settleUiEndDrag, ctx.velocity ?? 0, event.contentOffset.y);
+        scheduleOnRN(
+          settleUiEndDrag,
+          ctx.velocity ?? 0,
+          isHorizontal ? event.contentOffset.x : event.contentOffset.y,
+        );
       },
     },
     [
       attachedHybrid,
+      isHorizontal,
       stickyCount,
       stickyIndices,
       stickyOffset,
@@ -1987,12 +2483,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     ],
   );
 
+  const contentInsetBottomRef = useRef(0);
+
   const getMaxScrollOffset = useCallback(() => {
     const totalSize = readTotalSize();
-    const viewportH = viewportSizeRef.current.height;
-    const totalContent = effectivePaddingTopRef.current + totalSize + footerSize + paddingBottom;
-    return Math.max(0, totalContent - viewportH);
-  }, [footerSize, paddingBottom, readTotalSize]);
+    const viewportH = mainViewportRef.current;
+    const totalContent =
+      effectivePaddingStartRef.current + totalSize + footerSize + paddingEnd + endSpaceRef.current;
+    return Math.max(0, totalContent - viewportH + contentInsetBottomRef.current);
+  }, [footerSize, paddingEnd, readTotalSize]);
 
   const clampScrollOffset = useCallback(
     (offset: number) => Math.max(0, Math.min(offset, getMaxScrollOffset())),
@@ -2016,31 +2515,123 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     [itemCount, readItemOffset],
   );
 
+  useEffect(() => {
+    emitFirstVisibleRef.current = () => {
+      const cb = onFirstVisibleItemChangedRef.current;
+      if (cb == null) return;
+      if (itemCount === 0 || mainViewportRef.current <= 0) {
+        lastFirstVisibleIndexRef.current = -1;
+        return;
+      }
+      const engineOffset = lastScrollOffsetRef.current - effectivePaddingStartRef.current;
+      const index = indexAtOffset(Math.max(0, engineOffset));
+      if (index === lastFirstVisibleIndexRef.current) return;
+      const item = items[index];
+      if (item === undefined) return;
+      lastFirstVisibleIndexRef.current = index;
+      cb({index, item, key: keyExtractor ? keyExtractor(item, index) : String(index)});
+    };
+    emitFirstVisibleRef.current();
+  }, [items, itemCount, keyExtractor, indexAtOffset]);
+
   const updateAlignPad = useCallback(() => {
     if (!alignItemsAtEnd) {
       setAlignPad(0);
       return;
     }
-    const viewportH = viewportSizeRef.current.height;
-    const content = paddingTop + headerSize + readTotalSize() + footerSize + paddingBottom;
+    const viewportH = mainViewportRef.current;
+    const content = paddingStart + headerSize + readTotalSize() + footerSize + paddingEnd;
     setAlignPad(Math.max(0, Math.round((viewportH - content) * 8) / 8));
-  }, [alignItemsAtEnd, paddingTop, headerSize, footerSize, paddingBottom, readTotalSize]);
+  }, [alignItemsAtEnd, paddingStart, headerSize, footerSize, paddingEnd, readTotalSize]);
   updateAlignPadRef.current = updateAlignPad;
   useEffect(() => {
     updateAlignPad();
   }, [updateAlignPad, range.layoutVersion, itemCount]);
 
-  const handleHeaderLayout = useCallback((e: LayoutChangeEvent) => {
-    const height = e.nativeEvent.layout.height;
-    setHeaderSize((prev) =>
-      Math.abs(prev - height) > MEASUREMENT_NOISE_EPSILON_DP ? height : prev,
+  const updateEndSpace = useCallback(() => {
+    const config = anchoredEndSpaceRef.current;
+    if (config == null || itemCount === 0) {
+      if (endSpaceRef.current !== 0) {
+        endSpaceRef.current = 0;
+        setEndSpace(0);
+        config?.onSizeChanged?.(0);
+      }
+      return;
+    }
+    const viewportH = mainViewportRef.current;
+    if (viewportH <= 0) return;
+    const anchor = Math.max(0, Math.min(Math.trunc(config.anchorIndex), itemCount - 1));
+    let tail = readTotalSize() - readItemOffset(anchor);
+    const anchorSize = readItemSize(anchor);
+    if (config.anchorMaxSize != null && anchorSize > config.anchorMaxSize) {
+      tail -= anchorSize - config.anchorMaxSize;
+    }
+    const space = Math.max(
+      0,
+      Math.round(
+        (viewportH - (config.anchorOffset ?? 0) - tail - footerSize - paddingEnd) * 8,
+      ) / 8,
     );
+    if (space !== endSpaceRef.current) {
+      endSpaceRef.current = space;
+      setEndSpace(space);
+      config.onSizeChanged?.(space);
+    }
+    const ready = anchoredReadyRef.current;
+    if (ready.anchorIndex !== anchor) {
+      ready.anchorIndex = anchor;
+      ready.fired = false;
+    }
+    if (!ready.fired && config.onReady != null) {
+      const measured = measuredTailIndicesRef.current;
+      let allMeasured = true;
+      for (let i = anchor; i < itemCount; i++) {
+        if (!measured.has(i)) {
+          allMeasured = false;
+          break;
+        }
+      }
+      if (allMeasured) {
+        ready.fired = true;
+        config.onReady();
+      }
+    }
+  }, [itemCount, footerSize, paddingEnd, readItemOffset, readItemSize, readTotalSize]);
+  updateEndSpaceRef.current = updateEndSpace;
+  useEffect(() => {
+    updateEndSpace();
+  }, [updateEndSpace, range.layoutVersion, items, anchoredEndSpace]);
+
+  const [snapOffsets, setSnapOffsets] = useState<number[] | undefined>(undefined);
+  const snapIndicesKey = snapToIndices != null ? snapToIndices.join(',') : '';
+  useEffect(() => {
+    if (snapToIndices == null || snapToIndices.length === 0 || itemCount === 0) {
+      setSnapOffsets(undefined);
+      return;
+    }
+    const next: number[] = [];
+    for (const index of snapToIndices) {
+      if (index < 0 || index >= itemCount) continue;
+      next.push(effectivePaddingStartRef.current + readItemOffset(index));
+    }
+    next.sort((a, b) => a - b);
+    setSnapOffsets((prev) => {
+      if (prev != null && prev.length === next.length && prev.every((v, i) => v === next[i])) {
+        return prev;
+      }
+      return next;
+    });
+  }, [snapIndicesKey, snapToIndices, itemCount, range.layoutVersion, readItemOffset, effectivePaddingStart]);
+
+  const handleHeaderLayout = useCallback((e: LayoutChangeEvent) => {
+    const layout = e.nativeEvent.layout;
+    const size = isHorizontalRef.current ? layout.width : layout.height;
+    setHeaderSize((prev) => (Math.abs(prev - size) > MEASUREMENT_NOISE_EPSILON_DP ? size : prev));
   }, []);
   const handleFooterLayout = useCallback((e: LayoutChangeEvent) => {
-    const height = e.nativeEvent.layout.height;
-    setFooterSize((prev) =>
-      Math.abs(prev - height) > MEASUREMENT_NOISE_EPSILON_DP ? height : prev,
-    );
+    const layout = e.nativeEvent.layout;
+    const size = isHorizontalRef.current ? layout.width : layout.height;
+    setFooterSize((prev) => (Math.abs(prev - size) > MEASUREMENT_NOISE_EPSILON_DP ? size : prev));
   }, []);
   useEffect(() => {
     if (ListHeaderComponent == null) setHeaderSize(0);
@@ -2053,7 +2644,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (offset: number, animated: boolean) => {
       const target = clampScrollOffset(offset);
       lastScrollOffsetRef.current = target;
-      const engineOffset = target - effectivePaddingTopRef.current;
+      const engineOffset = target - effectivePaddingStartRef.current;
       const velocitySample = scrollVelocityRef.current;
       velocitySample.velocity = 0;
       velocitySample.time = 0;
@@ -2073,9 +2664,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           if (!scrollActivityRef.current.programmaticAnimated) return;
           scrollActivityRef.current.programmaticAnimated = false;
           flushPendingMvcpAdjust();
+          resolveAnimatedScrollCommand();
         }, PROGRAMMATIC_ANIMATED_SETTLE_FALLBACK_MS);
       }
-      scrollRef.current?.scrollTo({y: target, animated});
+      if (isHorizontalRef.current) {
+        scrollRef.current?.scrollTo({x: target, y: 0, animated});
+      } else {
+        scrollRef.current?.scrollTo({y: target, animated});
+      }
       return target;
     },
     [
@@ -2085,6 +2681,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       uiScrollOffsetSv,
       endProgrammaticAnimatedScroll,
       flushPendingMvcpAdjust,
+      resolveAnimatedScrollCommand,
     ],
   );
 
@@ -2105,7 +2702,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (executable === 0) return;
       const to = from + executable;
       lastScrollOffsetRef.current = to;
-      const engineOffset = to - effectivePaddingTopRef.current;
+      const engineOffset = to - effectivePaddingStartRef.current;
       const velocitySample = scrollVelocityRef.current;
       velocitySample.velocity = 0;
       velocitySample.time = 0;
@@ -2124,14 +2721,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   useEffect(() => {
     prewarmFlingDestinationRef.current = () => {
       if (itemCount === 0 || isPrewarmingRangeRef.current) return;
-      const viewportH = viewportSizeRef.current.height;
+      const viewportH = mainViewportRef.current;
       if (viewportH <= 0) return;
       const velocity = scrollVelocityRef.current.velocity;
       const maxTravel = viewportH * FLING_MAX_TRAVEL_VIEWPORTS;
       const travel = Math.max(-maxTravel, Math.min(maxTravel, velocity * FLING_TRAVEL_FACTOR));
       if (Math.abs(travel) <= drawDistance) return;
       const destination = clampScrollOffset(lastScrollOffsetRef.current + travel);
-      const destEngineTop = destination - effectivePaddingTopRef.current;
+      const destEngineTop = destination - effectivePaddingStartRef.current;
       let destStart = indexAtOffset(Math.max(0, destEngineTop - drawDistance));
       let destEnd = indexAtOffset(destEngineTop + viewportH + drawDistance);
       if (destEnd - destStart + 1 > FLING_PREWARM_MAX_ITEMS) {
@@ -2183,9 +2780,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (!NITRO_LIST_PERF_COMPILED || !NitroListPerfMonitor.enabled) return;
       const admission = flingAdmissionRef.current;
       if (admission == null) return;
-      const viewportH = viewportSizeRef.current.height;
+      const viewportH = mainViewportRef.current;
       if (viewportH <= 0 || itemCount === 0) return;
-      const engineTop = finalAbsoluteY - effectivePaddingTopRef.current;
+      const engineTop = finalAbsoluteY - effectivePaddingStartRef.current;
       const first = indexAtOffset(Math.max(0, engineTop));
       const last = Math.max(first, indexAtOffset(engineTop + viewportH));
       const admitted = admission.admitted;
@@ -2200,7 +2797,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       const target = clampScrollOffset(offset);
       hybridRef.current?.resetScrollVelocity();
       if (NITRO_LIST_PERF_COMPILED && hybridRef.current) NitroListPerfMonitor.recordJsiCall();
-      applyScrollOffsetSync(target - effectivePaddingTopRef.current);
+      applyScrollOffsetSync(target - effectivePaddingStartRef.current);
       return target;
     },
     [applyScrollOffsetSync, clampScrollOffset],
@@ -2211,9 +2808,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (index < 0 || index >= itemCount) return null;
       const top = readItemOffset(index);
       const itemH = readItemSize(index);
-      const viewportH = viewportSizeRef.current.height;
+      const viewportH = mainViewportRef.current;
       const target =
-        effectivePaddingTopRef.current + top - viewPosition * (viewportH - itemH) + viewOffset;
+        effectivePaddingStartRef.current + top - viewPosition * (viewportH - itemH) + viewOffset;
       return clampScrollOffset(target);
     },
     [clampScrollOffset, itemCount, readItemOffset, readItemSize],
@@ -2221,7 +2818,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const computeStartScrollOffset = useCallback(
     (finalOffset: number, lastAbsoluteScrollOffset: number) => {
-      const viewportH = viewportSizeRef.current.height;
+      const viewportH = mainViewportRef.current;
       const buffer = viewportH * SCROLL_TO_INDEX_BUFFER_MULTIPLIER;
       if (finalOffset > lastAbsoluteScrollOffset) {
         return clampScrollOffset(Math.max(finalOffset - buffer, lastAbsoluteScrollOffset));
@@ -2240,7 +2837,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }: NitroListScrollToIndexParams) => {
       if (index < 0 || index >= itemCount) return;
 
-      const commandId = ++scrollCommandIdRef.current;
+      const commandId = beginScrollCommand();
       const devStartedAt = NITRO_LIST_PERF_COMPILED ? Date.now() : 0;
       let devRestarts = 0;
       let devCorrectionPasses = 0;
@@ -2250,13 +2847,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       cancelFlingPrewarm();
       setPrewarmRange(null);
 
+      await awaitScrollReadiness(commandId);
+      if (commandId !== scrollCommandIdRef.current) return;
+
       let finalOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
       if (finalOffset == null) return;
 
       if (animated) {
-        const viewportH = viewportSizeRef.current.height;
+        const viewportH = mainViewportRef.current;
         if (viewportH > 0) {
-          const destEngineTop = finalOffset - effectivePaddingTopRef.current;
+          const destEngineTop = finalOffset - effectivePaddingStartRef.current;
           const destStart = indexAtOffset(Math.max(0, destEngineTop));
           const destEnd = Math.max(destStart, indexAtOffset(destEngineTop + viewportH));
           setPrewarmRange({
@@ -2387,6 +2987,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       prewarmRenderWindow,
       scrollToAbsoluteOffset,
       cancelFlingPrewarm,
+      beginScrollCommand,
+      awaitScrollReadiness,
     ],
   );
 
@@ -2394,56 +2996,151 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     async (params: NitroListScrollToIndexParams) => {
       acquireEstimateFreeze();
       try {
-        await scrollToIndexConverge(params);
+        const idBefore = scrollCommandIdRef.current;
+        const converge = scrollToIndexConverge(params);
+        const commandId = scrollCommandIdRef.current;
+        if (commandId === idBefore) {
+          await converge;
+          return;
+        }
+        await Promise.race([converge, trackScrollCommand(commandId)]);
+        resolveScrollCommand(commandId);
       } finally {
         releaseEstimateFreeze();
       }
     },
-    [scrollToIndexConverge, acquireEstimateFreeze, releaseEstimateFreeze],
+    [
+      scrollToIndexConverge,
+      acquireEstimateFreeze,
+      releaseEstimateFreeze,
+      trackScrollCommand,
+      resolveScrollCommand,
+    ],
   );
 
   const scrollToEndPrecisely = useCallback(
-    (animated: boolean) => {
+    (animated: boolean): Promise<void> => {
       if (itemCount === 0) {
+        const commandId = beginScrollCommand();
         scrollToAbsoluteOffset(getMaxScrollOffset(), animated);
-        return;
+        const promise = trackScrollCommand(commandId);
+        if (animated) {
+          animatedScrollResolverRef.current = () => resolveScrollCommand(commandId);
+        } else {
+          requestAnimationFrame(() => resolveScrollCommand(commandId));
+        }
+        return promise;
       }
-      void scrollToIndexPrecisely({
+      return scrollToIndexPrecisely({
         index: itemCount - 1,
         animated,
         viewPosition: 1,
-        viewOffset: footerSize + paddingBottom,
+        viewOffset: footerSize + paddingEnd + endSpaceRef.current + contentInsetBottomRef.current,
       });
     },
     [
       itemCount,
       footerSize,
-      paddingBottom,
+      paddingEnd,
       scrollToIndexPrecisely,
       scrollToAbsoluteOffset,
       getMaxScrollOffset,
+      beginScrollCommand,
+      trackScrollCommand,
+      resolveScrollCommand,
     ],
   );
   useEffect(() => {
     scrollToEndForMaintainRef.current = scrollToEndPrecisely;
   }, [scrollToEndPrecisely]);
 
+  const initialPassRef = useRef<() => {diff: number; visKey: string} | null>(() => null);
+  useEffect(() => {
+    initialPassRef.current = () => {
+      const initial = initialTargetRef.current;
+      if (initial == null || itemCount === 0) return null;
+      let corrected: number | null;
+      if (initial.endAligned) {
+        corrected = getMaxScrollOffset();
+      } else if (initial.index != null) {
+        corrected = computeIndexScrollOffset(initial.index, 0, 0);
+      } else {
+        corrected = clampScrollOffset(initial.offset);
+      }
+      if (corrected == null) return null;
+      const diff = corrected - lastScrollOffsetRef.current;
+      if (Math.abs(diff) > SCROLL_TO_INDEX_TARGET_EPSILON) {
+        scrollToAbsoluteOffset(corrected, false);
+      }
+      const engineTop = Math.max(0, lastScrollOffsetRef.current - effectivePaddingStartRef.current);
+      const first = indexAtOffset(engineTop);
+      const last = Math.max(first, indexAtOffset(engineTop + mainViewportRef.current));
+      return {diff: Math.abs(diff), visKey: `${first}:${last}`};
+    };
+  }, [
+    itemCount,
+    getMaxScrollOffset,
+    computeIndexScrollOffset,
+    clampScrollOffset,
+    scrollToAbsoluteOffset,
+    indexAtOffset,
+  ]);
+
+  useEffect(() => {
+    if (!initialRevealPending) return;
+    const timer = setTimeout(() => setInitialRevealPending(false), INITIAL_REVEAL_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [initialRevealPending]);
+
   useEffect(() => {
     const initial = initialTargetRef.current;
     if (initial == null || initial.settled) return;
     if (range.end < 0) return;
-    if (initial.index == null) {
-      initial.settled = true;
-      scrollToAbsoluteOffset(initial.offset, false);
-      return;
-    }
-    if (initial.index >= itemCount) return;
+    if (!initial.endAligned && initial.index != null && initial.index >= itemCount) return;
+    if (initial.endAligned && itemCount === 0) return;
     initial.settled = true;
-    void scrollToIndexPrecisely({index: initial.index, animated: false});
-  }, [range, itemCount, scrollToIndexPrecisely, scrollToAbsoluteOffset]);
+    void (async () => {
+      try {
+        if (initial.endAligned) {
+          await scrollToEndPrecisely(false);
+        } else if (initial.index != null) {
+          await scrollToIndexPrecisely({index: initial.index, animated: false});
+        } else {
+          scrollToAbsoluteOffset(initial.offset, false);
+        }
+        const commandToken = scrollCommandIdRef.current;
+        let stablePasses = 0;
+        let lastVisKey = '';
+        for (
+          let pass = 0;
+          pass < INITIAL_REVEAL_MAX_PASSES && stablePasses < INITIAL_REVEAL_STABLE_PASSES;
+          pass++
+        ) {
+          if (scrollCommandIdRef.current !== commandToken) break;
+          const result = initialPassRef.current();
+          if (result == null) break;
+          if (result.diff <= SCROLL_TO_INDEX_TARGET_EPSILON && result.visKey === lastVisKey) {
+            stablePasses++;
+          } else {
+            stablePasses = 0;
+          }
+          lastVisKey = result.visKey;
+          await waitForLayoutPass();
+        }
+      } finally {
+        setInitialRevealPending(false);
+      }
+    })();
+  }, [
+    range,
+    itemCount,
+    scrollToIndexPrecisely,
+    scrollToAbsoluteOffset,
+    scrollToEndPrecisely,
+  ]);
 
   useEffect(() => {
-    const engineOffset = lastScrollOffsetRef.current - effectivePaddingTop;
+    const engineOffset = lastScrollOffsetRef.current - effectivePaddingStart;
     if (hybridRef.current && lastPushedEngineOffsetRef.current !== engineOffset) {
       const activity = scrollActivityRef.current;
       if (!uiThreadDriverActiveRef.current || (!activity.dragging && !activity.momentum)) {
@@ -2454,13 +3151,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
     updateSticky(engineOffset);
     evaluateViewabilityRef.current();
-  }, [range.layoutVersion, updateSticky, effectivePaddingTop]);
+    emitFirstVisibleRef.current();
+  }, [range.layoutVersion, updateSticky, effectivePaddingStart]);
 
   useEffect(() => {
     if (hasFiredOnLoadRef.current) return;
     if (range.end < range.start) return;
     hasFiredOnLoadRef.current = true;
-    onLoad?.();
+    onLoad?.({elapsedTimeInMs: Date.now() - mountTimestampRef.current});
   }, [range, onLoad]);
 
   useEffect(() => {
@@ -2470,16 +3168,46 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     return () => cancelAnimationFrame(raf);
   }, [drawDistanceExpanded, range]);
 
+  const scrollIndexIntoViewImpl = useCallback(
+    (index: number, animated: boolean, viewOffset: number): Promise<void> => {
+      if (index < 0 || index >= itemCount) return Promise.resolve();
+      const viewportMain = mainViewportRef.current;
+      const itemTop = effectivePaddingStartRef.current + readItemOffset(index);
+      const itemBottom = itemTop + readItemSize(index);
+      const visibleTop = lastScrollOffsetRef.current + viewOffset;
+      const visibleBottom =
+        lastScrollOffsetRef.current + viewportMain - contentInsetBottomRef.current;
+      if (itemTop >= visibleTop && itemBottom <= visibleBottom) {
+        return Promise.resolve();
+      }
+      const alignToEnd = itemBottom > visibleBottom && itemTop >= visibleTop;
+      return scrollToIndexPrecisely({
+        index,
+        animated,
+        viewPosition: alignToEnd ? 1 : 0,
+        viewOffset: alignToEnd ? contentInsetBottomRef.current : viewOffset,
+      });
+    },
+    [itemCount, readItemOffset, readItemSize, scrollToIndexPrecisely],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
       scrollToOffset({offset, animated = false}: NitroListScrollToOffsetParams) {
-        scrollCommandIdRef.current++;
+        const commandId = beginScrollCommand();
         isPrewarmingRangeRef.current = false;
         lastPrewarmRangeRef.current = null;
         cancelFlingPrewarm();
         setPrewarmRange(null);
         scrollToAbsoluteOffset(offset, animated);
+        const promise = trackScrollCommand(commandId);
+        if (animated) {
+          animatedScrollResolverRef.current = () => resolveScrollCommand(commandId);
+        } else {
+          requestAnimationFrame(() => resolveScrollCommand(commandId));
+        }
+        return promise;
       },
       scrollToIndex({
         index,
@@ -2490,12 +3218,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         return scrollToIndexPrecisely({index, animated, viewPosition, viewOffset});
       },
       scrollToEnd(animated = false) {
-        scrollCommandIdRef.current++;
         isPrewarmingRangeRef.current = false;
         lastPrewarmRangeRef.current = null;
         cancelFlingPrewarm();
         setPrewarmRange(null);
-        scrollToEndPrecisely(animated);
+        return scrollToEndPrecisely(animated);
       },
       getAbsoluteLastScrollOffset() {
         return lastScrollOffsetRef.current;
@@ -2511,9 +3238,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       },
       getLayout(index: number) {
         if (index < 0 || index >= itemCount) return undefined;
-        const y = readItemOffset(index);
-        const height = readItemSize(index);
-        return {x: 0, y, width: viewportSizeRef.current.width, height};
+        const offset = readItemOffset(index);
+        const size = readItemSize(index);
+        if (isHorizontalRef.current) {
+          return {x: offset, y: 0, width: size, height: crossViewportRef.current};
+        }
+        return {x: 0, y: offset, width: crossViewportRef.current, height: size};
       },
       getWindowSize() {
         return {
@@ -2522,7 +3252,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         };
       },
       getFirstItemOffset() {
-        return effectivePaddingTop;
+        return effectivePaddingStart;
       },
       getScrollableNode() {
         const node = scrollRef.current as
@@ -2536,10 +3266,71 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           | null;
         return node?.getNativeScrollRef != null ? node.getNativeScrollRef() : node;
       },
+      scrollIndexIntoView({
+        index,
+        animated = false,
+        viewOffset = 0,
+      }: {
+        index: number;
+        animated?: boolean;
+        viewOffset?: number;
+      }) {
+        return scrollIndexIntoViewImpl(index, animated, viewOffset);
+      },
+      scrollItemIntoView({
+        item,
+        animated = false,
+        viewOffset = 0,
+      }: {
+        item: unknown;
+        animated?: boolean;
+        viewOffset?: number;
+      }) {
+        let index = (items as ReadonlyArray<unknown>).indexOf(item);
+        if (index < 0 && keyExtractor != null && item != null) {
+          const wantedKey = keyExtractor(item as T, 0);
+          for (let i = 0; i < itemCount; i++) {
+            if (keyExtractor(items[i], i) === wantedKey) {
+              index = i;
+              break;
+            }
+          }
+        }
+        if (index < 0) return Promise.resolve();
+        return scrollIndexIntoViewImpl(index, animated, viewOffset);
+      },
+      reportContentInset({bottom = 0}: {bottom?: number}) {
+        const next = Number.isFinite(bottom) ? Math.max(0, bottom) : 0;
+        if (next === contentInsetBottomRef.current) return;
+        contentInsetBottomRef.current = next;
+        checkEdgeCallbacksRef.current();
+      },
+      getAverageItemSizes() {
+        const result: Record<string, {average: number; count: number}> = {};
+        const hybrid = hybridRef.current;
+        if (hybrid == null) return result;
+        let stats = new Float64Array((typeIdMapRef.current.size + 2) * 3);
+        let written = hybrid.fillTypeStats(stats.buffer);
+        if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
+        if (written < 0) {
+          stats = new Float64Array(4096 * 3);
+          written = hybrid.fillTypeStats(stats.buffer);
+          if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
+          if (written < 0) return result;
+        }
+        const idToType = new Map<number, ItemTypeKey>();
+        for (const [type, id] of typeIdMapRef.current) idToType.set(id, type);
+        for (let k = 0; k < written; k++) {
+          const id = stats[k * 3] | 0;
+          const label = id === 0 ? '' : String(idToType.get(id) ?? id);
+          result[label] = {average: stats[k * 3 + 1], count: stats[k * 3 + 2]};
+        }
+        return result;
+      },
     }),
     [
       itemCount,
-      effectivePaddingTop,
+      effectivePaddingStart,
       scrollToAbsoluteOffset,
       scrollToIndexPrecisely,
       scrollToEndPrecisely,
@@ -2547,31 +3338,106 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       readItemSize,
       readTotalSize,
       cancelFlingPrewarm,
+      beginScrollCommand,
+      trackScrollCommand,
+      resolveScrollCommand,
+      scrollIndexIntoViewImpl,
+      items,
+      keyExtractor,
     ],
   );
+
+  const alwaysRenderKeysJoined = alwaysRender?.keys != null ? alwaysRender.keys.join(' ') : '';
+  const alwaysRenderKeyIndices = useMemo<number[] | null>(() => {
+    const keys = alwaysRender?.keys;
+    if (keys == null || keys.length === 0 || keyExtractor == null) return null;
+    const wanted = new Set(keys);
+    const found: number[] = [];
+    for (let i = 0; i < items.length && found.length < wanted.size; i++) {
+      if (wanted.has(keyExtractor(items[i], i))) found.push(i);
+    }
+    return found;
+  }, [alwaysRenderKeysJoined, items, keyExtractor]);
 
   const renderedChildren: React.ReactNode[] = [];
   const renderRanges: RenderRange[] = [];
   pushRenderRange(renderRanges, range, itemCount);
   pushRenderRange(renderRanges, prewarmRange, itemCount);
+  if (alwaysRender != null && itemCount > 0) {
+    if (alwaysRender.top != null && alwaysRender.top > 0) {
+      pushRenderRange(renderRanges, {start: 0, end: alwaysRender.top - 1}, itemCount);
+    }
+    if (alwaysRender.bottom != null && alwaysRender.bottom > 0) {
+      pushRenderRange(
+        renderRanges,
+        {start: itemCount - alwaysRender.bottom, end: itemCount - 1},
+        itemCount,
+      );
+    }
+    if (alwaysRender.indices != null) {
+      for (const index of alwaysRender.indices) {
+        pushRenderRange(renderRanges, {start: index, end: index}, itemCount);
+      }
+    }
+    if (alwaysRenderKeyIndices != null) {
+      for (const index of alwaysRenderKeyIndices) {
+        pushRenderRange(renderRanges, {start: index, end: index}, itemCount);
+      }
+    }
+  }
+  if (anchoredEndSpace != null && itemCount > 0) {
+    pushRenderRange(
+      renderRanges,
+      {
+        start: Math.max(0, Math.min(Math.trunc(anchoredEndSpace.anchorIndex), itemCount - 1)),
+        end: itemCount - 1,
+      },
+      itemCount,
+    );
+  }
 
+  const effectiveRenderMode: NitroListRenderMode =
+    adaptiveRenderMode === true ? renderMode : 'normal';
+  const seenRenderKeys = IS_DEV ? new Set<string>() : null;
   for (const {start, end} of mergeRenderRanges(renderRanges)) {
     for (let i = start; i <= end; i++) {
       const item = items[i];
       const itemKey = keyExtractor ? keyExtractor(item, i) : String(i);
+      if (seenRenderKeys != null) checkDuplicateKeyDev(seenRenderKeys, itemKey);
       const itemType = getItemType ? getItemType(item, i) : undefined;
       const reactKey = itemType !== undefined ? `${itemType}:${itemKey}` : itemKey;
       const top = readItemOffset(i);
       const isHiddenStickyCell = hideRelatedCell && i === stickyIndexState;
       if (isHiddenStickyCell) {
         const naturalHeight = readItemSize(i);
-        renderedChildren.push(<HiddenStickyCell key={reactKey} top={top} height={naturalHeight} />);
+        renderedChildren.push(
+          <HiddenStickyCell
+            key={reactKey}
+            top={top}
+            height={naturalHeight}
+            horizontal={isHorizontal}
+          />,
+        );
       } else {
         renderedChildren.push(
           <NitroListItemContainer
             key={reactKey}
             index={i}
             top={top}
+            horizontal={isHorizontal}
+            columnLeft={
+              columnLayout != null
+                ? `${(columnLayout.colOf[i] / resolvedColumns) * 100}%`
+                : undefined
+            }
+            columnWidth={
+              columnLayout != null
+                ? `${(columnLayout.spans[i] / resolvedColumns) * 100}%`
+                : undefined
+            }
+            mainAxisGap={mainAxisGap}
+            crossAxisGap={crossAxisGap}
+            renderMode={effectiveRenderMode}
             item={item as unknown}
             renderItem={renderItem as NitroListRenderItem<unknown>}
             SeparatorComponent={
@@ -2593,9 +3459,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     stickyIndexState >= 0 && stickyIndexState < itemCount ? items[stickyIndexState] : undefined;
 
   return (
-    <View style={[styles.wrapper, style]}>
+    <View style={[styles.wrapper, style, initialRevealPending ? styles.hiddenUntilReveal : null]}>
       {resolvedRenderScrollComponent({
         ref: scrollRef,
+        horizontal: isHorizontal,
+        snapToOffsets: snapOffsets,
         onScroll: uiThreadDriverActive ? uiThreadScrollHandler : handleOuterScroll,
         onScrollBeginDrag: handleScrollBeginDrag,
         onScrollEndDrag: handleScrollEndDrag,
@@ -2608,30 +3476,44 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         maintainVisibleContentPosition: mvcpEnabled ? MVCP_SCROLL_VIEW_CONFIG : undefined,
         children: (
           <>
-            {mvcpEnabled ? <MvcpAdjustAnchor top={MVCP_ANCHOR_BASE + mvcpAdjust} /> : null}
-            {alignPad > 0 ? <View style={{height: alignPad}} /> : null}
+            {mvcpEnabled ? (
+              <MvcpAdjustAnchor top={MVCP_ANCHOR_BASE + mvcpAdjust} horizontal={isHorizontal} />
+            ) : null}
+            {alignPad > 0 ? (
+              <View style={isHorizontal ? {width: alignPad} : {height: alignPad}} />
+            ) : null}
             {ListHeaderComponent != null ? (
               <View onLayout={handleHeaderLayout}>{renderSlot(ListHeaderComponent)}</View>
             ) : null}
             {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
             <NitroListView
               hybridRef={hybridRefCb}
-              style={{height: totalSize}}
+              style={isHorizontal ? {width: totalSize} : {height: totalSize}}
               itemCount={itemCount}
               estimatedItemSize={estimatedItemSize}
               drawDistance={effectiveDrawDistance}
+              horizontal={isHorizontal}
+              numColumns={resolvedColumns}
               onRangeChange={onRangeChangeCb}>
               {renderedChildren}
             </NitroListView>
             {ListFooterComponent != null ? (
               <View onLayout={handleFooterLayout}>{renderSlot(ListFooterComponent)}</View>
             ) : null}
+            {endSpace > 0 ? (
+              <View style={isHorizontal ? {width: endSpace} : {height: endSpace}} />
+            ) : null}
           </>
         ),
       })}
       {stickyItem !== undefined ? (
-        <StickyOverlay translateY={stickyTranslateYSv}>
-          {renderItem({item: stickyItem, index: stickyIndexState, target: 'StickyHeader'})}
+        <StickyOverlay translateY={stickyTranslateYSv} horizontal={isHorizontal}>
+          {renderItem({
+            item: stickyItem,
+            index: stickyIndexState,
+            target: 'StickyHeader',
+            renderMode: effectiveRenderMode,
+          })}
         </StickyOverlay>
       ) : null}
     </View>
@@ -2643,6 +3525,12 @@ type ItemsAreEqualFn = (prev: unknown, next: unknown, index: number) => boolean;
 interface NitroListItemContainerProps {
   index: number;
   top: number;
+  horizontal: boolean;
+  columnLeft?: string;
+  columnWidth?: string;
+  mainAxisGap: number;
+  crossAxisGap: number;
+  renderMode: NitroListRenderMode;
   item: unknown;
   renderItem: NitroListRenderItem<unknown>;
   SeparatorComponent?: React.ComponentType<{leadingItem: unknown}>;
@@ -2669,6 +3557,12 @@ function areItemContainerPropsEqual(
 ): boolean {
   return (
     prev.top === next.top &&
+    prev.horizontal === next.horizontal &&
+    prev.columnLeft === next.columnLeft &&
+    prev.columnWidth === next.columnWidth &&
+    prev.mainAxisGap === next.mainAxisGap &&
+    prev.crossAxisGap === next.crossAxisGap &&
+    prev.renderMode === next.renderMode &&
     prev.index === next.index &&
     prev.renderItem === next.renderItem &&
     prev.SeparatorComponent === next.SeparatorComponent &&
@@ -2688,6 +3582,7 @@ interface NitroListCellContentProps {
   renderItem: NitroListRenderItem<unknown>;
   SeparatorComponent?: React.ComponentType<{leadingItem: unknown}>;
   isLastItem: boolean;
+  renderMode: NitroListRenderMode;
   itemsAreEqual?: ItemsAreEqualFn;
 }
 
@@ -2700,6 +3595,7 @@ function areCellContentPropsEqual(
     prev.renderItem === next.renderItem &&
     prev.SeparatorComponent === next.SeparatorComponent &&
     prev.isLastItem === next.isLastItem &&
+    prev.renderMode === next.renderMode &&
     areItemsEquivalent(prev.item, next.item, next.index, prev.itemsAreEqual, next.itemsAreEqual)
   );
 }
@@ -2710,13 +3606,14 @@ const NitroListCellContent = React.memo(function NitroListCellContent({
   renderItem,
   SeparatorComponent,
   isLastItem,
+  renderMode,
 }: NitroListCellContentProps) {
   if (NITRO_LIST_PERF_COMPILED) {
     NitroListPerfMonitor.recordItemContentRender();
   }
   return (
     <>
-      {renderItem({item, index, target: 'Cell'})}
+      {renderItem({item, index, target: 'Cell', renderMode})}
       {SeparatorComponent != null && !isLastItem ? <SeparatorComponent leadingItem={item} /> : null}
     </>
   );
@@ -2725,6 +3622,12 @@ const NitroListCellContent = React.memo(function NitroListCellContent({
 const NitroListItemContainer = React.memo(function NitroListItemContainer({
   index,
   top,
+  horizontal,
+  columnLeft,
+  columnWidth,
+  mainAxisGap,
+  crossAxisGap,
+  renderMode,
   item,
   renderItem,
   SeparatorComponent,
@@ -2746,21 +3649,23 @@ const NitroListItemContainer = React.memo(function NitroListItemContainer({
   const lastReportedRef = useRef<number>(-1);
   const handleLayout = useCallback(
     (e: LayoutChangeEvent) => {
-      const height = e.nativeEvent.layout.height;
+      const layout = e.nativeEvent.layout;
+      const size = (horizontal ? layout.width : layout.height) + mainAxisGap;
       if (
         lastReportedRef.current >= 0 &&
-        Math.abs(height - lastReportedRef.current) <= MEASUREMENT_NOISE_EPSILON_DP
+        Math.abs(size - lastReportedRef.current) <= MEASUREMENT_NOISE_EPSILON_DP
       ) {
         return;
       }
-      lastReportedRef.current = height;
-      enqueueItemSize(index, height);
+      lastReportedRef.current = size;
+      enqueueItemSize(index, size);
     },
-    [index, enqueueItemSize],
+    [index, horizontal, mainAxisGap, enqueueItemSize],
   );
   const verifyFixedSizeLayout = useCallback(
     (e: LayoutChangeEvent) => {
-      const height = e.nativeEvent.layout.height;
+      const layout = e.nativeEvent.layout;
+      const height = horizontal ? layout.width : layout.height;
       if (fixedSize != null && Math.abs(height - fixedSize) > MEASUREMENT_NOISE_EPSILON_DP) {
         warnDevOnce(
           'fixed-item-size-mismatch',
@@ -2770,9 +3675,23 @@ const NitroListItemContainer = React.memo(function NitroListItemContainer({
         );
       }
     },
-    [fixedSize, index],
+    [fixedSize, index, horizontal],
   );
-  const containerStyle = useMemo(() => [styles.absoluteRow, {top}], [top]);
+  const containerStyle = useMemo(() => {
+    if (columnLeft != null && columnWidth != null) {
+      return [
+        styles.absoluteCell,
+        {
+          top,
+          left: columnLeft as unknown as number,
+          width: columnWidth as unknown as number,
+          paddingLeft: crossAxisGap / 2,
+          paddingRight: crossAxisGap / 2,
+        },
+      ];
+    }
+    return horizontal ? [styles.absoluteColumn, {left: top}] : [styles.absoluteRow, {top}];
+  }, [horizontal, top, columnLeft, columnWidth, crossAxisGap]);
   return (
     <View
       collapsable={false}
@@ -2784,47 +3703,72 @@ const NitroListItemContainer = React.memo(function NitroListItemContainer({
         renderItem={renderItem}
         SeparatorComponent={SeparatorComponent}
         isLastItem={isLastItem}
+        renderMode={renderMode}
         itemsAreEqual={itemsAreEqual}
       />
     </View>
   );
 }, areItemContainerPropsEqual);
 
-const MvcpAdjustAnchor = React.memo(function MvcpAdjustAnchor({top}: {top: number}) {
-  const style = useMemo(() => [styles.mvcpAnchor, {top}], [top]);
+const MvcpAdjustAnchor = React.memo(function MvcpAdjustAnchor({
+  top,
+  horizontal,
+}: {
+  top: number;
+  horizontal: boolean;
+}) {
+  const style = useMemo(
+    () =>
+      horizontal
+        ? [styles.mvcpAnchorHorizontal, {left: top}]
+        : [styles.mvcpAnchor, {top}],
+    [horizontal, top],
+  );
   return <View collapsable={false} style={style} />;
 });
 
 interface HiddenStickyCellProps {
   top: number;
   height: number;
+  horizontal: boolean;
 }
 
 const HiddenStickyCell = React.memo(function HiddenStickyCell({
   top,
   height,
+  horizontal,
 }: HiddenStickyCellProps) {
-  const style = useMemo(() => [styles.absoluteRow, {top, height}], [top, height]);
+  const style = useMemo(
+    () =>
+      horizontal
+        ? [styles.absoluteColumn, {left: top, width: height}]
+        : [styles.absoluteRow, {top, height}],
+    [horizontal, top, height],
+  );
   return <View collapsable={false} style={style} />;
 });
 
 interface StickyOverlayProps {
   translateY: SharedValue<number>;
+  horizontal: boolean;
   children: React.ReactNode;
 }
 
 const StickyOverlay = React.memo(function StickyOverlay({
   translateY,
+  horizontal,
   children,
 }: StickyOverlayProps) {
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{translateY: translateY.value}],
+    transform: horizontal
+      ? [{translateX: translateY.value}]
+      : [{translateY: translateY.value}],
   }));
   return (
     <Animated.View
       pointerEvents="box-none"
       collapsable={false}
-      style={[styles.stickyOverlay, animatedStyle]}>
+      style={[horizontal ? styles.stickyOverlayHorizontal : styles.stickyOverlay, animatedStyle]}>
       {children}
     </Animated.View>
   );
@@ -2834,6 +3778,9 @@ const styles = StyleSheet.create({
   wrapper: {
     flex: 1,
     overflow: 'hidden',
+  },
+  hiddenUntilReveal: {
+    opacity: 0,
   },
   stickyOverlay: {
     position: 'absolute',
@@ -2846,9 +3793,29 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
   },
+  absoluteColumn: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+  },
+  absoluteCell: {
+    position: 'absolute',
+  },
+  stickyOverlayHorizontal: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+  },
   mvcpAnchor: {
     position: 'absolute',
     left: 0,
+    width: 1,
+    height: 1,
+  },
+  mvcpAnchorHorizontal: {
+    position: 'absolute',
+    top: 0,
     width: 1,
     height: 1,
   },

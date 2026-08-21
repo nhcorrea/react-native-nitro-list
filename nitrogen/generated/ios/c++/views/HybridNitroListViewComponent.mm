@@ -94,6 +94,16 @@ using namespace margelo::nitro::nitrolist::views;
     swiftPart.setDrawDistance(newViewProps.drawDistance.value);
     newViewProps.drawDistance.isDirty = false;
   }
+  // horizontal: boolean
+  if (newViewProps.horizontal.isDirty) {
+    swiftPart.setHorizontal(newViewProps.horizontal.value);
+    newViewProps.horizontal.isDirty = false;
+  }
+  // numColumns: number
+  if (newViewProps.numColumns.isDirty) {
+    swiftPart.setNumColumns(newViewProps.numColumns.value);
+    newViewProps.numColumns.isDirty = false;
+  }
   // onRangeChange: optional
   if (newViewProps.onRangeChange.isDirty) {
     swiftPart.setOnRangeChange(newViewProps.onRangeChange.value);

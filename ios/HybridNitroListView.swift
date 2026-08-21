@@ -50,6 +50,23 @@ final class HybridNitroListView: HybridNitroListViewSpec, RecyclableView {
     }
   }
 
+  var horizontal: Bool = false {
+    didSet {
+      maybeEmitRange()
+    }
+  }
+
+  var numColumns: Double = 1 {
+    didSet {
+      layoutManager.setColumnCount(max(1, Int(numColumns)))
+      maybeEmitRange()
+    }
+  }
+
+  private var mainViewportExtent: CGFloat {
+    horizontal ? viewportWidth : viewportHeight
+  }
+
   var onRangeChange: ((Double, Double, Double, Double) -> Void)? {
     didSet {
       stateLock.withLock {
@@ -110,7 +127,7 @@ final class HybridNitroListView: HybridNitroListViewSpec, RecyclableView {
           typed,
           capacity: capacity,
           scrollOffset: scrollOffset,
-          viewportHeight: viewportHeight,
+          viewportHeight: mainViewportExtent,
           drawDistance: drawDistancePt
         )
         if w < 0 { return -1 }
@@ -166,6 +183,19 @@ final class HybridNitroListView: HybridNitroListViewSpec, RecyclableView {
     if changed { maybeEmitRange() }
   }
 
+  func setItemSpans(spans: ArrayBuffer) throws {
+    let count = spans.size / MemoryLayout<UInt16>.size
+    let changed: Bool
+    if count == 0 {
+      changed = layoutManager.setItemSpans(nil, count: 0)
+    } else {
+      changed = spans.data.withMemoryRebound(to: UInt16.self, capacity: count) { typed in
+        layoutManager.setItemSpans(UnsafePointer(typed), count: count)
+      }
+    }
+    if changed { maybeEmitRange() }
+  }
+
   func setItemTypes(types: ArrayBuffer) throws {
     let count = types.size / MemoryLayout<UInt16>.size
     if count == 0 {
@@ -193,7 +223,7 @@ final class HybridNitroListView: HybridNitroListViewSpec, RecyclableView {
     let capacity = slab.size / MemoryLayout<Double>.size
     if capacity == 0 { return -1 }
     let (offset, viewport, draw) = stateLock.withLock {
-      (scrollOffset, viewportHeight, drawDistancePt)
+      (scrollOffset, mainViewportExtent, drawDistancePt)
     }
     let written = slab.data.withMemoryRebound(to: Double.self, capacity: capacity) { typed in
       layoutManager.fillLayoutSlab(
@@ -203,6 +233,15 @@ final class HybridNitroListView: HybridNitroListViewSpec, RecyclableView {
         viewportHeight: viewport,
         drawDistance: draw
       )
+    }
+    return Double(written)
+  }
+
+  func fillTypeStats(out: ArrayBuffer) throws -> Double {
+    let capacity = out.size / MemoryLayout<Double>.size
+    if capacity == 0 { return -1 }
+    let written = out.data.withMemoryRebound(to: Double.self, capacity: capacity) { typed in
+      layoutManager.fillTypeStats(typed, capacity: capacity)
     }
     return Double(written)
   }
@@ -258,7 +297,7 @@ final class HybridNitroListView: HybridNitroListViewSpec, RecyclableView {
       if isUpdatingProps { return }
       let range = layoutManager.getEngagedRange(
         scrollOffset: scrollOffset,
-        viewportHeight: viewportHeight,
+        viewportHeight: mainViewportExtent,
         drawDistance: drawDistancePt
       )
       if range.start == lastStart && range.end == lastEnd && range.version == lastVersion {

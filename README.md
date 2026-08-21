@@ -69,12 +69,21 @@ function MyList({ items }: { items: Item[] }) {
 | `getFixedItemSize` | `(item, index, type) => number \| undefined` — return the exact height in dp when known. Fixed-size cells skip measurement entirely (no `onLayout`), so offsets are exact from the first batch. The value must match the real layout (dev builds warn on divergence). |
 | `itemsAreEqual` | `(prev, next, index) => boolean` — with a stable function, a new data array whose items are recreated-but-equal re-renders zero rows. Compare visual content only; the key is already equal by construction. |
 | `drawDistance` | How far beyond the viewport (dp) to render. |
+| `horizontal` | Row layout: offsets/measurements/sticky/viewability all run on the x axis (cells report their width). |
+| `numColumns` / `overrideItemLayout` / `columnWrapperStyle` | Grid layout: rows advance by their tallest cell; `overrideItemLayout(layout, item, index)` sets per-item spans; `columnWrapperStyle` supports `{ rowGap, columnGap }`. Cross-axis placement is percentage-based, so rotation reflows for free. Changing `numColumns` re-measures everything (cell width changed). |
 | `onEndReached` / `onStartReached` | Latched edge callbacks with hysteresis, viewport-relative thresholds. |
-| `maintainVisibleContentPosition` | Keeps the first visible item still when content above it resizes or items are prepended. |
-| `alignItemsAtEnd` / `maintainScrollAtEnd` | Chat-style bottom alignment and auto-stick to new content. |
-| `initialScrollIndex` / `initialScrollOffset` | Mount already positioned, without flashing the top of the list. |
+| `maintainVisibleContentPosition` | `boolean` or `{ data?, size?, shouldRestorePosition? }`. **Since v2, `size` defaults to ON**: position stays stable while content above the viewport re-measures, for every list. `data` (prepend anchoring) stays opt-in. `true` enables both, `false` disables both. `shouldRestorePosition` vetoes anchor candidates (e.g. optimistic messages about to be replaced). |
+| `alignItemsAtEnd` / `maintainScrollAtEnd` | Chat-style bottom alignment and auto-stick to new content (footer growth re-sticks; user drags cancel; growth during a stick coalesces). |
+| `anchoredEndSpace` | AI-chat pattern: `{ anchorIndex, anchorOffset?, anchorMaxSize?, onSizeChanged?, onReady? }` — pads the tail so the anchor message pins to the viewport top while the response grows into the pad (content height stays constant, so nothing jumps). Wins over `maintainScrollAtEnd` while active. |
+| `alwaysRender` | `{ top?, bottom?, indices?, keys? }` — keep specific cells mounted outside the visible window (chat anchors, accessibility). Pinned cells never report viewability. |
+| `initialScrollIndex` / `initialScrollOffset` / `initialScrollAtEnd` | Mount already positioned. The list stays at `opacity: 0` until the target converges (2 stable passes with the same visible set), with a hard reveal timeout so it never stays hidden. |
 | `stickyHeaderIndices` / `stickyHeaderConfig` | Sticky headers. |
 | `viewabilityConfig` / `onViewableItemsChanged` | FlashList-compatible viewability tracking. |
+| `snapToIndices` | Snap points computed live from the layout engine's offsets (they track measurements). |
+| `adaptiveRenderMode` | Opt-in: `renderItem` receives `renderMode: 'normal' \| 'fast'` (Schmitt trigger on scroll velocity) so heavy cells can render placeholders mid-fling. |
+| `onLoad` | `({ elapsedTimeInMs }) => void` — fires once when the first range renders, with time since mount. |
+| `onFirstVisibleItemChanged` | `({ index, item, key }) => void` — cheap first-visible signal, deduped by index. |
+| `onItemSizeChanged` | `({ index, size }) => void` — every measurement flushed to the layout engine (dev/tuning). |
 | `ListHeaderComponent` / `ListFooterComponent` / `ListEmptyComponent` / `ItemSeparatorComponent` | Structural components, measured into the scroll math automatically. |
 | `renderScrollComponent` | Provide your own outer ScrollView (e.g. `Animated.ScrollView`). Forward every prop you receive — in particular `maintainVisibleContentPosition`, which MVCP relies on since v1.6 — and keep `removeClippedSubviews` off. |
 | `experimentalUiThreadScroll` | Drive the engine's scroll offset (and sticky headers) from the UI thread — see below. |
@@ -88,12 +97,53 @@ See the full documented prop list in [`src/NitroList.tsx`](./src/NitroList.tsx) 
 ```tsx
 const ref = useRef<NitroListHandle>(null);
 
-ref.current?.scrollToIndex({ index: 500, animated: true });
-ref.current?.scrollToOffset({ offset: 0 });
-ref.current?.scrollToEnd(true);
+await ref.current?.scrollToIndex({ index: 500, animated: true });
+await ref.current?.scrollToOffset({ offset: 0 });
+await ref.current?.scrollToEnd(true);
 ```
 
+All scroll commands return a `Promise` that settles when the scroll lands — and a superseded command (a newer command or a user drag takes over) always resolves immediately, so callers never hang. Commands issued right after a data change wait for the layout to stabilize (up to 2 stable frames, 800ms cap) before computing their target.
+
 `getScrollableNode()` / `getNativeScrollRef()` expose the outer scroll node for third-party interop (`useScrollOffset`, `scrollTo`, `measure`, `dispatchCommand`).
+
+`getAverageItemSizes()` returns `Record<type, { average, count }>` straight from the native layout engine's per-type running means — use it to tune `estimatedItemSize` (untyped lists report under the `''` key).
+
+`scrollIndexIntoView({ index })` / `scrollItemIntoView({ item })` scroll only when the target is off-screen, aligning to the nearest edge by direction.
+
+`reportContentInset({ bottom })` tells the list the scrollable range was extended by a synthetic content inset (keyboard/composer) so `scrollToEnd` and max-offset math land correctly — the `/keyboard` entry point wires this automatically.
+
+### Sections (`/section-list` entry point)
+
+```tsx
+import { NitroSectionList } from '@nhcorrea/react-native-nitro-list/section-list';
+
+<NitroSectionList
+  sections={sections}
+  estimatedItemSize={64}
+  keyExtractor={(item) => item.id}
+  renderItem={({ item, index, section }) => <Row item={item} />}
+  renderSectionHeader={({ section }) => <Header title={section.title} />}
+/>
+```
+
+Sections are flattened into a typed row union (`header | item | separator | footer`) over one NitroList — each row kind gets its own native size statistics for free. Sticky section headers, `scrollToLocation({ sectionIndex, itemIndex })` (0 = the header, like RN) and SectionList-style viewability tokens (with `section` / `sectionIndex`) are included.
+
+### Keyboard-aware chat (`/keyboard` entry point)
+
+```tsx
+import { KeyboardAwareNitroList, useKeyboardScrollToEnd } from '@nhcorrea/react-native-nitro-list/keyboard';
+
+<KeyboardAwareNitroList
+  data={messages}
+  renderItem={renderMessage}
+  estimatedItemSize={72}
+  keyExtractor={(m) => m.id}
+  anchoredEndSpace={{ anchorIndex: lastUserMessageIndex }}
+  keyboardLiftBehavior="whenAtEnd"
+/>
+```
+
+Requires the optional peer `react-native-keyboard-controller` (>= 1.21.7). The wrapper renders through its `KeyboardChatScrollView`, feeds `anchoredEndSpace`'s pad into the keyboard `blankSpace` floor (so opening the keyboard absorbs into the pad instead of shoving content), and routes content-inset changes into `reportContentInset`. `useKeyboardScrollToEnd(ref)` gives you dismiss + scroll-to-end in parallel.
 
 ### UI-thread scroll mode (experimental)
 

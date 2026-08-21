@@ -44,6 +44,8 @@ namespace margelo::nitro::nitrolist::views {
     CachedProp<double> itemCount;
     CachedProp<double> estimatedItemSize;
     CachedProp<double> drawDistance;
+    CachedProp<bool> horizontal;
+    CachedProp<double> numColumns;
     CachedProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>> onRangeChange;
     CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroListViewSpec>& /* ref */)>>> hybridRef;
 

@@ -45,6 +45,18 @@ abstract class HybridNitroListViewSpec: HybridView() {
   @set:Keep
   abstract var drawDistance: Double
   
+  @get:DoNotStrip
+  @get:Keep
+  @set:DoNotStrip
+  @set:Keep
+  abstract var horizontal: Boolean
+  
+  @get:DoNotStrip
+  @get:Keep
+  @set:DoNotStrip
+  @set:Keep
+  abstract var numColumns: Double
+  
   abstract var onRangeChange: ((start: Double, end: Double, layoutVersion: Double, offset: Double) -> Unit)?
   
   private var onRangeChange_cxx: Func_void_double_double_double_double?
@@ -106,11 +118,19 @@ abstract class HybridNitroListViewSpec: HybridView() {
   
   @DoNotStrip
   @Keep
+  abstract fun setItemSpans(spans: ArrayBuffer): Unit
+  
+  @DoNotStrip
+  @Keep
   abstract fun seedTypeMeans(pairs: ArrayBuffer): Unit
   
   @DoNotStrip
   @Keep
   abstract fun fillLayoutSlab(slab: ArrayBuffer): Double
+  
+  @DoNotStrip
+  @Keep
+  abstract fun fillTypeStats(out: ArrayBuffer): Double
   
   @DoNotStrip
   @Keep

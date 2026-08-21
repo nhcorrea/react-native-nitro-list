@@ -155,6 +155,35 @@ public:
   int32_t fillLayoutSlab(double* out, int32_t capacityDoubles, float scrollOffset,
                          float viewportHeight, float drawDistance, float outputScale);
 
+  /**
+   * Grid mode: items are laid out in rows of `columns` span-units; items in
+   * the same row share one offset and the row advances by its tallest item.
+   * Values < 1 clamp to 1 (the classic 1-D list). Changing the column count
+   * changes every cell's width, which invalidates every measured size AND
+   * the per-type means — both are dropped here (sizes revert to the global
+   * estimate) so stale heights can never leak into the new geometry.
+   */
+  void setColumnCount(int32_t columns);
+
+  /**
+   * Optional per-index span map (span-units of the row each item occupies,
+   * clamped to [1, columnCount]). `count` may differ from itemCount —
+   * missing tail defaults to 1, like setItemTypes. Spans only regroup rows;
+   * sizes/measured flags are untouched. Returns true if any span changed.
+   */
+  bool setItemSpans(const uint16_t* spans, int32_t count);
+
+  /**
+   * Copies the per-type running means into `out` as triples
+   * `[typeId, mean * outputScale, sampleCount]`, one per type that has real
+   * measured samples (seeded-only types are estimates, not observations —
+   * excluded on purpose). Returns the number of triples written, or -1 when
+   * `capacityDoubles` is too small (caller grows the buffer and retries,
+   * same contract as fillLayoutSlab). Feeds the public
+   * `getAverageItemSizes()` DX surface for estimatedItemSize tuning.
+   */
+  int32_t fillTypeStats(double* out, int32_t capacityDoubles, float outputScale);
+
   float getTotalSize();
   /** Out-of-range indices return 0. */
   float getOffset(int32_t index);
@@ -212,8 +241,14 @@ public:
 
 private:
   struct TypeStats {
-    float mean = 0.0f;
-    float appliedMean = 0.0f; // last mean swept into unmeasured sizes
+    // Means live in double on purpose: float means made the running-mean
+    // arithmetic sensitive to FMA contraction (clang fuses `mean*num + size`
+    // into one rounding), which broke bit-parity with the TS test mirror the
+    // moment a mean landed on a 1/8-quantization boundary. Doubles make the
+    // chain exactly reproducible in JS number math, and the stats table is
+    // tiny.
+    double mean = 0.0;
+    double appliedMean = 0.0; // last mean swept into unmeasured sizes
     int32_t num = 0;          // distinct measured items of this type
     bool seeded = false;      // mean pre-filled from a cross-mount cache (num == 0)
   };
@@ -248,13 +283,26 @@ private:
    */
   static float roundToOctave(float value);
 
+  /** Double-precision variant for type means (result still a float size). */
+  static float roundToOctaveFromDouble(double value);
+
   std::mutex mutex_;
+
+  /** Effective span of `index` (clamped to the live column count). Lock held. */
+  int32_t spanAtLocked(int32_t index) const;
 
   // Struct-of-arrays item storage.
   std::vector<float> sizes_;
   std::vector<float> offsets_;
   std::vector<uint8_t> measured_;
   std::vector<uint16_t> types_;
+  std::vector<uint16_t> spans_;
+
+  // Grid state: 1 = classic 1-D list. rowStart_[i] is the first index of
+  // i's row, valid after ensureClean (used to restart partial layouts and
+  // to widen engaged ranges to full rows).
+  int32_t columnCount_ = 1;
+  std::vector<int32_t> rowStart_;
 
   // Per-type running means, indexed by type id (grown on demand).
   bool typeAverages_ = false;

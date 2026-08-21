@@ -9,6 +9,8 @@ import {
   type NitroListRenderItem,
 } from '@nhcorrea/react-native-nitro-list';
 
+import QAFixturesScreen from './QAFixturesScreen';
+
 type RowKind = 'plain' | 'text' | 'image' | 'gallery' | 'card' | 'header';
 
 type StressItem = {
@@ -354,6 +356,14 @@ const ListFooter = () => <Text style={styles.listEdge}>— list footer —</Text
 const Separator = () => <View style={styles.separator} />;
 
 function App(): React.JSX.Element {
+  const [qaMode, setQaMode] = useState(false);
+  if (qaMode) {
+    return <QAFixturesScreen onExit={() => setQaMode(false)} />;
+  }
+  return <StressLab onOpenQA={() => setQaMode(true)} />;
+}
+
+function StressLab({ onOpenQA }: { onOpenQA: () => void }): React.JSX.Element {
   const serialRef = useRef({ current: 0 });
   const [dataState, setDataState] = useState<ListData>(() =>
     buildDataset('plain-100k', serialRef.current)
@@ -693,6 +703,7 @@ function App(): React.JSX.Element {
               setEdgeHits({ end: 0, start: 0 });
             }}
           />
+          <Chip label="QA" active={false} tone="debug" onPress={onOpenQA} />
         </View>
       </View>
       <View style={styles.listContainer}>

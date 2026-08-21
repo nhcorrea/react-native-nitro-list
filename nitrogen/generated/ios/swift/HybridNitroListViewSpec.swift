@@ -13,6 +13,8 @@ public protocol HybridNitroListViewSpec_protocol: HybridObject, HybridView {
   var itemCount: Double { get set }
   var estimatedItemSize: Double { get set }
   var drawDistance: Double { get set }
+  var horizontal: Bool { get set }
+  var numColumns: Double { get set }
   var onRangeChange: ((_ start: Double, _ end: Double, _ layoutVersion: Double, _ offset: Double) -> Void)? { get set }
 
   // Methods
@@ -27,8 +29,10 @@ public protocol HybridNitroListViewSpec_protocol: HybridObject, HybridView {
   func resetItemSizes() throws -> Void
   func remapItemSizes(pairs: ArrayBuffer) throws -> Void
   func setItemTypes(types: ArrayBuffer) throws -> Void
+  func setItemSpans(spans: ArrayBuffer) throws -> Void
   func seedTypeMeans(pairs: ArrayBuffer) throws -> Void
   func fillLayoutSlab(slab: ArrayBuffer) throws -> Double
+  func fillTypeStats(out: ArrayBuffer) throws -> Double
   func getItemOffset(index: Double) throws -> Double
   func getItemSize(index: Double) throws -> Double
   func getTotalSize() throws -> Double

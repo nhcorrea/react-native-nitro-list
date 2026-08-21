@@ -14,7 +14,11 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <fstream>
 #include <random>
+#include <sstream>
+#include <string>
 #include <vector>
 
 using margelo::nitro::nitrolist::LayoutCore;
@@ -742,7 +746,265 @@ static void testRandomizedDifferential() {
   }
 }
 
-int main() {
+static void testColumnLayout() {
+  LayoutCore core;
+  core.setItemCount(7);
+  core.setEstimate(100.0f);
+  core.setColumnCount(2);
+
+  // Rows: [0,1] [2,3] [4,5] [6] — all estimates.
+  CHECK_EQ_F(core.getOffset(0), 0.0f);
+  CHECK_EQ_F(core.getOffset(1), 0.0f);
+  CHECK_EQ_F(core.getOffset(2), 100.0f);
+  CHECK_EQ_F(core.getOffset(3), 100.0f);
+  CHECK_EQ_F(core.getOffset(6), 300.0f);
+  CHECK_EQ_F(core.getTotalSize(), 400.0f);
+
+  // Row height is the tallest member.
+  core.setItemSize(2, 150.0f);
+  core.setItemSize(3, 90.0f);
+  CHECK_EQ_F(core.getOffset(4), 250.0f);
+  CHECK_EQ_F(core.getTotalSize(), 450.0f);
+
+  // Ranges widen to whole rows.
+  const LayoutCore::EngagedRange range = core.getEngagedRange(120.0f, 100.0f, 0.0f);
+  CHECK(range.start == 2);
+  CHECK(range.end == 3);
+  const LayoutCore::EngagedRange past = core.getEngagedRange(10000.0f, 100.0f, 0.0f);
+  CHECK(past.start == 6);
+  CHECK(past.end == 6);
+
+  // Spans regroup rows: item 0 spans the full width → rows [0] [1,2] [3,4] [5,6].
+  const uint16_t spans[7] = {2, 1, 1, 1, 1, 1, 1};
+  CHECK(core.setItemSpans(spans, 7));
+  CHECK_EQ_F(core.getOffset(0), 0.0f);
+  CHECK_EQ_F(core.getOffset(1), 100.0f);
+  CHECK_EQ_F(core.getOffset(2), 100.0f);
+  CHECK_EQ_F(core.getOffset(3), 250.0f);
+  CHECK_EQ_F(core.getOffset(4), 250.0f);
+
+  // Column-count change drops measurements AND type means.
+  core.setTypeAverages(true);
+  const uint16_t types[7] = {1, 1, 1, 1, 1, 1, 1};
+  core.setItemTypes(types, 7);
+  core.setItemSize(1, 200.0f);
+  core.setColumnCount(3);
+  CHECK_EQ_F(core.getSize(1), 100.0f);
+  double statsOut[3];
+  CHECK(core.fillTypeStats(statsOut, 3, 1.0f) == 0);
+}
+
+static void testFillTypeStats() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setItemCount(10);
+  core.setEstimate(100.0f);
+  const uint16_t types[10] = {1, 1, 1, 2, 2, 2, 3, 3, 0, 0};
+  core.setItemTypes(types, 10);
+
+  double empty[3];
+  CHECK(core.fillTypeStats(empty, 3, 1.0f) == 0);
+
+  core.setItemSize(0, 50.0f);
+  core.setItemSize(1, 70.0f);
+  core.setItemSize(3, 200.0f);
+  // Seeded-only types must not appear (estimates, not observations).
+  const double seed[2] = {3.0, 90.0};
+  core.seedTypeMeans(seed, 1, 1.0f);
+
+  double out[9];
+  CHECK(core.fillTypeStats(out, 3, 1.0f) == -1); // needs 2 triples = 6 doubles
+  const int32_t written = core.fillTypeStats(out, 9, 1.0f);
+  CHECK(written == 2);
+  CHECK(out[0] == 1.0);
+  CHECK_EQ_F(static_cast<float>(out[1]), 60.0f);
+  CHECK(out[2] == 2.0);
+  CHECK(out[3] == 2.0);
+  CHECK_EQ_F(static_cast<float>(out[4]), 200.0f);
+  CHECK(out[5] == 1.0);
+
+  // outputScale converts to the caller's unit (Android px → dp).
+  const int32_t scaled = core.fillTypeStats(out, 9, 0.5f);
+  CHECK(scaled == 2);
+  CHECK_EQ_F(static_cast<float>(out[1]), 30.0f);
+}
+
+// -----------------------------------------------------------------------------
+// Replay mode (`--dump-json <commands-file>`): drives one LayoutCore from a
+// whitespace-separated command script and dumps probes + final state as JSON.
+// Consumed by the jest differential test (layoutCoreMirror.differential.test),
+// which replays the same script against the TS mirror — any divergence means
+// the mirror lies about the core and every harness suite built on it is
+// suspect. Command grammar (counts are explicit so `>>` parsing stays dumb):
+//   count N | estimate V | epsilon V | typeavg B | directional B | freeze B
+//   clock MS | velocityreset | size IDX V | batch N idx v ... | reset
+//   anchored ANCHOR N idx v ... | remap N old new ... | types N t ...
+//   seed N type mean ... | range SCROLL VIEWPORT DRAW | offset IDX
+//   sizeof IDX | total | version
+// -----------------------------------------------------------------------------
+
+static double gScriptedClockMs = 0.0;
+static double scriptedClock() { return gScriptedClockMs; }
+
+static int runReplay(const char* path) {
+  std::ifstream input(path);
+  if (!input) {
+    std::fprintf(stderr, "cannot open %s\n", path);
+    return 2;
+  }
+  LayoutCore core;
+  std::vector<double> probes;
+  std::string cmd;
+  bool clockInstalled = false;
+  int32_t lastCount = 0;
+  while (input >> cmd) {
+    if (cmd == "count") {
+      int32_t n = 0;
+      input >> n;
+      core.setItemCount(n);
+      if (n >= 0) lastCount = n;
+    } else if (cmd == "estimate") {
+      double v = 0;
+      input >> v;
+      core.setEstimate(static_cast<float>(v));
+    } else if (cmd == "epsilon") {
+      double v = 0;
+      input >> v;
+      core.setMeasurementEpsilon(static_cast<float>(v));
+    } else if (cmd == "typeavg") {
+      int b = 0;
+      input >> b;
+      core.setTypeAverages(b != 0);
+    } else if (cmd == "directional") {
+      int b = 0;
+      input >> b;
+      core.setDirectionalBuffers(b != 0);
+    } else if (cmd == "freeze") {
+      int b = 0;
+      input >> b;
+      core.setEstimatesFrozen(b != 0);
+    } else if (cmd == "clock") {
+      input >> gScriptedClockMs;
+      if (!clockInstalled) {
+        core.setClockForTesting(&scriptedClock);
+        clockInstalled = true;
+      }
+    } else if (cmd == "velocityreset") {
+      core.resetScrollVelocity();
+    } else if (cmd == "columns") {
+      int32_t n = 0;
+      input >> n;
+      core.setColumnCount(n);
+    } else if (cmd == "spans") {
+      int32_t n = 0;
+      input >> n;
+      std::vector<uint16_t> spans(static_cast<size_t>(n));
+      for (int32_t i = 0; i < n; i++) {
+        int32_t s = 0;
+        input >> s;
+        spans[static_cast<size_t>(i)] = static_cast<uint16_t>(s);
+      }
+      core.setItemSpans(spans.data(), n);
+    } else if (cmd == "size") {
+      int32_t idx = 0;
+      double v = 0;
+      input >> idx >> v;
+      core.setItemSize(idx, static_cast<float>(v));
+    } else if (cmd == "batch" || cmd == "remap" || cmd == "seed") {
+      int32_t n = 0;
+      input >> n;
+      std::vector<double> pairs(static_cast<size_t>(n) * 2);
+      for (int32_t i = 0; i < n * 2; i++) input >> pairs[i];
+      if (cmd == "batch") {
+        core.setItemSizes(pairs.data(), n, 1.0f);
+      } else if (cmd == "remap") {
+        core.remapItemSizes(pairs.data(), n);
+      } else {
+        core.seedTypeMeans(pairs.data(), n, 1.0f);
+      }
+    } else if (cmd == "anchored") {
+      int32_t anchor = 0;
+      int32_t n = 0;
+      input >> anchor >> n;
+      std::vector<double> pairs(static_cast<size_t>(n) * 2);
+      for (int32_t i = 0; i < n * 2; i++) input >> pairs[i];
+      probes.push_back(core.setItemSizesAnchored(pairs.data(), n, 1.0f, anchor));
+    } else if (cmd == "types") {
+      int32_t n = 0;
+      input >> n;
+      std::vector<uint16_t> types(static_cast<size_t>(n));
+      for (int32_t i = 0; i < n; i++) {
+        int32_t t = 0;
+        input >> t;
+        types[static_cast<size_t>(i)] = static_cast<uint16_t>(t);
+      }
+      core.setItemTypes(types.data(), n);
+    } else if (cmd == "reset") {
+      core.resetItemSizes();
+    } else if (cmd == "range") {
+      double scroll = 0;
+      double viewport = 0;
+      double draw = 0;
+      input >> scroll >> viewport >> draw;
+      const LayoutCore::EngagedRange range = core.getEngagedRange(
+          static_cast<float>(scroll), static_cast<float>(viewport), static_cast<float>(draw));
+      probes.push_back(range.start);
+      probes.push_back(range.end);
+      probes.push_back(range.version);
+    } else if (cmd == "offset") {
+      int32_t idx = 0;
+      input >> idx;
+      probes.push_back(core.getOffset(idx));
+    } else if (cmd == "sizeof") {
+      int32_t idx = 0;
+      input >> idx;
+      probes.push_back(core.getSize(idx));
+    } else if (cmd == "total") {
+      probes.push_back(core.getTotalSize());
+    } else if (cmd == "stats") {
+      double statsOut[4096 * 3];
+      const int32_t written = core.fillTypeStats(statsOut, 4096 * 3, 1.0f);
+      probes.push_back(written);
+      for (int32_t s = 0; s < written * 3; s++) {
+        probes.push_back(statsOut[s]);
+      }
+    } else if (cmd == "version") {
+      probes.push_back(core.getLayoutVersion());
+    } else {
+      std::fprintf(stderr, "unknown command: %s\n", cmd.c_str());
+      return 2;
+    }
+  }
+  std::ostringstream out;
+  out.precision(12);
+  out << "{\"probes\":[";
+  for (size_t i = 0; i < probes.size(); i++) {
+    if (i > 0) out << ",";
+    out << probes[i];
+  }
+  const int32_t version = core.getLayoutVersion();
+  const double total = core.getTotalSize();
+  out << "],\"layoutVersion\":" << version << ",\"totalSize\":" << total;
+  out << ",\"itemCount\":" << lastCount;
+  out << ",\"offsets\":[";
+  for (int32_t i = 0; i < lastCount; i++) {
+    if (i > 0) out << ",";
+    out << core.getOffset(i);
+  }
+  out << "],\"sizes\":[";
+  for (int32_t i = 0; i < lastCount; i++) {
+    if (i > 0) out << ",";
+    out << core.getSize(i);
+  }
+  out << "]}";
+  std::printf("%s\n", out.str().c_str());
+  return 0;
+}
+
+int main(int argc, char** argv) {
+  if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
+    return runReplay(argv[2]);
+  }
   testOctaveRounding();
   testEstimateFillAndTotal();
   testEpsilonGate();
@@ -761,6 +1023,8 @@ int main() {
   testDirectionalBuffers();
   testEstimatesFrozen();
   testResetScrollVelocity();
+  testFillTypeStats();
+  testColumnLayout();
   testRandomizedDifferential();
   if (failures == 0) {
     std::printf("OK — all LayoutCore tests passed\n");

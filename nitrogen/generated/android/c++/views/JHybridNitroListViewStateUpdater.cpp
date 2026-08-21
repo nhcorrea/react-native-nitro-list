@@ -49,6 +49,14 @@ void JHybridNitroListViewStateUpdater::updateViewProps(jni::alias_ref<jni::JClas
     hybridView->setDrawDistance(props->drawDistance.value);
     props->drawDistance.isDirty = false;
   }
+  if (props->horizontal.isDirty) {
+    hybridView->setHorizontal(props->horizontal.value);
+    props->horizontal.isDirty = false;
+  }
+  if (props->numColumns.isDirty) {
+    hybridView->setNumColumns(props->numColumns.value);
+    props->numColumns.isDirty = false;
+  }
   if (props->onRangeChange.isDirty) {
     hybridView->setOnRangeChange(props->onRangeChange.value);
     props->onRangeChange.isDirty = false;

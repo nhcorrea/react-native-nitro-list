@@ -60,6 +60,24 @@ class HybridNitroListView(context: ThemedReactContext) : HybridNitroListViewSpec
       maybeEmitRange()
     }
 
+  override var horizontal: Boolean = false
+    set(value) {
+      field = value
+      contentView.setHorizontal(value)
+      maybeEmitRange()
+    }
+
+  private val mainViewportExtent: Float
+    get() = if (horizontal) viewportWPx else viewportHPx
+
+  override var numColumns: Double = 1.0
+    set(value) {
+      field = value
+      layoutManager.setColumnCount(value.toInt().coerceAtLeast(1))
+      requestLayoutIfTotalChanged()
+      maybeEmitRange()
+    }
+
   override var onRangeChange: ((start: Double, end: Double, layoutVersion: Double, offset: Double) -> Unit)? = null
     set(value) {
       field = value
@@ -132,7 +150,7 @@ class HybridNitroListView(context: ThemedReactContext) : HybridNitroListViewSpec
         doubles,
         capacity,
         scrollOffsetPx,
-        viewportHPx,
+        mainViewportExtent,
         drawDistancePx,
         1f / density,
       )
@@ -198,6 +216,17 @@ class HybridNitroListView(context: ThemedReactContext) : HybridNitroListViewSpec
     maybeEmitRange()
   }
 
+  override fun setItemSpans(spans: ArrayBuffer) {
+    val shorts = spans.getBuffer(false).order(ByteOrder.nativeOrder()).asShortBuffer()
+    val changed = layoutManager.setItemSpans(
+      if (shorts.remaining() == 0) null else shorts,
+      shorts.remaining(),
+    )
+    if (!changed) return
+    requestLayoutIfTotalChanged()
+    maybeEmitRange()
+  }
+
   override fun setItemTypes(types: ArrayBuffer) {
     val shorts = types.getBuffer(false).order(ByteOrder.nativeOrder()).asShortBuffer()
     layoutManager.setItemTypes(shorts, shorts.remaining())
@@ -223,7 +252,7 @@ class HybridNitroListView(context: ThemedReactContext) : HybridNitroListViewSpec
     val draw: Float
     synchronized(stateLock) {
       offset = scrollOffsetPx
-      viewport = viewportHPx
+      viewport = mainViewportExtent
       draw = drawDistancePx
     }
     val written = layoutManager.fillLayoutSlab(
@@ -235,6 +264,13 @@ class HybridNitroListView(context: ThemedReactContext) : HybridNitroListViewSpec
       1f / density,
     )
     return written.toDouble()
+  }
+
+  override fun fillTypeStats(out: ArrayBuffer): Double {
+    val doubles = out.getBuffer(false).order(ByteOrder.nativeOrder()).asDoubleBuffer()
+    val capacity = doubles.remaining()
+    if (capacity == 0) return -1.0
+    return layoutManager.fillTypeStats(doubles, capacity, 1f / density).toDouble()
   }
 
   override fun setItemSize(index: Double, size: Double) {
@@ -299,7 +335,7 @@ class HybridNitroListView(context: ThemedReactContext) : HybridNitroListViewSpec
     var emitOffsetPx = 0f
     val shouldEmit = synchronized(stateLock) {
       if (isUpdatingProps) return
-      val range = layoutManager.getEngagedRange(scrollOffsetPx, viewportHPx, drawDistancePx)
+      val range = layoutManager.getEngagedRange(scrollOffsetPx, mainViewportExtent, drawDistancePx)
       if (range.start == lastStart && range.end == lastEnd && range.version == lastVersion) {
         false
       } else {

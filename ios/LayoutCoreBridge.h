@@ -18,12 +18,17 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)setEstimatesFrozen:(BOOL)frozen;
 - (void)setTypeAveragesEnabled:(BOOL)enabled;
 - (void)setItemTypes:(nullable const uint16_t *)types count:(int32_t)count;
+- (void)setColumnCount:(int32_t)columns;
+- (BOOL)setItemSpans:(nullable const uint16_t *)spans count:(int32_t)count;
 - (int32_t)fillLayoutSlab:(double *)out
                  capacity:(int32_t)capacityDoubles
              scrollOffset:(float)scrollOffset
            viewportHeight:(float)viewportHeight
              drawDistance:(float)drawDistance
               outputScale:(float)outputScale;
+- (int32_t)fillTypeStats:(double *)out
+                capacity:(int32_t)capacityDoubles
+             outputScale:(float)outputScale;
 - (void)resetAll;
 - (NSUInteger)memoryFootprint;
 - (BOOL)setItemSize:(int32_t)index size:(float)size;

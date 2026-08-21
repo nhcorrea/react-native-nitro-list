@@ -20,6 +20,10 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridSetter("estimatedItemSize", &HybridNitroListViewSpec::setEstimatedItemSize);
       prototype.registerHybridGetter("drawDistance", &HybridNitroListViewSpec::getDrawDistance);
       prototype.registerHybridSetter("drawDistance", &HybridNitroListViewSpec::setDrawDistance);
+      prototype.registerHybridGetter("horizontal", &HybridNitroListViewSpec::getHorizontal);
+      prototype.registerHybridSetter("horizontal", &HybridNitroListViewSpec::setHorizontal);
+      prototype.registerHybridGetter("numColumns", &HybridNitroListViewSpec::getNumColumns);
+      prototype.registerHybridSetter("numColumns", &HybridNitroListViewSpec::setNumColumns);
       prototype.registerHybridGetter("onRangeChange", &HybridNitroListViewSpec::getOnRangeChange);
       prototype.registerHybridSetter("onRangeChange", &HybridNitroListViewSpec::setOnRangeChange);
       prototype.registerHybridMethod("setScrollOffset", &HybridNitroListViewSpec::setScrollOffset);
@@ -33,8 +37,10 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridMethod("resetItemSizes", &HybridNitroListViewSpec::resetItemSizes);
       prototype.registerHybridMethod("remapItemSizes", &HybridNitroListViewSpec::remapItemSizes);
       prototype.registerHybridMethod("setItemTypes", &HybridNitroListViewSpec::setItemTypes);
+      prototype.registerHybridMethod("setItemSpans", &HybridNitroListViewSpec::setItemSpans);
       prototype.registerHybridMethod("seedTypeMeans", &HybridNitroListViewSpec::seedTypeMeans);
       prototype.registerHybridMethod("fillLayoutSlab", &HybridNitroListViewSpec::fillLayoutSlab);
+      prototype.registerHybridMethod("fillTypeStats", &HybridNitroListViewSpec::fillTypeStats);
       prototype.registerHybridMethod("getItemOffset", &HybridNitroListViewSpec::getItemOffset);
       prototype.registerHybridMethod("getItemSize", &HybridNitroListViewSpec::getItemSize);
       prototype.registerHybridMethod("getTotalSize", &HybridNitroListViewSpec::getTotalSize);
