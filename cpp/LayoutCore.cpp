@@ -8,24 +8,12 @@ namespace margelo::nitro::nitrolist {
 
 namespace {
 
-// Directional draw-distance split: same 2× total budget as the symmetric
-// ±1× split, redistributed toward where the user is heading (LegendList v3's
-// numbers — its JS engine runs the same 0.5×/1.5× split; what it shipped
-// disabled was velocity *position look-ahead*, a different mechanism).
 constexpr float kBufferAheadRatio = 1.5f;
 constexpr float kBufferBehindRatio = 0.5f;
-// Below this speed the split stays symmetric — idle lists and sub-scroll
-// jitter must not flap the regime.
-constexpr float kDirectionalMinVelocity = 300.0f; // units/second
-// A gap longer than this between scroll samples means a new gesture; the
-// old velocity says nothing about it.
+constexpr float kDirectionalMinVelocity = 300.0f;
 constexpr double kVelocityStaleMs = 200.0;
 
-// A type mean must drift at least this far from its last swept value before
-// unmeasured items are rewritten — sweeps happen a handful of times while
-// the mean converges, then stop.
 constexpr float kTypeMeanSweepThreshold = 0.5f;
-// Sanity cap on distinct type ids (JS interning starts at 1 and stays tiny).
 constexpr int32_t kMaxTypeStats = 4096;
 
 double defaultClockMs() {
@@ -33,7 +21,7 @@ double defaultClockMs() {
   return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
 }
 
-} // namespace
+}
 
 bool LayoutCore::setItemCount(int32_t count) {
   std::lock_guard<std::mutex> guard(mutex_);
@@ -54,25 +42,15 @@ bool LayoutCore::setItemCount(int32_t count) {
     std::fill(spans_.begin() + itemCount_, spans_.begin() + count, 1);
   }
   if (count > itemCount_) {
-    // Fill every newly-exposed slot with the estimate. Unlike the previous
-    // Swift/Kotlin managers, this also covers re-growing within an old
-    // allocation, where a prior shrink had zeroed the tail — zero-size items
-    // would otherwise stack at one offset and blow up the engaged range
-    // until each cell measured. Types reset to untyped; JS re-sends them
-    // right after any length change.
     std::fill(sizes_.begin() + itemCount_, sizes_.begin() + count, estimate_);
     std::fill(measured_.begin() + itemCount_, measured_.begin() + count, 0);
     std::fill(types_.begin() + itemCount_, types_.begin() + count, 0);
   } else {
-    // Shrink by clearing tail measured flags so re-grow uses the estimate.
     std::fill(sizes_.begin() + count, sizes_.begin() + itemCount_, 0.0f);
     std::fill(measured_.begin() + count, measured_.begin() + itemCount_, 0);
   }
   itemCount_ = count;
   minDirtyIndex_ = 0;
-  // A count change can shrink the list without moving any surviving offset
-  // (no layoutVersion bump), so the version check alone wouldn't catch a
-  // cached range whose indices are now out of bounds.
   hasRangeWindow_ = false;
   return true;
 }
@@ -97,17 +75,12 @@ bool LayoutCore::setEstimatesFrozen(bool frozen) {
   if (frozen) {
     return false;
   }
-  // Unfreeze: sweep the drift accumulated while frozen in one pass.
   return applyTypeMeansLocked();
 }
 
 void LayoutCore::resetScrollVelocity() {
   std::lock_guard<std::mutex> guard(mutex_);
   velocity_ = 0.0f;
-  // -1 marks "no baseline": the next offset change records time/offset only,
-  // so the synthetic jump itself can never become a velocity sample. The
-  // cached range window survives — a regime change is caught by the fast
-  // path's regime comparison.
   lastSampleTimeMs_ = -1.0;
 }
 
@@ -128,8 +101,6 @@ bool LayoutCore::setEstimate(float value) {
   estimate_ = rounded;
   bool anyChanged = false;
   for (int32_t i = 0; i < itemCount_; i++) {
-    // Items whose type already has measured samples are owned by the type
-    // mean, not the global estimate.
     if (measured_[i] == 0 && estimateForTypeLocked(types_[i]) == rounded && sizes_[i] != rounded) {
       sizes_[i] = rounded;
       anyChanged = true;
@@ -217,9 +188,6 @@ bool LayoutCore::resetItemSizes() {
       measured_[i] = 0;
       anyChanged = true;
     }
-    // Type means survive the reset (the render templates didn't change, only
-    // which item sits at which index) — items land on a much better guess
-    // than the global estimate.
     const float target = estimateForTypeLocked(types_[i]);
     if (sizes_[i] != target) {
       sizes_[i] = target;
@@ -238,10 +206,6 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   if (pairs == nullptr || pairCount <= 0 || itemCount_ == 0) {
     return false;
   }
-  // Build the post-remap state in scratch vectors: targets not named by any
-  // pair resolve like resetItemSizes (type mean / estimate), and reading
-  // sources from the untouched live arrays makes overlapping moves (prepend
-  // shifts, swaps) order-independent.
   std::vector<float> newSizes(itemCount_);
   std::vector<uint8_t> newMeasured(itemCount_, 0);
   for (int32_t i = 0; i < itemCount_; i++) {
@@ -251,7 +215,6 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   for (int32_t p = 0; p < pairCount; p++) {
     const double oldRaw = pairs[p * 2];
     const double newRaw = pairs[p * 2 + 1];
-    // NaN-safe bounds gate; the upper bound also keeps the int32 cast defined.
     if (!(oldRaw >= 0.0) || !(newRaw >= 0.0) || oldRaw > 2000000000.0 || newRaw > 2000000000.0) {
       continue;
     }
@@ -286,9 +249,6 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
 
 void LayoutCore::resetAll() {
   std::lock_guard<std::mutex> guard(mutex_);
-  // shrink_to_fit via swap-with-empty: the recycled view may serve a much
-  // smaller list next; keeping a 10k-item allocation alive would defeat the
-  // memory point of recycling.
   std::vector<float>().swap(sizes_);
   std::vector<float>().swap(offsets_);
   std::vector<uint8_t>().swap(measured_);
@@ -332,8 +292,6 @@ void LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {
   for (int32_t i = 0; i < itemCount_; i++) {
     types_[i] = (types != nullptr && i < count) ? types[i] : 0;
   }
-  // Re-resolve every unmeasured size against its (possibly new) type — this
-  // also reverts items whose new type has no samples back to the estimate.
   for (int32_t i = 0; i < itemCount_; i++) {
     if (measured_[i] != 0) {
       continue;
@@ -355,8 +313,6 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, float sca
   for (int32_t p = 0; p < pairCount; p++) {
     const auto type = static_cast<int32_t>(pairs[2 * p]);
     const float mean = roundToOctave(static_cast<float>(pairs[2 * p + 1]) * scale);
-    // Type 0 is "untyped" — never seeded; invalid ids and non-positive/NaN
-    // means are cache garbage, not samples.
     if (type <= 0 || type >= kMaxTypeStats || !(mean > 0.0f)) {
       continue;
     }
@@ -365,11 +321,9 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, float sca
     }
     TypeStats& stats = typeStats_[type];
     if (stats.num > 0) {
-      continue; // real samples own this type
+      continue;
     }
     stats.mean = mean;
-    // appliedMean too: the re-resolve below IS the sweep for this seed; the
-    // next real sweep should trigger only on drift from real samples.
     stats.appliedMean = mean;
     stats.seeded = true;
     anySeeded = true;
@@ -377,8 +331,6 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, float sca
   if (!anySeeded) {
     return false;
   }
-  // Re-resolve every unmeasured size against its (possibly seeded) type —
-  // same pass shape as setItemTypes.
   bool anyChanged = false;
   for (int32_t i = 0; i < itemCount_; i++) {
     if (measured_[i] != 0) {
@@ -477,8 +429,6 @@ int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, float s
   if (capacityDoubles < 4 + count * 2) {
     return -1;
   }
-  // Offsets/totalSize are clean here: the fast path only serves when nothing
-  // is dirty, and the slow path ran ensureClean.
   out[0] = range.version;
   out[1] = static_cast<double>(totalSize_) * outputScale;
   out[2] = range.start;
@@ -494,19 +444,15 @@ int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, float s
 LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffset,
                                                                float viewportHeight,
                                                                float drawDistance) {
-  // Velocity sampling — must happen before the fast path so the regime is
-  // current even while cached ranges are being served. Only real offset
-  // changes are samples; mutation-triggered re-queries repeat the offset.
   if (directionalBuffers_ && scrollOffset != lastSampleOffset_) {
     const double now = clock_ != nullptr ? clock_() : defaultClockMs();
     if (lastSampleTimeMs_ >= 0.0) {
       const double dt = now - lastSampleTimeMs_;
       if (dt > kVelocityStaleMs) {
-        velocity_ = 0.0f; // new gesture — old velocity says nothing
+        velocity_ = 0.0f;
       } else if (dt >= 1.0) {
         velocity_ = static_cast<float>((scrollOffset - lastSampleOffset_) / dt * 1000.0);
       }
-      // dt < 1ms: burst of calls within the same tick — keep prior velocity.
     }
     lastSampleTimeMs_ = now;
     lastSampleOffset_ = scrollOffset;
@@ -515,19 +461,12 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
   if (directionalBuffers_ && std::abs(velocity_) >= kDirectionalMinVelocity) {
     regime = velocity_ > 0.0f ? 1 : -1;
   }
-  // Split the draw budget by direction: `topBuffer` extends above the
-  // viewport, `bottomBuffer` below. Same 2×drawDistance total in every
-  // regime — only the placement moves.
   const float topBuffer = regime == 0    ? drawDistance
                           : regime > 0   ? drawDistance * kBufferBehindRatio
                                          : drawDistance * kBufferAheadRatio;
   const float bottomBuffer = regime == 0  ? drawDistance
                              : regime > 0 ? drawDistance * kBufferAheadRatio
                                           : drawDistance * kBufferBehindRatio;
-  // Fast path: while the scroll stays strictly inside the cached window and
-  // nothing was mutated (clean + same version + same viewport/draw/regime),
-  // the range cannot have changed — skip ensureClean and the search. Most
-  // scroll events during continuous scrolling land here.
   if (hasRangeWindow_ && minDirtyIndex_ == INT32_MAX && cachedVersion_ == layoutVersion_ &&
       viewportHeight == rangeWindowViewport_ && drawDistance == rangeWindowDraw_ &&
       regime == cachedRegime_ && scrollOffset > rangeWindowMin_ &&
@@ -542,18 +481,11 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
   const float top = std::max(0.0f, scrollOffset - topBuffer);
   const float bottom = std::min(totalSize_, scrollOffset + viewportHeight + bottomBuffer);
   if (totalSize_ <= top) {
-    // Scrolled past the end — clamp to the last item (whole row in grids).
     hasRangeWindow_ = false;
     const int32_t lastStart =
         columnCount_ > 1 && !rowStart_.empty() ? rowStart_[itemCount_ - 1] : itemCount_ - 1;
     return EngagedRange{lastStart, itemCount_ - 1, layoutVersion_};
   }
-  // Offsets are contiguous prefix sums (offsets[i] + sizes[i] == offsets[i+1],
-  // with totalSize as the virtual last edge), so both bounds binary-search:
-  //   start = smallest i whose bottom edge is  > top
-  //   end   = largest  i whose top    edge is  < bottom
-  // O(log n) regardless of jump size — scrubbing and scrollToIndex cost the
-  // same as a 1-item step (which the boundary window mostly absorbs anyway).
   const auto beginIt = offsets_.begin() + 1;
   const auto endIt = offsets_.begin() + itemCount_;
   const auto startIt = std::upper_bound(beginIt, endIt, top);
@@ -562,9 +494,6 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
   int32_t end = static_cast<int32_t>(endSearchIt - offsets_.begin()) - 1;
   end = std::clamp(end, start, itemCount_ - 1);
   if (columnCount_ > 1) {
-    // Items of a row share one offset, so the binary searches land mid-row;
-    // widen to whole rows. The boundary-window cache is skipped in grids —
-    // its edge math is per-item, and O(log n) per event is already cheap.
     start = rowStart_[start];
     const int32_t endRow = rowStart_[end];
     while (end + 1 < itemCount_ && rowStart_[end + 1] == endRow) {
@@ -573,10 +502,6 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
     hasRangeWindow_ = false;
     return EngagedRange{start, end, layoutVersion_};
   }
-  // Cache the scroll window in which this exact range stays valid:
-  //   start holds while  bottomEdge(start-1) ≤ scroll-topBuffer < bottomEdge(start)
-  //   end   holds while  offsets(end) < scroll+viewport+bottomBuffer ≤ offsets(end+1)
-  // Solved for scroll (strict on both sides; the boundary itself recomputes).
   float lower = offsets_[end] - viewportHeight - bottomBuffer;
   if (start > 0) {
     lower = std::max(lower, offsets_[start - 1] + sizes_[start - 1] + topBuffer);
@@ -643,10 +568,6 @@ int32_t LayoutCore::spanAtLocked(int32_t index) const {
 }
 
 void LayoutCore::ensureClean() {
-  // INT32_MAX means "nothing pending". Note this is deliberately NOT the old
-  // `minDirtyIndex_ >= itemCount_` guard the Swift/Kotlin managers used: that
-  // form skipped the pass when the list shrank to 0 items (0 >= 0), leaving
-  // totalSize_ stale — an emptied list kept its old scrollable extent.
   if (minDirtyIndex_ == INT32_MAX) {
     return;
   }
@@ -666,11 +587,6 @@ void LayoutCore::ensureClean() {
       anyChanged = true;
     }
   } else {
-    // Grid path: restart at the beginning of the dirty index's row. Row
-    // boundaries at/before minDirtyIndex_ only depend on spans BEFORE it,
-    // which are unchanged (span/count mutations set minDirtyIndex_ at the
-    // first affected index), so the previous pass's rowStart_ entry is
-    // valid as a restart point; setItemCount/reset paths set it to 0.
     if (static_cast<int32_t>(rowStart_.size()) < itemCount_) {
       rowStart_.resize(itemCount_, 0);
     }
@@ -717,9 +633,6 @@ void LayoutCore::ensureClean() {
     }
   }
   minDirtyIndex_ = INT32_MAX;
-  // Only bump the version when offsets actually moved. A duplicate
-  // setItemSize would otherwise force JS to invalidate its layout cache and
-  // re-run sticky/viewability work for nothing.
   if (anyChanged) {
     layoutVersion_++;
   }
@@ -736,7 +649,7 @@ float LayoutCore::roundToOctaveFromDouble(double value) {
 void LayoutCore::updateTypeMeanLocked(int32_t index, bool wasMeasured, float prevSize,
                                       float newSize) {
   if (!typeAverages_ || newSize <= 0.0f) {
-    return; // zero sizes are conditional-rendering artifacts, not samples
+    return;
   }
   const uint16_t type = index < static_cast<int32_t>(types_.size()) ? types_[index] : 0;
   if (type >= kMaxTypeStats) {
@@ -747,8 +660,6 @@ void LayoutCore::updateTypeMeanLocked(int32_t index, bool wasMeasured, float pre
   }
   TypeStats& stats = typeStats_[type];
   if (wasMeasured) {
-    // Re-measure of an already-counted item: adjust the mean in place
-    // without inflating the sample count (LegendList's trick).
     if (stats.num > 0) {
       stats.mean += (static_cast<double>(newSize) - static_cast<double>(prevSize)) /
                     static_cast<double>(stats.num);
@@ -761,13 +672,9 @@ void LayoutCore::updateTypeMeanLocked(int32_t index, bool wasMeasured, float pre
 }
 
 bool LayoutCore::applyTypeMeansLocked() {
-  // While frozen, drift stays pending (appliedMean untouched) — the unfreeze
-  // runs this again and catches up in one sweep.
   if (!typeAverages_ || typeStats_.empty() || estimatesFrozen_) {
     return false;
   }
-  // Collect the types whose mean drifted since their last sweep; one shared
-  // O(N) pass rewrites the unmeasured items of all of them at once.
   bool anyDrifted = false;
   for (TypeStats& stats : typeStats_) {
     if (stats.num > 0 &&
@@ -814,4 +721,4 @@ float LayoutCore::estimateForTypeLocked(uint16_t type) const {
   return estimate_;
 }
 
-} // namespace margelo::nitro::nitrolist
+}
