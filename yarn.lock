@@ -148,7 +148,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/generator@npm:^7.29.1, @babel/generator@npm:^7.29.7, @babel/generator@npm:^7.29.8, @babel/generator@npm:^7.7.2":
+"@babel/generator@npm:^7.27.1, @babel/generator@npm:^7.29.1, @babel/generator@npm:^7.29.7, @babel/generator@npm:^7.29.8, @babel/generator@npm:^7.7.2":
   version: 7.29.8
   resolution: "@babel/generator@npm:7.29.8"
   dependencies:
@@ -1576,7 +1576,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@babel/traverse@npm:^7.29.0, @babel/traverse@npm:^7.29.7, @babel/traverse@npm:^7.29.8":
+"@babel/traverse@npm:^7.27.1, @babel/traverse@npm:^7.29.0, @babel/traverse@npm:^7.29.7, @babel/traverse@npm:^7.29.8":
   version: 7.29.8
   resolution: "@babel/traverse@npm:7.29.8"
   dependencies:
@@ -2049,7 +2049,7 @@ __metadata:
     react-native-builder-bob: ^0.40.18
     react-native-nitro-modules: ^0.35.9
     react-native-reanimated: ^4.5.1
-    react-native-worklets: ^0.10.1
+    react-native-worklets: ^0.11.4
     semantic-release: ^25.0.7
     typescript: ~6.0.3
   peerDependencies:
@@ -10193,7 +10193,7 @@ __metadata:
     react-native-nitro-modules: ^0.35.9
     react-native-reanimated: ^4.5.1
     react-native-safe-area-context: ^5.5.2
-    react-native-worklets: ^0.10.1
+    react-native-worklets: ^0.11.4
   languageName: unknown
   linkType: soft
 
@@ -10231,10 +10231,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-native-worklets@npm:^0.10.1":
-  version: 0.10.4
-  resolution: "react-native-worklets@npm:0.10.4"
+"react-native-worklets@npm:^0.11.4":
+  version: 0.11.4
+  resolution: "react-native-worklets@npm:0.11.4"
   dependencies:
+    "@babel/generator": ^7.27.1
     "@babel/plugin-transform-arrow-functions": ^7.27.1
     "@babel/plugin-transform-class-properties": ^7.28.6
     "@babel/plugin-transform-classes": ^7.28.6
@@ -10244,6 +10245,7 @@ __metadata:
     "@babel/plugin-transform-template-literals": ^7.27.1
     "@babel/plugin-transform-unicode-regex": ^7.27.1
     "@babel/preset-typescript": ^7.28.5
+    "@babel/traverse": ^7.27.1
     "@babel/types": ^7.27.1
     convert-source-map: ^2.0.0
     semver: ^7.7.4
@@ -10252,7 +10254,7 @@ __metadata:
     "@react-native/metro-config": "*"
     react: "*"
     react-native: 0.83 - 0.86
-  checksum: 96267f91d7fb26e898efc01c958d057bf17e423e33f7f6a3638aa26d2044b22f132073e398e8395268ed35b137f674aac578a82e32866fbd9680cd4758aad7c8
+  checksum: 311a9030991cc97280269c63c03be474d39a047f7229fc47fd61c322d1b5ea469c385fc34d5f30ce371daeca3bbd01a9406b97c4b6f8e2be8ed787937177c3a3
   languageName: node
   linkType: hard
 
