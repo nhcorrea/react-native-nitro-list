@@ -104,8 +104,8 @@
   "devDependencies": {
     "@jamesacarr/eslint-formatter-github-actions": "^0.2.0",
     "@jest/globals": "^29.7.0",
-    "@react-native/babel-preset": "0.86.0",
-    "@react-native/jest-preset": "0.86.0",
+    "@react-native/babel-preset": "0.87.0",
+    "@react-native/jest-preset": "0.87.0",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
     "@types/jest": "^29.5.12",
