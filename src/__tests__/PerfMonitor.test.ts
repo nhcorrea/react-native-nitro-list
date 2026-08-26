@@ -160,3 +160,21 @@ describe('NitroListPerfMonitor fling prewarm outcomes', () => {
     expect(NitroListPerfMonitor.getSnapshot().flingPrewarmMisses).toBe(0);
   });
 });
+
+describe('NitroListPerfMonitor layout version bumps', () => {
+  afterEach(() => {
+    NitroListPerfMonitor.disable();
+  });
+
+  it('counts bumps and clears them on reset', () => {
+    NitroListPerfMonitor.enable();
+    NitroListPerfMonitor.recordLayoutVersionBump();
+    NitroListPerfMonitor.recordLayoutVersionBump();
+    expect(NitroListPerfMonitor.getSnapshot().layoutVersionBumps).toBe(2);
+    NitroListPerfMonitor.reset();
+    expect(NitroListPerfMonitor.getSnapshot().layoutVersionBumps).toBe(0);
+    NitroListPerfMonitor.disable();
+    NitroListPerfMonitor.recordLayoutVersionBump();
+    expect(NitroListPerfMonitor.getSnapshot().layoutVersionBumps).toBe(0);
+  });
+});

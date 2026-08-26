@@ -67,6 +67,7 @@ function MyList({ items }: { items: Item[] }) {
 | `keyExtractor` | Stable identity per item — required for prepend/insert tracking and `maintainVisibleContentPosition`. |
 | `getItemType` | Segments React keys by cell type so a header cell is never reused as a row cell. |
 | `getFixedItemSize` | `(item, index, type) => number \| undefined` — return the exact height in dp when known. Fixed-size cells skip measurement entirely (no `onLayout`), so offsets are exact from the first batch. The value must match the real layout (dev builds warn on divergence). |
+| `autoFixedItemSizes` | Opt-in, needs `getItemType`. Once a type has measured ≥32 cells with near-zero variance (cross-mount cache, keyed by width and font scale), its cells are treated as fixed-size automatically — same effect as `getFixedItemSize`, no measurement round trip. A cell that later lays out at a different height unfreezes the type and reports the real size. |
 | `itemsAreEqual` | `(prev, next, index) => boolean` — with a stable function, a new data array whose items are recreated-but-equal re-renders zero rows. Compare visual content only; the key is already equal by construction. |
 | `drawDistance` | How far beyond the viewport (dp) to render. |
 | `horizontal` | Row layout: offsets/measurements/sticky/viewability all run on the x axis (cells report their width). |
@@ -194,7 +195,11 @@ burst sizes, scroll→range latency tails (p50/p95/p99), and `scrollToIndex`
 convergence stats — metric definitions are documented in
 [`src/PerfMonitor.ts`](./src/PerfMonitor.ts). A ready-made benchmark harness
 ships in [`src/dev/NitroListBenchmarkScreen.tsx`](./src/dev/NitroListBenchmarkScreen.tsx)
-— mount it on a dev route to run scripted scroll benchmarks.
+— mount it on a dev route to run scripted scroll benchmarks. The `/dev`
+entry point also exports `NitroListDevFlags`, kill-switches for the
+2026-08 optimizations (event-driven `scrollToIndex` wait, scroll-echo guard,
+stale-range reconcile, range-edge hysteresis, budgeted `scrollToIndex`
+landing) so a single build can A/B each change; all default to on.
 
 ## Example app
 

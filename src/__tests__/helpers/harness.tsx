@@ -10,12 +10,12 @@ import type {
   NitroListProps,
   NitroListRenderScrollComponentProps,
 } from '../../NitroList';
-import {clearMirrorsForTests, getLastMirror} from './mockNitroListHost';
+import {clearMirrorsForTests, getLastMirror, setMirrorConfigForTests} from './mockNitroListHost';
 import {
   clearCreatedSharedValuesForTests,
   getCreatedSharedValuesForTests,
 } from './mockReanimated';
-import type {HybridNitroListViewMirror} from './layoutCoreMirror';
+import type {HybridMirrorConfig, HybridNitroListViewMirror} from './layoutCoreMirror';
 
 export type ScrollCommand = {y: number; animated: boolean};
 
@@ -56,6 +56,7 @@ export class NitroListHarness<T = string> {
   horizontal = false;
 
   private props: NitroListProps<T>;
+  private readonly measuredCells = new WeakSet<ReactTestInstance>();
   private readonly fakeScrollRef = {
     scrollTo: ({x, y, animated}: {x?: number; y?: number; animated?: boolean}) => {
       const target = (this.horizontal ? x : y) ?? 0;
@@ -268,6 +269,26 @@ export class NitroListHarness<T = string> {
     return sticky.value as number;
   }
 
+  measureUnmeasuredCells(heightForIndex: (index: number) => number): number {
+    const targets: Array<{index: number; onLayout: (event: LayoutChangeEvent) => void}> = [];
+    for (const [index, cell] of this.cellInstances()) {
+      if (this.measuredCells.has(cell)) continue;
+      this.measuredCells.add(cell);
+      const target = cell.findAll(
+        (node) => node.type === View && node.props.onLayout != null,
+      )[0];
+      if (target != null) targets.push({index, onLayout: target.props.onLayout});
+    }
+    if (targets.length === 0) return 0;
+    act(() => {
+      for (const target of targets) {
+        const size = heightForIndex(target.index);
+        target.onLayout(this.horizontal ? makeLayoutEvent(size, 0) : makeLayoutEvent(0, size));
+      }
+    });
+    return targets.length;
+  }
+
   measureAllCells(heightForIndex: (index: number) => number): void {
     const cells = this.cellInstances();
     act(() => {
@@ -287,8 +308,12 @@ export class NitroListHarness<T = string> {
   }
 }
 
-export function renderNitroList<T = string>(props: NitroListProps<T>): NitroListHarness<T> {
+export function renderNitroList<T = string>(
+  props: NitroListProps<T>,
+  mirrorConfig?: HybridMirrorConfig,
+): NitroListHarness<T> {
   clearMirrorsForTests();
   clearCreatedSharedValuesForTests();
+  if (mirrorConfig != null) setMirrorConfigForTests(mirrorConfig);
   return new NitroListHarness<T>(props).mount();
 }

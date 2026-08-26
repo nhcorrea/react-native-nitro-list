@@ -2,7 +2,7 @@ import React, {useLayoutEffect, useRef} from 'react';
 import {View, type StyleProp, type ViewStyle} from 'react-native';
 
 import type {NitroListViewMethods} from '../../NitroListView.nitro';
-import {HybridNitroListViewMirror} from './layoutCoreMirror';
+import {HybridNitroListViewMirror, type HybridMirrorConfig} from './layoutCoreMirror';
 
 type WrappedCallback<T> = T | {f: T};
 
@@ -29,6 +29,11 @@ type MockHostProps = {
 };
 
 const mirrors: HybridNitroListViewMirror[] = [];
+let nextMirrorConfig: HybridMirrorConfig = {};
+
+export function setMirrorConfigForTests(config: HybridMirrorConfig): void {
+  nextMirrorConfig = config;
+}
 
 export function getLastMirror(): HybridNitroListViewMirror {
   const mirror = mirrors[mirrors.length - 1];
@@ -40,12 +45,13 @@ export function getLastMirror(): HybridNitroListViewMirror {
 
 export function clearMirrorsForTests(): void {
   mirrors.length = 0;
+  nextMirrorConfig = {};
 }
 
 export function NitroListView(props: MockHostProps): React.ReactElement {
   const mirrorRef = useRef<HybridNitroListViewMirror | null>(null);
   if (mirrorRef.current == null) {
-    mirrorRef.current = new HybridNitroListViewMirror();
+    mirrorRef.current = new HybridNitroListViewMirror(nextMirrorConfig);
     mirrors.push(mirrorRef.current);
   }
   const mirror = mirrorRef.current;

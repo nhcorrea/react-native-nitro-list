@@ -597,6 +597,7 @@ export type HybridMirrorConfig = {
   measurementEpsilon?: number;
   directionalBuffers?: boolean;
   typeAverages?: boolean;
+  asyncRangeDelivery?: boolean;
 };
 
 export type HybridMirrorProps = {
@@ -629,11 +630,13 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
     | null = null;
 
   readonly callLog: string[] = [];
+  private readonly asyncRangeDelivery: boolean;
 
   constructor(config: HybridMirrorConfig = {}) {
     this.core.setMeasurementEpsilon(config.measurementEpsilon ?? 0.51);
     this.core.setDirectionalBuffers(config.directionalBuffers ?? true);
     this.core.setTypeAverages(config.typeAverages ?? true);
+    this.asyncRangeDelivery = config.asyncRangeDelivery ?? false;
   }
 
   get memorySize(): number {
@@ -836,6 +839,11 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
     this.lastStart = range.start;
     this.lastEnd = range.end;
     this.lastVersion = range.version;
-    cb(range.start, range.end, range.version, this.scrollOffset);
+    const offset = this.scrollOffset;
+    if (this.asyncRangeDelivery) {
+      setTimeout(() => cb(range.start, range.end, range.version, offset), 0);
+      return;
+    }
+    cb(range.start, range.end, range.version, offset);
   }
 }

@@ -1,8 +1,11 @@
 import {afterEach, describe, expect, it} from '@jest/globals';
 
 import {
+  AUTO_FIXED_MIN_SAMPLES,
   clearMeasurementCache,
+  getCachedFixedSize,
   getCachedMean,
+  markMeasurementVariable,
   measurementCacheKey,
   recordMeasurement,
 } from '../measurementCache';
@@ -60,5 +63,51 @@ describe('recordMeasurement / getCachedMean', () => {
     const frozen = getCachedMean(key);
     recordMeasurement(key, 900);
     expect(getCachedMean(key)).toBe(frozen);
+  });
+});
+
+describe('getCachedFixedSize (auto-fixed types)', () => {
+  const key = measurementCacheKey('row', 390, 1);
+
+  it('stays null below the sample floor even with zero variance', () => {
+    for (let i = 0; i < AUTO_FIXED_MIN_SAMPLES - 1; i++) recordMeasurement(key, 64);
+    expect(getCachedFixedSize(key)).toBeNull();
+    recordMeasurement(key, 64);
+    expect(getCachedFixedSize(key)).toBe(64);
+  });
+
+  it('tolerates sub-pixel jitter but not real height variation', () => {
+    for (let i = 0; i < AUTO_FIXED_MIN_SAMPLES; i++) recordMeasurement(key, i % 2 === 0 ? 64 : 64.33);
+    expect(getCachedFixedSize(key)).toBeCloseTo(64.165, 2);
+
+    const noisy = measurementCacheKey('noisy', 390, 1);
+    for (let i = 0; i < AUTO_FIXED_MIN_SAMPLES; i++) recordMeasurement(noisy, i % 2 === 0 ? 40 : 200);
+    expect(getCachedMean(noisy)).toBe(120);
+    expect(getCachedFixedSize(noisy)).toBeNull();
+  });
+
+  it('keeps the running mean exact under the Welford update', () => {
+    recordMeasurement(key, 40);
+    recordMeasurement(key, 60);
+    recordMeasurement(key, 50);
+    expect(getCachedMean(key)).toBe(50);
+  });
+
+  it('markMeasurementVariable poisons the key past the sample cap', () => {
+    for (let i = 0; i < 64; i++) recordMeasurement(key, 64);
+    expect(getCachedFixedSize(key)).toBe(64);
+    markMeasurementVariable(key, 90);
+    expect(getCachedFixedSize(key)).toBeNull();
+    for (let i = 0; i < 10; i++) recordMeasurement(key, 64);
+    expect(getCachedFixedSize(key)).toBeNull();
+    expect(getCachedMean(key)).not.toBeNull();
+  });
+
+  it('markMeasurementVariable on an unknown key records the sample as variable', () => {
+    const fresh = measurementCacheKey('fresh', 390, 1);
+    markMeasurementVariable(fresh, 72);
+    expect(getCachedMean(fresh)).toBe(72);
+    for (let i = 0; i < AUTO_FIXED_MIN_SAMPLES; i++) recordMeasurement(fresh, 72);
+    expect(getCachedFixedSize(fresh)).toBeNull();
   });
 });

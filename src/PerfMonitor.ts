@@ -43,6 +43,7 @@ export interface NitroListPerfSnapshot {
   lastScrollToIndex: NitroListScrollToIndexStats | null;
   flingPrewarmOutcomes: number;
   flingPrewarmMisses: number;
+  layoutVersionBumps: number;
 }
 
 const RANGE_LATENCY_WINDOW_MS = 200;
@@ -121,6 +122,7 @@ class NitroListPerfMonitorImpl {
   private lastScrollToIndex: NitroListScrollToIndexStats | null = null;
   private flingPrewarmOutcomes = 0;
   private flingPrewarmMisses = 0;
+  private layoutVersionBumps = 0;
 
   enable() {
     this.enabled = true;
@@ -159,6 +161,7 @@ class NitroListPerfMonitorImpl {
     this.lastScrollToIndex = null;
     this.flingPrewarmOutcomes = 0;
     this.flingPrewarmMisses = 0;
+    this.layoutVersionBumps = 0;
   }
 
   recordScrollSample(blankPx: number) {
@@ -261,6 +264,11 @@ class NitroListPerfMonitorImpl {
     if (!covered) this.flingPrewarmMisses++;
   }
 
+  recordLayoutVersionBump() {
+    if (!this.enabled) return;
+    this.layoutVersionBumps++;
+  }
+
   getSnapshot(): NitroListPerfSnapshot {
     return {
       enabled: this.enabled,
@@ -289,6 +297,7 @@ class NitroListPerfMonitorImpl {
       lastScrollToIndex: this.lastScrollToIndex,
       flingPrewarmOutcomes: this.flingPrewarmOutcomes,
       flingPrewarmMisses: this.flingPrewarmMisses,
+      layoutVersionBumps: this.layoutVersionBumps,
     };
   }
 }
