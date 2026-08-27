@@ -7,14 +7,15 @@
 
 #pragma once
 
-#include <optional>
-#include <NitroModules/NitroDefines.hpp>
-#include <NitroModules/NitroHash.hpp>
-#include <NitroModules/CachedProp.hpp>
-#include <react/renderer/core/ConcreteComponentDescriptor.h>
-#include <react/renderer/core/PropsParserContext.h>
+#include <NitroModules/ReactProp.hpp>
+#include <NitroModules/ViewComponentDescriptor.hpp>
+#include <NitroModules/ViewPropsHolderState.hpp>
 #include <react/renderer/components/view/ConcreteViewShadowNode.h>
 #include <react/renderer/components/view/ViewProps.h>
+#include <react/renderer/core/PropsParserContext.h>
+#include <react/renderer/core/RawProps.h>
+
+#include <string>
 
 #include <functional>
 #include <optional>
@@ -41,13 +42,35 @@ namespace margelo::nitro::nitrolist::views {
                              const react::RawProps& rawProps);
 
   public:
-    CachedProp<double> itemCount;
-    CachedProp<double> estimatedItemSize;
-    CachedProp<double> drawDistance;
-    CachedProp<bool> horizontal;
-    CachedProp<double> numColumns;
-    CachedProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>> onRangeChange;
-    CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroListViewSpec>& /* ref */)>>> hybridRef;
+    nitro::ReactProp<double> itemCount;
+    nitro::ReactProp<double> estimatedItemSize;
+    nitro::ReactProp<double> drawDistance;
+    nitro::ReactProp<bool> horizontal;
+    nitro::ReactProp<double> numColumns;
+    nitro::ReactProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>> onRangeChange;
+    nitro::ReactProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroListViewSpec>& /* ref */)>>> hybridRef;
+
+    [[nodiscard]]
+    bool hasSameProps(const HybridNitroListViewProps& other) const noexcept {
+      return itemCount.hasSameValue(other.itemCount) &&
+             estimatedItemSize.hasSameValue(other.estimatedItemSize) &&
+             drawDistance.hasSameValue(other.drawDistance) &&
+             horizontal.hasSameValue(other.horizontal) &&
+             numColumns.hasSameValue(other.numColumns) &&
+             onRangeChange.hasSameValue(other.onRangeChange) &&
+             hybridRef.hasSameValue(other.hybridRef);
+    }
+
+    [[nodiscard]]
+    bool hasAnyProvidedProps() const noexcept {
+      return itemCount.isProvided() ||
+             estimatedItemSize.isProvided() ||
+             drawDistance.isProvided() ||
+             horizontal.isProvided() ||
+             numColumns.isProvided() ||
+             onRangeChange.isProvided() ||
+             hybridRef.isProvided();
+    }
 
   private:
     static bool filterObjectKeys(const std::string& propName);
@@ -56,32 +79,7 @@ namespace margelo::nitro::nitrolist::views {
   /**
    * State for the "NitroListView" View.
    */
-  class HybridNitroListViewState final {
-  public:
-    HybridNitroListViewState() = default;
-    explicit HybridNitroListViewState(const std::shared_ptr<HybridNitroListViewProps>& props):
-      _props(props) {}
-
-  public:
-    [[nodiscard]]
-    const std::shared_ptr<HybridNitroListViewProps>& getProps() const {
-      return _props;
-    }
-
-  public:
-#ifdef ANDROID
-  HybridNitroListViewState(const HybridNitroListViewState& /* previousState */, folly::dynamic /* data */) {}
-  folly::dynamic getDynamic() const {
-    throw std::runtime_error("HybridNitroListViewState does not support folly!");
-  }
-  react::MapBuffer getMapBuffer() const {
-    throw std::runtime_error("HybridNitroListViewState does not support MapBuffer!");
-  };
-#endif
-
-  private:
-    std::shared_ptr<HybridNitroListViewProps> _props;
-  };
+  using HybridNitroListViewState = nitro::ViewPropsHolderState<HybridNitroListViewProps>;
 
   /**
    * The Shadow Node for the "NitroListView" View.
@@ -94,21 +92,7 @@ namespace margelo::nitro::nitrolist::views {
   /**
    * The Component Descriptor for the "NitroListView" View.
    */
-  class HybridNitroListViewComponentDescriptor final: public react::ConcreteComponentDescriptor<HybridNitroListViewShadowNode> {
-  public:
-    explicit HybridNitroListViewComponentDescriptor(const react::ComponentDescriptorParameters& parameters);
-
-  public:
-    /**
-     * A faster path for cloning props - reuses the caching logic from `HybridNitroListViewProps`.
-     */
-    std::shared_ptr<const react::Props> cloneProps(const react::PropsParserContext& context,
-                                                   const std::shared_ptr<const react::Props>& props,
-                                                   react::RawProps rawProps) const override;
-#ifdef ANDROID
-    void adopt(react::ShadowNode& shadowNode) const override;
-#endif
-  };
+  using HybridNitroListViewComponentDescriptor = nitro::ViewComponentDescriptor<HybridNitroListViewShadowNode>;
 
   /* The actual view for "NitroListView" needs to be implemented in platform-specific code. */
 

@@ -10,6 +10,7 @@ package com.margelo.nitro.nitrolist
 import androidx.annotation.Keep
 import com.facebook.jni.HybridData
 import com.facebook.proguard.annotations.DoNotStrip
+import dalvik.annotation.optimization.FastNative
 import com.margelo.nitro.core.ArrayBuffer
 import com.margelo.nitro.core.HybridObject
 import com.margelo.nitro.views.HybridView
@@ -154,6 +155,7 @@ abstract class HybridNitroListViewSpec: HybridView() {
   @Keep
   protected open class CxxPart(javaPart: HybridNitroListViewSpec): HybridObject.CxxPart(javaPart) {
     // C++ JHybridNitroListViewSpec::CxxPart::initHybrid(...)
+    @FastNative
     external override fun initHybrid(): HybridData
   }
   override fun createCxxPart(): CxxPart {

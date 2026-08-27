@@ -7,18 +7,12 @@
 
 #include "HybridNitroListViewComponent.hpp"
 
-#include <string>
-#include <exception>
-#include <utility>
-#include <NitroModules/NitroDefines.hpp>
-#include <NitroModules/JSIConverter.hpp>
-#include <NitroModules/PropNameIDCache.hpp>
-#include <react/renderer/core/RawValue.h>
-#include <react/renderer/core/ShadowNode.h>
-#include <react/renderer/core/ComponentDescriptor.h>
-#include <react/renderer/components/view/ViewProps.h>
+#include <NitroModules/NitroHash.hpp>
+#include <NitroModules/ReactProp.hpp>
 
 namespace margelo::nitro::nitrolist::views {
+
+  using namespace facebook;
 
   extern const char HybridNitroListViewComponentName[] = "NitroListView";
 
@@ -26,76 +20,13 @@ namespace margelo::nitro::nitrolist::views {
                                                      const HybridNitroListViewProps& sourceProps,
                                                      const react::RawProps& rawProps):
     react::ViewProps(context, sourceProps, rawProps, filterObjectKeys),
-    itemCount([&]() -> CachedProp<double> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("itemCount", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.itemCount;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<double>::fromRawValue(*runtime, value, sourceProps.itemCount);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.itemCount: ") + exc.what());
-      }
-    }()),
-    estimatedItemSize([&]() -> CachedProp<double> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("estimatedItemSize", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.estimatedItemSize;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<double>::fromRawValue(*runtime, value, sourceProps.estimatedItemSize);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.estimatedItemSize: ") + exc.what());
-      }
-    }()),
-    drawDistance([&]() -> CachedProp<double> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("drawDistance", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.drawDistance;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<double>::fromRawValue(*runtime, value, sourceProps.drawDistance);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.drawDistance: ") + exc.what());
-      }
-    }()),
-    horizontal([&]() -> CachedProp<bool> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("horizontal", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.horizontal;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<bool>::fromRawValue(*runtime, value, sourceProps.horizontal);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.horizontal: ") + exc.what());
-      }
-    }()),
-    numColumns([&]() -> CachedProp<double> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("numColumns", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.numColumns;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<double>::fromRawValue(*runtime, value, sourceProps.numColumns);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.numColumns: ") + exc.what());
-      }
-    }()),
-    onRangeChange([&]() -> CachedProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onRangeChange", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onRangeChange;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onRangeChange);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.onRangeChange: ") + exc.what());
-      }
-    }()),
-    hybridRef([&]() -> CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroListViewSpec>& /* ref */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("hybridRef", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.hybridRef;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroListViewSpec>& /* ref */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.hybridRef);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroListView.hybridRef: ") + exc.what());
-      }
-    }()) { }
+    itemCount(nitro::ReactProp<double>::fromRawValue("NitroListView", "itemCount", rawProps, sourceProps.itemCount)),
+    estimatedItemSize(nitro::ReactProp<double>::fromRawValue("NitroListView", "estimatedItemSize", rawProps, sourceProps.estimatedItemSize)),
+    drawDistance(nitro::ReactProp<double>::fromRawValue("NitroListView", "drawDistance", rawProps, sourceProps.drawDistance)),
+    horizontal(nitro::ReactProp<bool>::fromRawValue("NitroListView", "horizontal", rawProps, sourceProps.horizontal)),
+    numColumns(nitro::ReactProp<double>::fromRawValue("NitroListView", "numColumns", rawProps, sourceProps.numColumns)),
+    onRangeChange(nitro::ReactProp<std::optional<std::function<void(double /* start */, double /* end */, double /* layoutVersion */, double /* offset */)>>>::fromRawValue("NitroListView", "onRangeChange", rawProps, sourceProps.onRangeChange)),
+    hybridRef(nitro::ReactProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroListViewSpec>& /* ref */)>>>::fromRawValue("NitroListView", "hybridRef", rawProps, sourceProps.hybridRef)) { }
 
   bool HybridNitroListViewProps::filterObjectKeys(const std::string& propName) {
     switch (hashString(propName)) {
@@ -109,30 +40,5 @@ namespace margelo::nitro::nitrolist::views {
       default: return false;
     }
   }
-
-  HybridNitroListViewComponentDescriptor::HybridNitroListViewComponentDescriptor(const react::ComponentDescriptorParameters& parameters)
-    : ConcreteComponentDescriptor(parameters,
-                                  react::RawPropsParser()) {}
-
-  std::shared_ptr<const react::Props> HybridNitroListViewComponentDescriptor::cloneProps(const react::PropsParserContext& context,
-                                                                                         const std::shared_ptr<const react::Props>& props,
-                                                                                         react::RawProps rawProps) const {
-    // 1. Prepare raw props parser
-    rawProps.parse(rawPropsParser_);
-    // 2. Copy props with Nitro's cached copy constructor
-    return HybridNitroListViewShadowNode::Props(context, /* & */ rawProps, props);
-  }
-
-#ifdef ANDROID
-  void HybridNitroListViewComponentDescriptor::adopt(react::ShadowNode& shadowNode) const {
-    // This is called immediately after `ShadowNode` is created, cloned or in progress.
-    // On Android, we need to wrap props in our state, which gets routed through Java and later unwrapped in JNI/C++.
-    auto& concreteShadowNode = static_cast<HybridNitroListViewShadowNode&>(shadowNode);
-    const std::shared_ptr<const HybridNitroListViewProps>& constProps = concreteShadowNode.getConcreteSharedProps();
-    const std::shared_ptr<HybridNitroListViewProps>& props = std::const_pointer_cast<HybridNitroListViewProps>(constProps);
-    HybridNitroListViewState state{props};
-    concreteShadowNode.setStateData(std::move(state));
-  }
-#endif
 
 } // namespace margelo::nitro::nitrolist::views

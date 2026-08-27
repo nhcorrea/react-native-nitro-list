@@ -15,61 +15,84 @@ namespace margelo::nitro::nitrolist::views {
 using namespace facebook;
 using ConcreteStateData = react::ConcreteState<HybridNitroListViewState>;
 
-void JHybridNitroListViewStateUpdater::updateViewProps(jni::alias_ref<jni::JClass> /* class */,
-                                           jni::alias_ref<JHybridNitroListViewSpec::JavaPart> javaView,
-                                           jni::alias_ref<JStateWrapper::javaobject> stateWrapperInterface) {
-  std::shared_ptr<JHybridNitroListViewSpec> hybridView = javaView->getJHybridNitroListViewSpec();
-
-  // Get concrete StateWrapperImpl from passed StateWrapper interface object
-  jobject rawStateWrapper = stateWrapperInterface.get();
-  if (!stateWrapperInterface->isInstanceOf(react::StateWrapperImpl::javaClassStatic())) [[unlikely]] {
-      throw std::runtime_error("StateWrapper is not a StateWrapperImpl");
+std::shared_ptr<const HybridNitroListViewProps> JHybridNitroListViewStateUpdater::getPropsFromStateWrapper(
+    jni::alias_ref<JStateWrapper::javaobject> stateWrapper) {
+  if (stateWrapper.get() == nullptr) {
+    return nullptr;
   }
-  auto stateWrapper = jni::alias_ref<react::StateWrapperImpl::javaobject>{
-            static_cast<react::StateWrapperImpl::javaobject>(rawStateWrapper)};
-  std::shared_ptr<const react::State> state = stateWrapper->cthis()->getState();
+  // Get concrete StateWrapperImpl from passed StateWrapper interface object
+  jobject rawStateWrapper = stateWrapper.get();
+  if (!stateWrapper->isInstanceOf(react::StateWrapperImpl::javaClassStatic())) [[unlikely]] {
+    throw std::runtime_error("StateWrapper is not a StateWrapperImpl");
+  }
+  auto stateWrapperImpl = jni::alias_ref<react::StateWrapperImpl::javaobject>{
+    static_cast<react::StateWrapperImpl::javaobject>(rawStateWrapper)
+  };
+  std::shared_ptr<const react::State> state = stateWrapperImpl->cthis()->getState();
+  if (state == nullptr) {
+    return nullptr;
+  }
   auto concreteState = std::static_pointer_cast<const ConcreteStateData>(state);
   const HybridNitroListViewState& data = concreteState->getData();
-  const std::shared_ptr<HybridNitroListViewProps>& props = data.getProps();
+  const std::shared_ptr<const HybridNitroListViewProps>& props = data.getProps();
   if (props == nullptr) [[unlikely]] {
-    // Props aren't set yet!
     throw std::runtime_error("HybridNitroListViewState's data doesn't contain any props!");
   }
+  return props;
+}
 
-  // Update all props if they are dirty
-  if (props->itemCount.isDirty) {
-    hybridView->setItemCount(props->itemCount.value);
-    props->itemCount.isDirty = false;
+void JHybridNitroListViewStateUpdater::updateViewProps(jni::alias_ref<jni::JClass> /* class */,
+                                           jni::alias_ref<JHybridNitroListViewSpec::JavaPart> javaView,
+                                           jni::alias_ref<JStateWrapper::javaobject> newState,
+                                           jni::alias_ref<JStateWrapper::javaobject> oldState) {
+  std::shared_ptr<JHybridNitroListViewSpec> hybridView = javaView->getJHybridNitroListViewSpec();
+  std::shared_ptr<const HybridNitroListViewProps> newProps = getPropsFromStateWrapper(newState);
+  std::shared_ptr<const HybridNitroListViewProps> oldProps = getPropsFromStateWrapper(oldState);
+  if (newProps == nullptr) [[unlikely]] {
+    throw std::runtime_error("Current StateWrapper doesn't contain any props!");
   }
-  if (props->estimatedItemSize.isDirty) {
-    hybridView->setEstimatedItemSize(props->estimatedItemSize.value);
-    props->estimatedItemSize.isDirty = false;
+
+  // Update only props that differ from the previous State snapshot.
+  if (oldProps == nullptr
+        ? newProps->itemCount.isProvided()
+        : !newProps->itemCount.hasSameValue(oldProps->itemCount)) {
+    hybridView->setItemCount(newProps->itemCount.get());
   }
-  if (props->drawDistance.isDirty) {
-    hybridView->setDrawDistance(props->drawDistance.value);
-    props->drawDistance.isDirty = false;
+  if (oldProps == nullptr
+        ? newProps->estimatedItemSize.isProvided()
+        : !newProps->estimatedItemSize.hasSameValue(oldProps->estimatedItemSize)) {
+    hybridView->setEstimatedItemSize(newProps->estimatedItemSize.get());
   }
-  if (props->horizontal.isDirty) {
-    hybridView->setHorizontal(props->horizontal.value);
-    props->horizontal.isDirty = false;
+  if (oldProps == nullptr
+        ? newProps->drawDistance.isProvided()
+        : !newProps->drawDistance.hasSameValue(oldProps->drawDistance)) {
+    hybridView->setDrawDistance(newProps->drawDistance.get());
   }
-  if (props->numColumns.isDirty) {
-    hybridView->setNumColumns(props->numColumns.value);
-    props->numColumns.isDirty = false;
+  if (oldProps == nullptr
+        ? newProps->horizontal.isProvided()
+        : !newProps->horizontal.hasSameValue(oldProps->horizontal)) {
+    hybridView->setHorizontal(newProps->horizontal.get());
   }
-  if (props->onRangeChange.isDirty) {
-    hybridView->setOnRangeChange(props->onRangeChange.value);
-    props->onRangeChange.isDirty = false;
+  if (oldProps == nullptr
+        ? newProps->numColumns.isProvided()
+        : !newProps->numColumns.hasSameValue(oldProps->numColumns)) {
+    hybridView->setNumColumns(newProps->numColumns.get());
+  }
+  if (oldProps == nullptr
+        ? newProps->onRangeChange.isProvided()
+        : !newProps->onRangeChange.hasSameValue(oldProps->onRangeChange)) {
+    hybridView->setOnRangeChange(newProps->onRangeChange.get());
   }
 
   // Update hybridRef if it changed
-  if (props->hybridRef.isDirty) {
+  if (oldProps == nullptr
+        ? newProps->hybridRef.isProvided()
+        : !newProps->hybridRef.hasSameValue(oldProps->hybridRef)) {
     // hybridRef changed - call it with new this
-    const auto& maybeFunc = props->hybridRef.value;
+    const auto& maybeFunc = newProps->hybridRef.get();
     if (maybeFunc.has_value()) {
       maybeFunc.value()(hybridView);
     }
-    props->hybridRef.isDirty = false;
   }
 }
 

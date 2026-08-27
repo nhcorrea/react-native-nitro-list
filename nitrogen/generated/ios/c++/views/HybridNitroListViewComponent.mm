@@ -37,6 +37,7 @@ using namespace margelo::nitro::nitrolist::views;
 
 @implementation HybridNitroListViewComponent {
   std::shared_ptr<HybridNitroListViewSpecSwift> _hybridView;
+  BOOL _didDropView;
 }
 
 + (void) load {
@@ -50,6 +51,7 @@ using namespace margelo::nitro::nitrolist::views;
 
 - (instancetype) init {
   if (self = [super init]) {
+    _props = HybridNitroListViewShadowNode::defaultSharedProps();
     std::shared_ptr<HybridNitroListViewSpec> hybridView = NitroList::NitroListAutolinking::createNitroListView();
     _hybridView = std::dynamic_pointer_cast<HybridNitroListViewSpecSwift>(hybridView);
     [self updateView];
@@ -69,60 +71,85 @@ using namespace margelo::nitro::nitrolist::views;
   [self setContentView:view];
 }
 
+- (void) notifyOnDropView {
+  // A recycled component can later be invalidated. Notify only once per mount.
+  if (_didDropView) {
+    return;
+  }
+  NitroList::HybridNitroListViewSpec_cxx& swiftPart = _hybridView->getSwiftPart();
+  swiftPart.onDropView();
+  _didDropView = YES;
+}
+
 - (void) updateProps:(const std::shared_ptr<const react::Props>&)props
             oldProps:(const std::shared_ptr<const react::Props>&)oldProps {
+  // A props update marks a newly mounted or still-active component.
+  _didDropView = NO;
+
   // 1. Downcast props
-  const auto& newViewPropsConst = *std::static_pointer_cast<HybridNitroListViewProps const>(props);
-  auto& newViewProps = const_cast<HybridNitroListViewProps&>(newViewPropsConst);
+  const auto& newViewProps = *std::static_pointer_cast<const HybridNitroListViewProps>(props);
+  const auto* oldViewProps = static_cast<const HybridNitroListViewProps*>(oldProps.get());
   NitroList::HybridNitroListViewSpec_cxx& swiftPart = _hybridView->getSwiftPart();
 
-  // 2. Update each prop individually
-  swiftPart.beforeUpdate();
+  // 2. Update only props that differ from the previous Props snapshot.
+  const bool hasTransactionPropChanges = oldViewProps == nullptr
+      ? newViewProps.hasAnyProvidedProps()
+      : !newViewProps.hasSameProps(*oldViewProps);
+  if (hasTransactionPropChanges) {
+    swiftPart.beforeUpdate();
 
-  // itemCount: number
-  if (newViewProps.itemCount.isDirty) {
-    swiftPart.setItemCount(newViewProps.itemCount.value);
-    newViewProps.itemCount.isDirty = false;
-  }
-  // estimatedItemSize: number
-  if (newViewProps.estimatedItemSize.isDirty) {
-    swiftPart.setEstimatedItemSize(newViewProps.estimatedItemSize.value);
-    newViewProps.estimatedItemSize.isDirty = false;
-  }
-  // drawDistance: number
-  if (newViewProps.drawDistance.isDirty) {
-    swiftPart.setDrawDistance(newViewProps.drawDistance.value);
-    newViewProps.drawDistance.isDirty = false;
-  }
-  // horizontal: boolean
-  if (newViewProps.horizontal.isDirty) {
-    swiftPart.setHorizontal(newViewProps.horizontal.value);
-    newViewProps.horizontal.isDirty = false;
-  }
-  // numColumns: number
-  if (newViewProps.numColumns.isDirty) {
-    swiftPart.setNumColumns(newViewProps.numColumns.value);
-    newViewProps.numColumns.isDirty = false;
-  }
-  // onRangeChange: optional
-  if (newViewProps.onRangeChange.isDirty) {
-    swiftPart.setOnRangeChange(newViewProps.onRangeChange.value);
-    newViewProps.onRangeChange.isDirty = false;
-  }
-
-  swiftPart.afterUpdate();
-
-  // 3. Update hybridRef if it changed
-  if (newViewProps.hybridRef.isDirty) {
-    // hybridRef changed - call it with new this
-    const auto& maybeFunc = newViewProps.hybridRef.value;
-    if (maybeFunc.has_value()) {
-      maybeFunc.value()(_hybridView);
+    // itemCount: number
+    if (oldViewProps == nullptr
+          ? newViewProps.itemCount.isProvided()
+          : !newViewProps.itemCount.hasSameValue(oldViewProps->itemCount)) {
+      swiftPart.setItemCount(newViewProps.itemCount.get());
     }
-    newViewProps.hybridRef.isDirty = false;
+    // estimatedItemSize: number
+    if (oldViewProps == nullptr
+          ? newViewProps.estimatedItemSize.isProvided()
+          : !newViewProps.estimatedItemSize.hasSameValue(oldViewProps->estimatedItemSize)) {
+      swiftPart.setEstimatedItemSize(newViewProps.estimatedItemSize.get());
+    }
+    // drawDistance: number
+    if (oldViewProps == nullptr
+          ? newViewProps.drawDistance.isProvided()
+          : !newViewProps.drawDistance.hasSameValue(oldViewProps->drawDistance)) {
+      swiftPart.setDrawDistance(newViewProps.drawDistance.get());
+    }
+    // horizontal: boolean
+    if (oldViewProps == nullptr
+          ? newViewProps.horizontal.isProvided()
+          : !newViewProps.horizontal.hasSameValue(oldViewProps->horizontal)) {
+      swiftPart.setHorizontal(newViewProps.horizontal.get());
+    }
+    // numColumns: number
+    if (oldViewProps == nullptr
+          ? newViewProps.numColumns.isProvided()
+          : !newViewProps.numColumns.hasSameValue(oldViewProps->numColumns)) {
+      swiftPart.setNumColumns(newViewProps.numColumns.get());
+    }
+    // onRangeChange: optional
+    if (oldViewProps == nullptr
+          ? newViewProps.onRangeChange.isProvided()
+          : !newViewProps.onRangeChange.hasSameValue(oldViewProps->onRangeChange)) {
+      swiftPart.setOnRangeChange(newViewProps.onRangeChange.get());
+    }
+
+    // Update hybridRef if it changed
+    if (oldViewProps == nullptr
+          ? newViewProps.hybridRef.isProvided()
+          : !newViewProps.hybridRef.hasSameValue(oldViewProps->hybridRef)) {
+      // hybridRef changed - call it with new this
+      const auto& maybeFunc = newViewProps.hybridRef.get();
+      if (maybeFunc.has_value()) {
+        maybeFunc.value()(_hybridView);
+      }
+    }
+
+    swiftPart.afterUpdate();
   }
 
-  // 4. Continue in base class
+  // 3. Continue in base class
   [super updateProps:props oldProps:oldProps];
 }
 
@@ -131,6 +158,7 @@ using namespace margelo::nitro::nitrolist::views;
 }
 
 - (void)prepareForRecycle {
+  [self notifyOnDropView];
   [super prepareForRecycle];
   NitroList::HybridNitroListViewSpec_cxx& swiftPart = _hybridView->getSwiftPart();
   swiftPart.maybePrepareForRecycle();
@@ -138,8 +166,7 @@ using namespace margelo::nitro::nitrolist::views;
 
 #ifdef ENABLE_RCT_COMPONENT_VIEW_INVALIDATE
 - (void)invalidate {
-  NitroList::HybridNitroListViewSpec_cxx& swiftPart = _hybridView->getSwiftPart();
-  swiftPart.onDropView();
+  [self notifyOnDropView];
   [super invalidate];
 }
 #endif
