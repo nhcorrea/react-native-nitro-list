@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   js:
-    name: Typecheck and Jest
+    name: Typecheck, Jest and build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,6 +30,8 @@ jobs:
         run: npm run typecheck
       - name: Jest
         run: npm test
+      - name: Build and verify package
+        run: npm run build
 
   layout-core-host-tests:
     name: LayoutCore host tests (ASan/UBSan)

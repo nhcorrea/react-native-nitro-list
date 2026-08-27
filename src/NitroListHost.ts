@@ -1,6 +1,6 @@
 import {getHostComponent} from 'react-native-nitro-modules';
 
-import NitroListViewConfig from '../nitrogen/generated/shared/json/NitroListViewConfig.json';
+import {NitroListViewConfig} from './generated/nitroListViewConfig';
 
 import type {NitroListViewMethods, NitroListViewProps} from './NitroListView.nitro';
 

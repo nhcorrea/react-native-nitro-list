@@ -1,6 +1,6 @@
 {
   "name": "@nhcorrea/react-native-nitro-list",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "High-performance drop-in FlatList replacement for React Native, powered by Nitro Modules.",
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
@@ -56,7 +56,7 @@
     "clean": "git clean -dfX",
     "release": "semantic-release",
     "build": "tsc --noEmit && bob build && node scripts/verify-build.mjs",
-    "codegen": "nitrogen && tsc --noEmit && bob build && node scripts/verify-build.mjs",
+    "codegen": "nitrogen && node scripts/sync-view-config.mjs && tsc --noEmit && bob build && node scripts/verify-build.mjs",
     "prepack": "bob build",
     "test:cpp": "cd cpp && clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o /tmp/layoutcore-tests && /tmp/layoutcore-tests"
   },
@@ -86,8 +86,7 @@
     "ios/**/*.cpp",
     "ios/**/*.swift",
     "*.podspec",
-    "README.md",
-    "scripts/verify-build.mjs"
+    "README.md"
   ],
   "workspaces": [
     "example"
