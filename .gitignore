@@ -77,3 +77,4 @@ android/keystores/debug.keystore
 lib/
 tsconfig.tsbuildinfo
 /docs
+.claude
