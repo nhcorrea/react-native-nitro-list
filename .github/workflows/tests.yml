@@ -1,0 +1,45 @@
+name: Tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: Typecheck and Jest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Jest
+        run: npm test
+
+  layout-core-host-tests:
+    name: LayoutCore host tests (ASan/UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run with sanitizers
+        working-directory: cpp
+        run: |
+          clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra \
+            -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o layoutcore-tests
+          ./layoutcore-tests

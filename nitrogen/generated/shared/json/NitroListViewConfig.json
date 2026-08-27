@@ -1,0 +1,15 @@
+{
+  "uiViewClassName": "NitroListView",
+  "supportsRawText": false,
+  "bubblingEventTypes": {},
+  "directEventTypes": {},
+  "validAttributes": {
+    "itemCount": true,
+    "estimatedItemSize": true,
+    "drawDistance": true,
+    "horizontal": true,
+    "numColumns": true,
+    "onRangeChange": true,
+    "hybridRef": true
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "react-native-nitro-list-example",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "lint": "eslint .",
+    "start": "react-native start --reset-cache",
+    "test": "jest",
+    "pod": "bundle install && bundle exec pod install --project-directory=ios",
+    "apk": "cd android && ./gradlew :app:createBundleReleaseJsAndAssets --rerun assembleRelease -PreactNativeArchitectures=arm64-v8a",
+    "apk:all-abis": "cd android && ./gradlew assembleRelease",
+    "apk:clean": "cd android && ./gradlew clean",
+    "apk:install": "adb install -r android/app/build/outputs/apk/release/app-release.apk",
+    "apk:launch": "adb shell am start -n com.nitrolistexample/.MainActivity",
+    "bench:logcat": "adb logcat -c && adb logcat -s ReactNativeJS:V",
+    "bench:stayon": "adb shell svc power stayon true",
+    "bench:stayon:off": "adb shell svc power stayon false",
+    "bench:gfx:reset": "adb shell dumpsys gfxinfo com.nitrolistexample reset",
+    "bench:gfx": "adb shell dumpsys gfxinfo com.nitrolistexample"
+  },
+  "dependencies": {
+    "@react-native/new-app-screen": "0.86.0",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-nitro-modules": "^0.35.9",
+    "react-native-reanimated": "^4.5.1",
+    "react-native-safe-area-context": "^5.5.2",
+    "react-native-worklets": "^0.10.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.1.0",
+    "@react-native-community/cli-platform-android": "20.1.0",
+    "@react-native-community/cli-platform-ios": "20.1.0",
+    "@react-native/babel-preset": "0.86.0",
+    "@react-native/eslint-config": "0.86.0",
+    "@react-native/metro-config": "0.86.0",
+    "@react-native/typescript-config": "0.86.0",
+    "@types/jest": "^29.5.13",
+    "babel-plugin-module-resolver": "^5.0.2"
+  },
+  "engines": {
+    "node": ">= 22.11.0"
+  },
+  "packageManager": "yarn@3.8.7"
+}
