@@ -8,6 +8,7 @@ export type {
   NitroListOnViewableItemsChanged,
   NitroListProps,
   NitroListRenderItem,
+  NitroListRenderMode,
   NitroListRenderScrollComponent,
   NitroListRenderScrollComponentProps,
   NitroListRenderTarget,
@@ -22,4 +23,8 @@ export {NitroListView} from './NitroListHost';
 export type {NitroListViewMethods, NitroListViewProps} from './NitroListHost';
 export type {NitroListRangeChangeEvent} from './NitroList';
 export {NitroListPerfMonitor} from './PerfMonitor';
-export type {NitroListPerfSnapshot, NitroListScrollToIndexStats} from './PerfMonitor';
+export type {
+  LatencyDistributionSnapshot,
+  NitroListPerfSnapshot,
+  NitroListScrollToIndexStats,
+} from './PerfMonitor';
