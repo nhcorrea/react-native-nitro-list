@@ -33,6 +33,6 @@ maestro test qa/qa-fixtures.yaml
 O assert mora no app: o flow só toca botões e espera os `*-pass` — qualquer
 regressão de aterrissagem/blank/MVCP falha o flow sem lógica no script.
 
-> Medições de régua (tick p50/p95/p99, `mountBurst`, `firstRange` etc.)
-> continuam no HUD do stress lab / `PERF.md`; esta tela é só o go/no-go
+> Medições contínuas (tick p50/p95/p99, `mountBurst`, `firstRange` etc.)
+> ficam no HUD do stress lab e na tela de bench; esta tela é só o go/no-go
 > comportamental de gesto real.

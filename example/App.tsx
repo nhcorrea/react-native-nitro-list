@@ -391,7 +391,7 @@ function ScreenTabs({
 }
 
 function App(): React.JSX.Element {
-  // Bancada primeiro: o APK existe para rodar a matriz do docs/PERF.md.
+  // Bancada primeiro: o APK de release existe para rodar as runs scriptadas.
   const [screen, setScreen] = useState<ScreenKey>(
     NITRO_LIST_PERF_COMPILED ? 'bench' : 'stress'
   );
