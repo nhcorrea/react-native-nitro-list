@@ -91,6 +91,7 @@
     "README.md",
     "scripts/copy-nitrogen-assets.mjs",
     "scripts/verify-build.mjs",
+    "scripts/verify-release-baseline.mjs",
     "scripts/verify-package.mjs"
   ],
   "workspaces": [

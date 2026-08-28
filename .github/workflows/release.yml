@@ -41,6 +41,11 @@ jobs:
       - name: Use npm 11
         run: npm install -g npm@11
 
+      # Fails in seconds, before the suite, because the damage it prevents is a
+      # burned version number that npm never lets you reuse.
+      - name: Verify the release baseline
+        run: node scripts/verify-release-baseline.mjs
+
       - name: Install dependencies
         run: npm ci
 
