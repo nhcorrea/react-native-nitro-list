@@ -33,8 +33,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      # OIDC (trusted publishing) needs npm >= 11.5.1 and the node 22 runner ships
+      # npm 10. Pinned to the major used locally, not `@latest`: `@latest` pulled
+      # in npm 12, which changed the shape of `npm pack --json` and broke the
+      # release mid-pipeline. Dropping this step entirely means moving the runner
+      # to node 24, whose bundled npm already speaks OIDC.
       - name: Use npm 11
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci

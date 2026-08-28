@@ -36,7 +36,19 @@ try {
   console.error(String(error.stderr || error.message).trim())
   process.exit(1)
 }
-const shipped = new Set(JSON.parse(packOutput)[0].files.map((file) => file.path))
+// npm <= 11 prints an array of package entries; npm 12 switched to an object
+// keyed by package name. Accept both — a release pipeline should not break on a
+// registry client upgrade, and it should say so out loud if the shape changes again.
+const parsed = JSON.parse(packOutput)
+const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
+
+if (!entry || !Array.isArray(entry.files)) {
+  console.error('package verification failed: unexpected `npm pack --json` output')
+  console.error(`npm reported: ${JSON.stringify(parsed).slice(0, 400)}`)
+  process.exit(1)
+}
+
+const shipped = new Set(entry.files.map((file) => file.path))
 
 const toPackagePath = (absolute) => relative(root, absolute).split(/[\\/]/).join(posix.sep)
 
