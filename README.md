@@ -447,6 +447,10 @@ npm run ios   # or: npm run android
 - `npm test` — Jest suite for the TS layer.
 - `npm run test:cpp` — compiles and runs the C++ `LayoutCore` host tests with ASan/UBSan (no device needed).
 - `npm run typecheck` / `npm run build` — TS validation and library output (`lib/`).
+- `npm run verify:package` — checks the tarball npm would publish (entry points and every relative import resolve inside it).
+- `npm run hooks:install` — enables the local `commit-msg` hook that validates conventional-commit prefixes.
+
+Releases are automated from commit messages (conventional commits + semantic-release).
 
 ## License
 

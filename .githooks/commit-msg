@@ -1,0 +1,11 @@
+#!/bin/sh
+# Enable with: npm run hooks:install
+# Guards the conventional-commit prefix that semantic-release reads to pick the
+# next version. A typo here is not a lint nit — it silently ships the wrong
+# version number, or no version at all.
+if [ ! -x node_modules/.bin/commitlint ]; then
+  echo "commitlint ausente — pulando a validação da mensagem (rode 'npm ci')" >&2
+  exit 0
+fi
+
+exec node_modules/.bin/commitlint --edit "$1"

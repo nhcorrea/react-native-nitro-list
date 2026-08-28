@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  push:
+    branches:
+      - main
+      - next
   workflow_dispatch:
 
 permissions:
@@ -8,7 +12,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -29,8 +33,20 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Use npm 11
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Jest
+        run: npm test
+
+      - name: LayoutCore host tests
+        run: npm run test:cpp
 
       - name: Build lib
         run: npm run build

@@ -57,6 +57,7 @@
     "release": "semantic-release",
     "build": "tsc --noEmit && bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs",
     "verify:package": "node scripts/verify-package.mjs",
+    "hooks:install": "git config core.hooksPath .githooks",
     "codegen": "nitrogen && tsc --noEmit && bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs",
     "prepack": "bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs && node scripts/verify-package.mjs",
     "test:cpp": "cd cpp && clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o /tmp/layoutcore-tests && /tmp/layoutcore-tests"
@@ -105,6 +106,8 @@
     "registry": "https://registry.npmjs.org/"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.3",
+    "@commitlint/config-conventional": "^20.5.3",
     "@jamesacarr/eslint-formatter-github-actions": "^0.2.0",
     "@jest/globals": "^29.7.0",
     "@react-native/babel-preset": "0.86.0",
