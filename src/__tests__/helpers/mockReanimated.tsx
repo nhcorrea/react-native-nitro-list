@@ -13,6 +13,20 @@ export function clearCreatedSharedValuesForTests(): void {
   createdSharedValues.length = 0;
 }
 
+const webOnlyDependencyUsages: string[] = [];
+
+export function getWebOnlyDependencyUsagesForTests(): ReadonlyArray<string> {
+  return webOnlyDependencyUsages;
+}
+
+export function clearWebOnlyDependencyUsagesForTests(): void {
+  webOnlyDependencyUsages.length = 0;
+}
+
+function noteDependencies(hook: string, deps: unknown): void {
+  if (deps !== undefined) webOnlyDependencyUsages.push(hook);
+}
+
 export function useSharedValue<T>(initial: T): SharedValue<T> {
   const ref = useRef<SharedValue<T> | null>(null);
   if (ref.current == null) {
@@ -22,8 +36,25 @@ export function useSharedValue<T>(initial: T): SharedValue<T> {
   return ref.current;
 }
 
-export function useAnimatedStyle<T>(factory: () => T): T {
+export function useAnimatedStyle<T>(factory: () => T, deps?: ReadonlyArray<unknown>): T {
+  noteDependencies('useAnimatedStyle', deps);
   return factory();
+}
+
+export function useDerivedValue<T>(factory: () => T, deps?: ReadonlyArray<unknown>): SharedValue<T> {
+  noteDependencies('useDerivedValue', deps);
+  const ref = useRef<SharedValue<T> | null>(null);
+  if (ref.current == null) ref.current = {value: factory()};
+  else ref.current.value = factory();
+  return ref.current;
+}
+
+export function useAnimatedReaction<T>(
+  _prepare: () => T,
+  _react: (current: T, previous: T | null) => void,
+  deps?: ReadonlyArray<unknown>,
+): void {
+  noteDependencies('useAnimatedReaction', deps);
 }
 
 type ScrollHandlers = {
@@ -36,8 +67,9 @@ type ScrollHandlers = {
 
 export function useAnimatedScrollHandler(
   handlers: ScrollHandlers,
-  _deps?: ReadonlyArray<unknown>,
+  deps?: ReadonlyArray<unknown>,
 ): (event: {nativeEvent?: unknown}) => void {
+  noteDependencies('useAnimatedScrollHandler', deps);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
   const contextRef = useRef<Record<string, unknown>>({});

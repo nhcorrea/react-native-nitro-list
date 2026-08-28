@@ -13,7 +13,9 @@ import type {
 import {clearMirrorsForTests, getLastMirror, setMirrorConfigForTests} from './mockNitroListHost';
 import {
   clearCreatedSharedValuesForTests,
+  clearWebOnlyDependencyUsagesForTests,
   getCreatedSharedValuesForTests,
+  getWebOnlyDependencyUsagesForTests,
 } from './mockReanimated';
 import type {HybridMirrorConfig, HybridNitroListViewMirror} from './layoutCoreMirror';
 
@@ -236,6 +238,21 @@ export class NitroListHarness<T = string> {
     );
   }
 
+  measureStickyOverlay(size: number): void {
+    const overlay = this.renderer.root.findAll(
+      (node) =>
+        node.type === View &&
+        node.props.pointerEvents === 'box-none' &&
+        node.props.onLayout != null,
+    )[0];
+    if (overlay == null) throw new Error('sticky overlay is not rendered');
+    act(() => {
+      overlay.props.onLayout(
+        this.horizontal ? makeLayoutEvent(size, 0) : makeLayoutEvent(0, size),
+      );
+    });
+  }
+
   layoutHeader(height: number): void {
     const views = this.structuralLayoutViews();
     if (views.length === 0) throw new Error('no header/footer wrapper is rendered');
@@ -308,12 +325,17 @@ export class NitroListHarness<T = string> {
   }
 }
 
+export function webOnlyDependencyUsages(): ReadonlyArray<string> {
+  return getWebOnlyDependencyUsagesForTests();
+}
+
 export function renderNitroList<T = string>(
   props: NitroListProps<T>,
   mirrorConfig?: HybridMirrorConfig,
 ): NitroListHarness<T> {
   clearMirrorsForTests();
   clearCreatedSharedValuesForTests();
+  clearWebOnlyDependencyUsagesForTests();
   if (mirrorConfig != null) setMirrorConfigForTests(mirrorConfig);
   return new NitroListHarness<T>(props).mount();
 }

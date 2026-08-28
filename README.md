@@ -115,7 +115,7 @@ The differences worth knowing:
 | `snapToIndices` | `readonly number[]` | Snap points computed live from the engine's offsets, so they track real measurements. |
 | `adaptiveRenderMode` | `boolean` | Opt-in. `renderItem` receives `renderMode: 'normal' \| 'fast'` driven by a Schmitt trigger on scroll velocity, so heavy cells can render a placeholder mid-fling and upgrade when the scroll settles. |
 | `style` | `StyleProp<ViewStyle>` | Style of the list container. |
-| `contentContainerStyle` | `StyleProp<ViewStyle>` | Style forwarded to the scroll content container. |
+| `contentContainerStyle` | `StyleProp<ViewStyle>` | Style forwarded to the scroll content container. Main-axis padding (`paddingTop`/`paddingBottom` when vertical, `paddingStart`/`paddingLeft`/`paddingEnd`/`paddingRight` when horizontal, plus the `paddingVertical`/`paddingHorizontal`/`padding` fallbacks) is read back into the scroll math, so sticky headers, `scrollToIndex` and viewability stay aligned with what you see. |
 | `renderScrollComponent` | `(props) => ReactElement` | Provide your own outer ScrollView (e.g. an `Animated.ScrollView`). Forward **every** prop you receive — in particular `maintainVisibleContentPosition` — and keep `removeClippedSubviews` off. |
 
 ### Structural components
@@ -145,7 +145,7 @@ The differences worth knowing:
 | Prop | Type | Description |
 | --- | --- | --- |
 | `stickyHeaderIndices` | `number[]` | Indices that stick to the top of the viewport. |
-| `stickyHeaderConfig` | `{ offset?, hideRelatedCell? }` | `offset` shifts the pinned position in dp; `hideRelatedCell` hides the in-flow cell while its sticky copy is pinned. |
+| `stickyHeaderConfig` | `{ offset?, hideRelatedCell?, size? }` | `offset` shifts the pinned position in dp; `hideRelatedCell` hides the in-flow cell while its sticky copy is pinned; `size` pins the overlay height in dp instead of measuring it (useful when the cell carries a trailing gap the pinned copy drops). |
 | `onChangeStickyIndex` | `(index: number) => void` | Fires when the currently pinned header changes (`-1` when none). |
 
 ### Viewability

@@ -156,6 +156,7 @@ export type NitroListRenderScrollComponent = (
 export interface NitroListStickyHeaderConfig {
   offset?: number;
   hideRelatedCell?: boolean;
+  size?: number;
 }
 
 export interface NitroListMaintainVisibleContentPositionConfig<T> {
@@ -385,15 +386,17 @@ function extractAxisPadding(
   if (horizontal) {
     const axis =
       flat.paddingHorizontal != null ? readNumericPadding(flat.paddingHorizontal) : fallback;
+    const start = flat.paddingStart ?? flat.paddingLeft;
+    const end = flat.paddingEnd ?? flat.paddingRight;
     return {
-      start: flat.paddingLeft != null ? readNumericPadding(flat.paddingLeft) : axis,
-      end: flat.paddingRight != null ? readNumericPadding(flat.paddingRight) : axis,
+      start: start != null ? readNumericPadding(start) : axis,
+      end: end != null ? readNumericPadding(end) : axis,
     };
   }
   const axis = flat.paddingVertical != null ? readNumericPadding(flat.paddingVertical) : fallback;
   return {
-    start: flat.paddingStart != null ? readNumericPadding(flat.paddingStart) : axis,
-    end: flat.paddingEnd != null ? readNumericPadding(flat.paddingEnd) : axis,
+    start: flat.paddingTop != null ? readNumericPadding(flat.paddingTop) : axis,
+    end: flat.paddingBottom != null ? readNumericPadding(flat.paddingBottom) : axis,
   };
 }
 
@@ -514,6 +517,7 @@ function computeSticky(
   stickyOffset: number,
   readOffset: LayoutReader,
   readSize: LayoutReader,
+  overlaySize: number,
 ): StickyComputeResult {
   'worklet';
   const bar = scrollOffset + stickyOffset;
@@ -533,7 +537,7 @@ function computeSticky(
     return {index: -1, translateY: stickyOffset, height: 0};
   }
   const idx = stickyIndices[activeK];
-  const h = readSize(idx);
+  const h = overlaySize > 0 ? overlaySize : readSize(idx);
   let translateY = stickyOffset;
   const nextK = activeK + 1;
   if (nextK < stickyIndices.length) {
@@ -552,6 +556,7 @@ function driveStickyOnUi(
   stickyOffset: number,
   translateYSv: SharedValue<number>,
   activeIndexSv: SharedValue<number>,
+  overlaySizeSv: SharedValue<number>,
   notifyIndexChange: (index: number) => void,
 ): void {
   'worklet';
@@ -561,6 +566,7 @@ function driveStickyOnUi(
     stickyOffset,
     (i: number) => hybrid.getItemOffset(i),
     (i: number) => hybrid.getItemSize(i),
+    overlaySizeSv.value,
   );
   if (translateYSv.value !== result.translateY) {
     translateYSv.value = result.translateY;
@@ -680,6 +686,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, [stickyIndicesKey]);
   const stickyOffset = stickyHeaderConfig?.offset ?? 0;
   const hideRelatedCell = stickyHeaderConfig?.hideRelatedCell ?? false;
+  const stickySize = stickyHeaderConfig?.size;
 
   const isHorizontal = horizontal === true;
   const isHorizontalRef = useRef(isHorizontal);
@@ -806,6 +813,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const stickyTranslateYSv = useSharedValue(stickyOffset);
   const uiStickyIndexSv = useSharedValue(-1);
+  const stickyOverlaySizeSv = useSharedValue(stickySize ?? 0);
+  const stickyOverlaySizeRef = useRef(stickySize ?? 0);
   const lastJsStickyTyRef = useRef<number | null>(null);
 
   const layoutCacheRef = useRef({
@@ -2100,10 +2109,20 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const offsetSv = uiScrollOffsetSv;
     const translateYSv = stickyTranslateYSv;
     const activeIndexSv = uiStickyIndexSv;
+    const overlaySizeSv = stickyOverlaySizeSv;
     const notify = applyStickyIndex;
     scheduleOnUI(() => {
       'worklet';
-      driveStickyOnUi(hybrid, offsetSv.value, indices, bar, translateYSv, activeIndexSv, notify);
+      driveStickyOnUi(
+        hybrid,
+        offsetSv.value,
+        indices,
+        bar,
+        translateYSv,
+        activeIndexSv,
+        overlaySizeSv,
+        notify,
+      );
     });
   }, [
     attachedHybrid,
@@ -2113,6 +2132,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     uiScrollOffsetSv,
     stickyTranslateYSv,
     uiStickyIndexSv,
+    stickyOverlaySizeSv,
   ]);
 
   const updateSticky = useCallback(
@@ -2132,6 +2152,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         stickyOffset,
         readItemOffset,
         readItemSize,
+        stickyOverlaySizeRef.current,
       );
       applyStickyIndex(result.index);
       if (lastJsStickyTyRef.current !== result.translateY) {
@@ -2150,6 +2171,34 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       uiStickyIndexSv,
     ],
   );
+
+  const updateStickyRef = useRef(updateSticky);
+  updateStickyRef.current = updateSticky;
+
+  const applyStickyOverlaySize = useCallback(
+    (size: number) => {
+      if (!(size > 0)) return;
+      if (Math.abs(stickyOverlaySizeRef.current - size) <= MEASUREMENT_NOISE_EPSILON_DP) return;
+      stickyOverlaySizeRef.current = size;
+      stickyOverlaySizeSv.value = size;
+      updateStickyRef.current(lastScrollOffsetRef.current - effectivePaddingStartRef.current);
+    },
+    [stickyOverlaySizeSv],
+  );
+
+  const handleStickyOverlayLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      if (stickySize != null) return;
+      const layout = e.nativeEvent.layout;
+      applyStickyOverlaySize(isHorizontalRef.current ? layout.width : layout.height);
+    },
+    [applyStickyOverlaySize, stickySize],
+  );
+
+  useEffect(() => {
+    if (stickySize == null) return;
+    applyStickyOverlaySize(stickySize);
+  }, [stickySize, applyStickyOverlaySize]);
 
   const evaluateViewability = useCallback(() => {
     const cb = onViewableItemsChanged;
@@ -2793,6 +2842,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
             stickyOffset,
             stickyTranslateYSv,
             uiStickyIndexSv,
+            stickyOverlaySizeSv,
             applyStickyIndex,
           );
         }
@@ -2826,25 +2876,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         );
       },
     },
-    [
-      attachedHybrid,
-      isHorizontal,
-      stickyCount,
-      stickyIndices,
-      stickyOffset,
-      hasUserOnScroll,
-      hasViewabilityWakeups,
-      onScrollWorklet,
-      scrollOffsetSharedValue,
-      applyStickyIndex,
-      settleUiEndDrag,
-      settleUiViewabilityTick,
-      emitUserScrollFromUi,
-      uiPaddingTopSv,
-      uiScrollOffsetSv,
-      stickyTranslateYSv,
-      uiStickyIndexSv,
-    ],
   );
 
   const contentInsetBottomRef = useRef(0);
@@ -3918,7 +3949,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         ),
       })}
       {stickyItem !== undefined ? (
-        <StickyOverlay translateY={stickyTranslateYSv} horizontal={isHorizontal}>
+        <StickyOverlay
+          translateY={stickyTranslateYSv}
+          horizontal={isHorizontal}
+          onLayout={handleStickyOverlayLayout}>
           {renderItem({
             item: stickyItem,
             index: stickyIndexState,
@@ -4212,12 +4246,14 @@ const HiddenStickyCell = React.memo(function HiddenStickyCell({
 interface StickyOverlayProps {
   translateY: SharedValue<number>;
   horizontal: boolean;
+  onLayout: (event: LayoutChangeEvent) => void;
   children: React.ReactNode;
 }
 
 const StickyOverlay = React.memo(function StickyOverlay({
   translateY,
   horizontal,
+  onLayout,
   children,
 }: StickyOverlayProps) {
   const animatedStyle = useAnimatedStyle(() => ({
@@ -4229,6 +4265,7 @@ const StickyOverlay = React.memo(function StickyOverlay({
     <Animated.View
       pointerEvents="box-none"
       collapsable={false}
+      onLayout={onLayout}
       style={[horizontal ? styles.stickyOverlayHorizontal : styles.stickyOverlay, animatedStyle]}>
       {children}
     </Animated.View>
