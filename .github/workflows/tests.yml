@@ -31,6 +31,23 @@ jobs:
       - name: Jest
         run: npm test
 
+  package:
+    name: Publishable package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build lib
+        run: npm run build
+      - name: Verify the tarball npm would publish
+        run: npm run verify:package
+
   layout-core-host-tests:
     name: LayoutCore host tests (ASan/UBSan)
     runs-on: ubuntu-latest

@@ -51,6 +51,18 @@ for (const flavor of ['module', 'commonjs']) {
     failures.push(`section-list entry does not import the core by module reference: ${sectionEntry}`);
   }
 
+  for (const file of files) {
+    const source = readFileSync(file, 'utf8');
+    const specifiers = [...source.matchAll(/(?:from|require\()\s*["'](\.[^"']+)["']/g)].map((m) => m[1]);
+    for (const specifier of specifiers) {
+      const target = resolve(dirname(file), specifier);
+      const resolved = [target, `${target}.js`, join(target, 'index.js')].some(existsSync);
+      if (!resolved) {
+        failures.push(`unresolvable relative import "${specifier}" in ${file}`);
+      }
+    }
+  }
+
   const mainEntry = readFileSync(join(base, 'index.js'), 'utf8');
   for (const forbidden of ['keyboard', 'section-list', 'react-native-keyboard-controller']) {
     if (mainEntry.includes(forbidden)) {

@@ -55,9 +55,10 @@
     "test": "jest",
     "clean": "git clean -dfX",
     "release": "semantic-release",
-    "build": "tsc --noEmit && bob build && node scripts/verify-build.mjs",
-    "codegen": "nitrogen && tsc --noEmit && bob build && node scripts/verify-build.mjs",
-    "prepack": "bob build",
+    "build": "tsc --noEmit && bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
+    "codegen": "nitrogen && tsc --noEmit && bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs",
+    "prepack": "bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs && node scripts/verify-package.mjs",
     "test:cpp": "cd cpp && clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o /tmp/layoutcore-tests && /tmp/layoutcore-tests"
   },
   "keywords": [
@@ -87,7 +88,9 @@
     "ios/**/*.swift",
     "*.podspec",
     "README.md",
-    "scripts/verify-build.mjs"
+    "scripts/copy-nitrogen-assets.mjs",
+    "scripts/verify-build.mjs",
+    "scripts/verify-package.mjs"
   ],
   "workspaces": [
     "example"
