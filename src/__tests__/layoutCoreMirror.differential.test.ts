@@ -55,6 +55,31 @@ function ensureReplayBinary(compiler: string): string {
   return binary;
 }
 
+type Dump = {
+  probes: number[];
+  layoutVersion: number;
+  totalSize: number;
+  itemCount: number;
+  offsets: number[];
+  sizes: number[];
+};
+
+function replay(binary: string, commands: string[], tag: string): Dump {
+  const scriptFile = path.join(os.tmpdir(), `nitrolist-replay-ops-${tag}-${process.pid}.txt`);
+  fs.writeFileSync(scriptFile, commands.join('\n') + '\n');
+  let raw: string;
+  try {
+    raw = execFileSync(binary, ['--dump-json', scriptFile], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      maxBuffer: 256 * 1024 * 1024,
+    });
+  } finally {
+    fs.unlinkSync(scriptFile);
+  }
+  return JSON.parse(raw) as Dump;
+}
+
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -231,26 +256,7 @@ describeIfCompiler('LayoutCore mirror differential (TS mirror × C++ core)', () 
     (seed) => {
       const binary = ensureReplayBinary(compiler as string);
       const script = generateScript(seed, 400);
-
-      const scriptFile = path.join(os.tmpdir(), `nitrolist-replay-ops-${seed}-${process.pid}.txt`);
-      fs.writeFileSync(scriptFile, script.commands.join('\n') + '\n');
-      let raw: string;
-      try {
-        raw = execFileSync(binary, ['--dump-json', scriptFile], {
-          encoding: 'utf8',
-          timeout: 60_000,
-        });
-      } finally {
-        fs.unlinkSync(scriptFile);
-      }
-      const dump = JSON.parse(raw) as {
-        probes: number[];
-        layoutVersion: number;
-        totalSize: number;
-        itemCount: number;
-        offsets: number[];
-        sizes: number[];
-      };
+      const dump = replay(binary, script.commands, String(seed));
 
       expect(dump.itemCount).toBe(script.itemCount);
       expect(dump.probes.length).toBe(script.mirrorProbes.length);
@@ -275,6 +281,77 @@ describeIfCompiler('LayoutCore mirror differential (TS mirror × C++ core)', () 
           );
         }
       }
+    },
+    120_000,
+  );
+
+  it(
+    'keeps offsets exact at N = 100 000: core and mirror both match a double prefix sum bit for bit',
+    () => {
+      const binary = ensureReplayBinary(compiler as string);
+      const count = 100_000;
+      const estimate = 37.375;
+      const mirror = new LayoutCoreMirror();
+      const commands: string[] = [];
+      const mirrorProbes: number[] = [];
+      commands.push(`count ${count}`, `estimate ${estimate}`, 'epsilon 0.51');
+      mirror.setItemCount(count);
+      mirror.setEstimate(estimate);
+      mirror.setMeasurementEpsilon(0.51);
+
+      const sizes = new Float64Array(count);
+      const pairs: number[] = [];
+      for (let i = 0; i < count; i++) {
+        const size = 20 + ((i * 7919) % 1024) / 8;
+        sizes[i] = size;
+        pairs.push(i, size);
+      }
+      commands.push(`batch ${count} ${pairs.join(' ')}`);
+      mirror.setItemSizes(pairs, count, 1);
+
+      const bump: number[] = [];
+      for (let k = 0; k < 10; k++) {
+        bump.push(90_000 + k, sizes[90_000 + k] + 1);
+        sizes[90_000 + k] += 1;
+      }
+      commands.push(`anchored 95000 10 ${bump.join(' ')}`);
+      mirrorProbes.push(mirror.setItemSizesAnchored(bump, 10, 1, 95_000));
+      expect(mirrorProbes[0]).toBe(10);
+
+      const expectedOffsets = new Float64Array(count);
+      let running = 0;
+      for (let i = 0; i < count; i++) {
+        expectedOffsets[i] = running;
+        running += sizes[i];
+      }
+      expect(running).toBeGreaterThan(2 ** 22);
+
+      for (const idx of [0, 1, 4_999, 50_000, 94_999, 95_000, 99_999]) {
+        commands.push(`offset ${idx}`);
+        mirrorProbes.push(mirror.getOffset(idx));
+      }
+      commands.push('total');
+      mirrorProbes.push(mirror.getTotalSize());
+      const scroll = expectedOffsets[95_000];
+      commands.push(`range ${scroll} 800 250`);
+      const range = mirror.getEngagedRange(scroll, 800, 250);
+      mirrorProbes.push(range.start, range.end, range.version);
+      expect(range.start).toBeLessThanOrEqual(95_000);
+      expect(range.end).toBeGreaterThanOrEqual(95_000);
+
+      const dump = replay(binary, commands, 'large');
+      expect(dump.itemCount).toBe(count);
+      expect(dump.probes).toEqual(mirrorProbes);
+      expect(dump.totalSize).toBe(running);
+      expect(mirror.getTotalSize()).toBe(running);
+      let coreMismatches = 0;
+      let mirrorMismatches = 0;
+      for (let i = 0; i < count; i++) {
+        if (dump.offsets[i] !== expectedOffsets[i]) coreMismatches++;
+        if (mirror.getOffset(i) !== expectedOffsets[i]) mirrorMismatches++;
+      }
+      expect(coreMismatches).toBe(0);
+      expect(mirrorMismatches).toBe(0);
     },
     120_000,
   );

@@ -17,7 +17,7 @@ import {
   getCreatedSharedValuesForTests,
   getWebOnlyDependencyUsagesForTests,
 } from './mockReanimated';
-import type {HybridMirrorConfig, HybridNitroListViewMirror} from './layoutCoreMirror';
+import type {HybridMirrorConfig, HybridNitroListEngineMirror} from './layoutCoreMirror';
 
 export type ScrollCommand = {y: number; animated: boolean};
 
@@ -55,19 +55,36 @@ export class NitroListHarness<T = string> {
   scrollProps!: NitroListRenderScrollComponentProps;
   readonly scrollCommands: ScrollCommand[] = [];
   echoProgrammaticScrolls = true;
+  echoOffsetSkewDp = 0;
+  echoDelayMs = 0;
+  animatedScrollFrames = 0;
+  animatedScrollFrameMs = 16;
   horizontal = false;
 
   private props: NitroListProps<T>;
+  private nativeOffset = 0;
   private readonly measuredCells = new WeakSet<ReactTestInstance>();
   private readonly fakeScrollRef = {
     scrollTo: ({x, y, animated}: {x?: number; y?: number; animated?: boolean}) => {
       const target = (this.horizontal ? x : y) ?? 0;
       this.scrollCommands.push({y: target, animated: animated === true});
-      if (this.echoProgrammaticScrolls) {
+      if (!this.echoProgrammaticScrolls) return;
+      if (animated === true && this.animatedScrollFrames > 0) {
+        const from = this.nativeOffset;
+        const frames = this.animatedScrollFrames;
+        for (let k = 1; k <= frames; k++) {
+          setTimeout(() => {
+            this.dispatchScroll(from + ((target - from) * k) / frames);
+          }, k * this.animatedScrollFrameMs);
+        }
         setTimeout(() => {
-          this.dispatchScroll(target);
-        }, 0);
+          this.dispatchMomentumEnd(target);
+        }, (frames + 1) * this.animatedScrollFrameMs);
+        return;
       }
+      setTimeout(() => {
+        this.dispatchScroll(target + this.echoOffsetSkewDp);
+      }, this.echoDelayMs);
     },
     getScrollableNode: () => 42,
     getNativeScrollRef: () => this.fakeScrollRef,
@@ -119,7 +136,7 @@ export class NitroListHarness<T = string> {
     });
   }
 
-  get mirror(): HybridNitroListViewMirror {
+  get mirror(): HybridNitroListEngineMirror {
     return getLastMirror();
   }
 
@@ -136,9 +153,14 @@ export class NitroListHarness<T = string> {
   }
 
   dispatchScroll(y: number): void {
+    this.nativeOffset = y;
     (this.scrollProps.onScroll as (e: NativeSyntheticEvent<NativeScrollEvent>) => void)(
       makeScrollEvent(y, this.horizontal),
     );
+  }
+
+  dispatchMomentumEnd(y: number): void {
+    this.scrollProps.onMomentumScrollEnd(makeScrollEvent(y, this.horizontal));
   }
 
   scroll(y: number): void {
@@ -167,7 +189,7 @@ export class NitroListHarness<T = string> {
 
   momentumEnd(y: number): void {
     act(() => {
-      this.scrollProps.onMomentumScrollEnd(makeScrollEvent(y, this.horizontal));
+      this.dispatchMomentumEnd(y);
     });
   }
 
@@ -185,6 +207,12 @@ export class NitroListHarness<T = string> {
     await act(async () => {
       await jest.advanceTimersByTimeAsync(ms);
     });
+  }
+
+  async settleAnimatedScroll(): Promise<void> {
+    for (let k = 0; k <= this.animatedScrollFrames + 1; k++) {
+      await this.settle(this.animatedScrollFrameMs);
+    }
   }
 
   cellInstances(): Map<number, ReactTestInstance> {
@@ -206,6 +234,17 @@ export class NitroListHarness<T = string> {
     return Array.from(this.cellInstances().keys()).sort((a, b) => a - b);
   }
 
+  cellHidden(index: number): boolean {
+    const cell = this.cellInstances().get(index);
+    if (cell == null) throw new Error(`cell ${index} is not rendered`);
+    const container = cell.findAll(
+      (node) => node.type === View && node.props.collapsable === false,
+    )[0];
+    if (container == null) throw new Error(`cell ${index} has no container View`);
+    const flat = StyleSheet.flatten(container.props.style) as {opacity?: number} | undefined;
+    return flat?.opacity === 0 && container.props.pointerEvents === 'none';
+  }
+
   measureCell(index: number, height: number): void {
     const cell = this.cellInstances().get(index);
     if (cell == null) throw new Error(`cell ${index} is not rendered`);
@@ -221,10 +260,13 @@ export class NitroListHarness<T = string> {
   }
 
   private structuralLayoutViews(): ReactTestInstance[] {
-    const insideMockHost = (node: ReactTestInstance): boolean => {
+    const insideCell = (node: ReactTestInstance): boolean => {
       let parent: ReactTestInstance | null = node.parent;
       while (parent != null) {
-        if (parent.props?.testID === 'mock-nitro-list-view') return true;
+        const props = parent.props as {index?: unknown; enqueueItemSize?: unknown} | undefined;
+        if (props != null && typeof props.index === 'number' && props.enqueueItemSize != null) {
+          return true;
+        }
         parent = parent.parent;
       }
       return false;
@@ -234,7 +276,7 @@ export class NitroListHarness<T = string> {
         node.type === View &&
         node.props.onLayout != null &&
         node.props.collapsable === undefined &&
-        !insideMockHost(node),
+        !insideCell(node),
     );
   }
 

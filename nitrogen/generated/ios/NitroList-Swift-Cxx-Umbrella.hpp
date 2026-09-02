@@ -8,17 +8,10 @@
 #pragma once
 
 // Forward declarations of C++ defined types
-// Forward declaration of `HybridNitroListViewSpec` to properly resolve imports.
-namespace margelo::nitro::nitrolist { class HybridNitroListViewSpec; }
+
 
 // Include C++ defined types
-#include "HybridNitroListViewSpec.hpp"
-#include <NitroModules/ArrayBuffer.hpp>
-#include <NitroModules/Result.hpp>
-#include <exception>
-#include <functional>
-#include <memory>
-#include <optional>
+
 
 // C++ helpers for Swift
 #include "NitroList-Swift-Cxx-Bridge.hpp"
@@ -30,8 +23,7 @@ namespace margelo::nitro::nitrolist { class HybridNitroListViewSpec; }
 #include <NitroModules/DateToChronoDate.hpp>
 
 // Forward declarations of Swift defined types
-// Forward declaration of `HybridNitroListViewSpec_cxx` to properly resolve imports.
-namespace NitroList { class HybridNitroListViewSpec_cxx; }
+
 
 // Include Swift defined types
 #if __has_include("NitroList-Swift.h")

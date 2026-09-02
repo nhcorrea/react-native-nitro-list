@@ -1,7 +1,13 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Image, Platform, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import Animated from 'react-native-reanimated';
 
-import {NitroList, type NitroListHandle, type NitroListRenderItem} from '../NitroList';
+import {
+  NitroList,
+  type NitroListHandle,
+  type NitroListRenderItem,
+  type NitroListRenderScrollComponentProps,
+} from '../NitroList';
 import {
   LatencyDistribution,
   NITRO_LIST_PERF_COMPILED,
@@ -11,14 +17,30 @@ import {
 import {clearMeasurementCache} from '../measurementCache';
 import {NITRO_LIST_DEV_FLAG_KEYS, NitroListDevFlags, type NitroListDevFlagKey} from '../devFlags';
 
-type DatasetKey = 'fixed-1k' | 'dynamic-1k' | 'dynamic-10k' | 'images-500' | 'dynamic-100k';
+type DatasetKey =
+  | 'fixed-1k'
+  | 'dynamic-1k'
+  | 'dynamic-10k'
+  | 'images-500'
+  | 'dynamic-100k'
+  | 'chat-5k';
 type RunMode = 'fixed-30s' | 'sweep';
+type ScrollDriver = 'scripted' | 'finger-like';
+
+function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
+  if (typeof ref === 'function') {
+    ref(value);
+  } else if (ref != null) {
+    (ref as React.MutableRefObject<T | null>).current = value;
+  }
+}
 
 const benchLog: (...args: unknown[]) => void = __DEV__
   ? (...args) => console.log(...args)
   : (...args) => console.warn(...args);
 
 const FIXED_RUN_DURATION_MS = 30_000;
+const STREAM_INTERVAL_MS = 50;
 const STI_REPOSITION_SETTLE_MS = 500;
 const DRAW_DISTANCE_OPTIONS = [500, 375, 250] as const;
 const JS_LOAD_OPTIONS = [0, 4, 8] as const;
@@ -40,6 +62,9 @@ const DEV_FLAG_LABELS: Record<NitroListDevFlagKey, string> = {
   staleRangeReconcile: 'stale',
   rangeEdgeHysteresis: 'hyst',
   stiLandingAdmission: 'adm',
+  stiLayoutEffectWaiter: 'lew',
+  dataAppendFastPath: 'app',
+  jsScrollEventThrottle1: 'thr1',
 };
 
 interface BenchItem {
@@ -57,9 +82,10 @@ const DATASETS: Record<DatasetKey, {count: number; estimatedItemSize: number}> =
   'dynamic-10k': {count: 10_000, estimatedItemSize: 80},
   'images-500': {count: 500, estimatedItemSize: 240},
   'dynamic-100k': {count: 100_000, estimatedItemSize: 80},
+  'chat-5k': {count: 5_000, estimatedItemSize: 80},
 };
 
-type MatrixKind = 'scroll' | 'sti' | 'mount';
+type MatrixKind = 'scroll' | 'sti' | 'mount' | 'stream';
 
 interface MatrixCell {
   id: string;
@@ -85,7 +111,14 @@ const MATRIX: MatrixCell[] = [
   {id: '6c', dataset: 'dynamic-10k', kind: 'mount'},
   {id: '6d', dataset: 'images-500', kind: 'mount'},
   {id: '8', dataset: 'dynamic-100k', kind: 'scroll', velocityDpPerSec: 6_000},
+  {id: '8b', dataset: 'dynamic-100k', kind: 'sti'},
+  {id: '9', dataset: 'chat-5k', kind: 'stream'},
 ];
+
+function stiTargetIndex(dataset: DatasetKey): number {
+  if (dataset === 'dynamic-100k') return 95_000;
+  return Math.floor(DATASETS[dataset].count * 0.85);
+}
 
 function deterministicHeight(index: number): number {
   return 40 + (((index * 2654435761) >>> 0) % 161);
@@ -196,6 +229,8 @@ interface RowCols {
   flingOk: number | null;
   flingMiss: number | null;
   layoutVerPerSec: number;
+  orchPerSec: number;
+  callbacksPerSec: number;
 }
 
 function colsFrom(s: NitroListPerfSnapshot, run?: RunTiming): RowCols {
@@ -226,6 +261,8 @@ function colsFrom(s: NitroListPerfSnapshot, run?: RunTiming): RowCols {
     flingOk: s.flingPrewarmOutcomes > 0 ? s.flingPrewarmOutcomes - s.flingPrewarmMisses : null,
     flingMiss: s.flingPrewarmOutcomes > 0 ? s.flingPrewarmMisses : null,
     layoutVerPerSec: s.windowMs > 0 ? (s.layoutVersionBumps / s.windowMs) * 1000 : 0,
+    orchPerSec: s.windowMs > 0 ? (s.orchestratorRenders / s.windowMs) * 1000 : 0,
+    callbacksPerSec: s.windowMs > 0 ? (s.userCallbacks / s.windowMs) * 1000 : 0,
   };
 }
 
@@ -272,6 +309,8 @@ function medianCols(runs: RowCols[]): RowCols {
     flingOk: pick((c) => c.flingOk),
     flingMiss: pick((c) => c.flingMiss),
     layoutVerPerSec: req((c) => c.layoutVerPerSec),
+    orchPerSec: req((c) => c.orchPerSec),
+    callbacksPerSec: req((c) => c.callbacksPerSec),
   };
 }
 
@@ -304,7 +343,8 @@ function renderRow(dataset: DatasetKey, scenario: string, c: RowCols): string {
     `${pair(c.stiMs, c.stiPasses, r0)} | ${pair(c.rangeLatP95, c.rangeLatP99, r1)} | ` +
     `${pair(c.jsTickP95, c.jsTickP99, r1)} | ${pair(c.burstP95, c.burstMax, r0)} | ` +
     `${r0(c.distDp)} | ${r2(c.mountsPerItem)} | ${r2(c.rendersPerMount)} | ` +
-    `${pair(c.flingOk, c.flingMiss, r0)} | ${r1(c.layoutVerPerSec)} |`
+    `${pair(c.flingOk, c.flingMiss, r0)} | ${r1(c.layoutVerPerSec)} | ` +
+    `${r1(c.orchPerSec)} | ${r0(c.callbacksPerSec)} |`
   );
 }
 
@@ -350,6 +390,10 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
   const [lastRow, setLastRow] = useState<string | null>(null);
   const [drawDistance, setDrawDistance] = useState<number>(DRAW_DISTANCE_OPTIONS[0]);
   const [uiThreadScroll, setUiThreadScroll] = useState(false);
+  const [driver, setDriver] = useState<ScrollDriver>('scripted');
+  const driverRef = useRef(driver);
+  driverRef.current = driver;
+  const nativeScrollRef = useRef<ScrollView | null>(null);
   const [jsLoadMs, setJsLoadMs] = useState<number>(JS_LOAD_OPTIONS[0]);
   const [fixedSizes, setFixedSizes] = useState(false);
   const [autoFixed, setAutoFixed] = useState(false);
@@ -364,7 +408,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
     .join('');
   const scenarioBase =
     `@dd${drawDistance}${uiThreadScroll ? ' f4' : ''}${jsLoadMs > 0 ? ` load${jsLoadMs}` : ''}` +
-    `${autoFixed ? ' autofix' : ''}${disabledFlagsSuffix}`;
+    `${autoFixed ? ' autofix' : ''}${driver === 'finger-like' ? ' finger' : ''}${disabledFlagsSuffix}`;
   const scenarioSuffix = `${scenarioBase}${fixedSizes ? ' fixed' : ''}`;
 
   const listRef = useRef<NitroListHandle>(null);
@@ -373,6 +417,10 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
   const matrixRunningRef = useRef(false);
 
   const items = useMemo(() => makeItems(dataset), [dataset]);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const [chatItems, setChatItems] = useState<BenchItem[] | null>(null);
+  const [streaming, setStreaming] = useState(false);
   const {estimatedItemSize} = DATASETS[dataset];
 
   useEffect(() => {
@@ -423,6 +471,26 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
 
   const keyExtractor = useCallback((item: BenchItem) => item.key, []);
   const getItemType = useCallback((item: BenchItem) => item.type, []);
+
+  const renderScrollComponent = useCallback(
+    ({ref, ...rest}: NitroListRenderScrollComponentProps) => {
+      const setRef = (node: ScrollView | null) => {
+        nativeScrollRef.current = node;
+        assignRef(ref, node);
+      };
+      if (uiThreadScroll) {
+        return (
+          <Animated.ScrollView
+            ref={setRef as unknown as React.ComponentProps<typeof Animated.ScrollView>['ref']}
+            style={StyleSheet.absoluteFill}
+            {...rest}
+          />
+        );
+      }
+      return <ScrollView ref={setRef} style={StyleSheet.absoluteFill} {...rest} />;
+    },
+    [uiThreadScroll],
+  );
 
   const markRunning = useCallback((value: boolean) => {
     runningRef.current = value;
@@ -513,7 +581,12 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
             reachedStart = true;
           }
           traveled += Math.abs(offset - prevOffset);
-          listRef.current.scrollToOffset({offset, animated: false});
+          const rawScrollView = driverRef.current === 'finger-like' ? nativeScrollRef.current : null;
+          if (rawScrollView != null) {
+            rawScrollView.scrollTo({y: offset, animated: false});
+          } else {
+            listRef.current.scrollToOffset({offset, animated: false});
+          }
           if (reachedStart) {
             finish();
             return;
@@ -537,7 +610,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
         await delay(STI_REPOSITION_SETTLE_MS);
       }
       NitroListPerfMonitor.reset();
-      const target = Math.floor(DATASETS[ds].count * 0.85);
+      const target = stiTargetIndex(ds);
       await list.scrollToIndex({index: target, animated: false, viewPosition: 0.5}).catch(() => {});
       const snap = NitroListPerfMonitor.getSnapshot();
       setSnapshot(snap);
@@ -547,6 +620,106 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
     },
     [],
   );
+
+  const runStreamRun = useCallback(
+    (ds: DatasetKey, scenario: string) =>
+      new Promise<{row: string; report: RunReport} | null>((resolve) => {
+        const list = listRef.current;
+        if (!list) {
+          resolve(null);
+          return;
+        }
+        markRunning(true);
+        runAbortRef.current = false;
+        setChatItems(itemsRef.current.slice());
+        setStreaming(true);
+        void list.scrollToEnd(false);
+        NitroListPerfMonitor.reset();
+
+        const startedAt = Date.now();
+        let lastTick = startedAt;
+        let ticks = 0;
+        let maxGap = 0;
+        let token = 0;
+        const tickGaps = new LatencyDistribution();
+        const interval = setInterval(() => {
+          token++;
+          const grow = token % 8 === 0 ? 20 : 0;
+          setChatItems((prev) => {
+            if (prev == null) return prev;
+            const next = prev.slice();
+            const lastIndex = next.length - 1;
+            const last = next[lastIndex];
+            next[lastIndex] = {
+              ...last,
+              text: `${last.text} tok${token}`,
+              height: last.height + grow,
+            };
+            return next;
+          });
+        }, STREAM_INTERVAL_MS);
+
+        const finish = () => {
+          clearInterval(interval);
+          const durationMs = Date.now() - startedAt;
+          const gapTail = tickGaps.snapshot();
+          const perf = NitroListPerfMonitor.getSnapshot();
+          const report: RunReport = {
+            dataset: ds,
+            mode: 'fixed-30s',
+            velocityDpPerSec: 0,
+            durationMs,
+            jsTicks: ticks,
+            jsAvgTickMs: ticks > 0 ? Math.round((durationMs / ticks) * 10) / 10 : 0,
+            jsMaxTickMs: Math.round(maxGap * 10) / 10,
+            jsTickP50Ms: Math.round(gapTail.p50 * 10) / 10,
+            jsTickP95Ms: Math.round(gapTail.p95 * 10) / 10,
+            jsTickP99Ms: Math.round(gapTail.p99 * 10) / 10,
+            traveledDp: 0,
+            itemsTraversed: 0,
+            mountsPerItem: null,
+            perf,
+          };
+          setLastReport(report);
+          setSnapshot(perf);
+          setStreaming(false);
+          markRunning(false);
+          const row = toPerfRow(ds, scenario, perf, report);
+          setLastRow(row);
+          resolve({row, report});
+        };
+
+        const step = () => {
+          if (runAbortRef.current || !listRef.current) {
+            finish();
+            return;
+          }
+          const now = Date.now();
+          if (now - startedAt >= FIXED_RUN_DURATION_MS) {
+            finish();
+            return;
+          }
+          if (now !== lastTick) {
+            maxGap = Math.max(maxGap, now - lastTick);
+            tickGaps.record(now - lastTick);
+          }
+          lastTick = now;
+          ticks++;
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }),
+    [markRunning],
+  );
+
+  const runStreamTest = useCallback(() => {
+    if (runningRef.current || matrixRunningRef.current) return;
+    void runStreamRun(dataset, `chat-stream 20Hz 30s ${scenarioSuffix}`).then((result) => {
+      if (!result) return;
+      benchLog('[NitroListBenchmark]', JSON.stringify(result.report, null, 2));
+      benchLog('[NitroListBenchmark] results row:\n' + result.row);
+    });
+  }, [dataset, runStreamRun, scenarioSuffix]);
 
   const runScrollTest = useCallback(
     (velocityDpPerSec: number) => {
@@ -604,6 +777,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
     setFixedSizes(options.fixedSizes === true);
     if (options.resetBeforeMount) NitroListPerfMonitor.reset();
     setDataset(ds);
+    setChatItems(null);
     setRemountKey((k) => k + 1);
     const deadline = Date.now() + LIST_READY_TIMEOUT_MS;
     for (;;) {
@@ -635,7 +809,9 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
           ? `scrollToIndex ${scenarioBase}${cellSuffix}`
           : cell.kind === 'mount'
             ? `mount ${scenarioBase}${cellSuffix}`
-            : `${(cell.velocityDpPerSec ?? 0) / 1000}k dp/s 30s ${scenarioBase}${cellSuffix}`;
+            : cell.kind === 'stream'
+              ? `chat-stream 20Hz 30s ${scenarioBase}${cellSuffix}`
+              : `${(cell.velocityDpPerSec ?? 0) / 1000}k dp/s 30s ${scenarioBase}${cellSuffix}`;
       const cols: RowCols[] = [];
 
       for (let rep = 0; rep < MATRIX_REPS; rep++) {
@@ -662,6 +838,12 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
             allRows.push(result.row);
             cols.push(colsFrom(result.snapshot));
             logStiPhases(result.snapshot);
+          }
+        } else if (cell.kind === 'stream') {
+          const result = await runStreamRun(cell.dataset, scenario);
+          if (result) {
+            allRows.push(result.row);
+            cols.push(colsFrom(result.report.perf, result.report));
           }
         } else {
           const result = await runScrollRun(
@@ -693,7 +875,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
       `[NitroListBenchmark] matrix runs (${MATRIX_REPS}x por célula):\n` + allRows.join('\n'),
     );
     benchLog('[NitroListBenchmark] matrix median rows:\n' + medians.join('\n'));
-  }, [mountDataset, runScrollRun, runStiRun, scenarioBase]);
+  }, [mountDataset, runScrollRun, runStiRun, runStreamRun, scenarioBase]);
 
   const dump = useCallback(() => {
     const snap = NitroListPerfMonitor.getSnapshot();
@@ -772,6 +954,16 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
             onPress={() => applyConfig(() => setUiThreadScroll((v) => !v))}
             style={[styles.button, uiThreadScroll && styles.buttonActive]}>
             <Text style={styles.buttonText}>F4: {uiThreadScroll ? 'on' : 'off'}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() =>
+              applyConfig(() => setDriver((v) => (v === 'scripted' ? 'finger-like' : 'scripted')))
+            }
+            style={[styles.button, driver === 'finger-like' && styles.buttonActive]}>
+            <Text style={styles.buttonText}>driver: {driver === 'finger-like' ? 'finger' : 'scripted'}</Text>
+          </Pressable>
+          <Pressable onPress={runStreamTest} style={styles.button}>
+            <Text style={styles.buttonText}>chat-stream</Text>
           </Pressable>
           <Pressable
             onPress={() =>
@@ -859,7 +1051,11 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
         <NitroList<BenchItem>
           key={`${dataset}-${remountKey}`}
           ref={listRef}
-          data={items}
+          data={chatItems ?? items}
+          maintainScrollAtEnd={streaming}
+          anchoredEndSpace={
+            streaming && chatItems != null ? {anchorIndex: chatItems.length - 1} : undefined
+          }
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           getItemType={getItemType}
@@ -868,6 +1064,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
           estimatedItemSize={estimatedItemSize}
           drawDistance={drawDistance}
           experimentalUiThreadScroll={uiThreadScroll}
+          renderScrollComponent={renderScrollComponent}
         />
       </View>
     </View>

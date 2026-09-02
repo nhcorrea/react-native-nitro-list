@@ -5,7 +5,7 @@
 
 High-performance drop-in `FlatList` replacement for React Native, powered by [Nitro Modules](https://nitro.margelo.com).
 
-The layout engine is shared C++ compiled into both platforms, driven by native views written in Swift and Kotlin, with a thin React layer on top. Scroll offsets, engaged-range resolution and layout math run outside the React render loop — React is only asked to render the cells that are actually needed.
+The layout engine is shared C++ compiled into both platforms and exposed to JavaScript as a single Nitro `HybridObject`, with a thin React layer on top. Scroll offsets, engaged-range resolution and layout math run outside the React render loop — React is only asked to render the cells that are actually needed.
 
 - [Why it's fast](#why-its-fast)
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
@@ -18,7 +18,9 @@ The layout engine is shared C++ compiled into both platforms, driven by native v
 
 ## Why it's fast
 
-**The layout lives in C++, not in React.** Item sizes, prefix offsets, total size and the engaged range live in a single native structure shared by iOS and Android. Resolving "which items are on screen" is a binary search over the offset prefix (O(log n)), and repeated queries inside the same window are answered from a cached range — so a 100k-item list resolves its range in the same time as a 1k-item list. React never walks the data array to find out what to draw.
+**The layout lives in C++, not in React.** Item sizes, prefix offsets, total size and the engaged range live in a single native structure shared by iOS and Android. Resolving "which items are on screen" is a binary search over the offset prefix (O(log n)), and repeated queries inside the same window are answered from a cached range — so a 100k-item list resolves its range in the same time as a 1k-item list. Offsets and the running total are kept in double precision, so that same 100k-item list positions its last item to the pixel (a float prefix sum drifts by thousands of dp at that size). React never walks the data array to find out what to draw.
+
+**JavaScript talks to the engine directly.** The engine is a pure C++ Nitro `HybridObject`: every call from the JS thread and from the UI-thread scroll worklet lands in C++ with no JNI hop on Android and no Swift/ObjC bridge on iOS. The list container is a plain React `View` sized from the engine's total, so there is no custom native view in the tree.
 
 **Measurements are batched into one native call.** Cells report their real size through a batched bridge: a whole batch of freshly mounted cells is flushed as a single JSI call per frame instead of one call per cell. Offsets are corrected in place, and only the items after the first changed index are recomputed.
 
@@ -443,7 +445,7 @@ npm run ios   # or: npm run android
 
 ## Development
 
-- `npm run codegen` — regenerate Nitro bindings (`nitrogen/generated`) after touching `src/NitroListView.nitro.ts`, then build.
+- `npm run codegen` — regenerate Nitro bindings (`nitrogen/generated`) after touching `src/NitroListEngine.nitro.ts`, then build.
 - `npm test` — Jest suite for the TS layer.
 - `npm run test:cpp` — compiles and runs the C++ `LayoutCore` host tests with ASan/UBSan (no device needed).
 - `npm run typecheck` / `npm run build` — TS validation and library output (`lib/`).

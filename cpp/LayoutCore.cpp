@@ -8,12 +8,20 @@ namespace margelo::nitro::nitrolist {
 
 namespace {
 
-constexpr float kBufferAheadRatio = 1.5f;
-constexpr float kBufferBehindRatio = 0.5f;
-constexpr float kDirectionalMinVelocity = 300.0f;
+constexpr double kBufferAheadRatio = 1.5;
+constexpr double kBufferBehindRatio = 0.5;
+constexpr double kDirectionalMinVelocity = 300.0;
 constexpr double kVelocityStaleMs = 200.0;
+constexpr double kVelocityMinSampleMs = 4.0;
+constexpr int32_t kRegimeConfirmSamples = 2;
 
-constexpr float kTypeMeanSweepThreshold = 0.5f;
+constexpr double kTypeMeanSweepThreshold = 0.5;
+constexpr double kTypeMeanSweepRelative = 0.02;
+
+inline double typeMeanSweepBar(double appliedMean) {
+  const double relative = std::abs(appliedMean) * kTypeMeanSweepRelative;
+  return relative > kTypeMeanSweepThreshold ? relative : kTypeMeanSweepThreshold;
+}
 constexpr int32_t kMaxTypeStats = 4096;
 
 double defaultClockMs() {
@@ -31,7 +39,7 @@ bool LayoutCore::setItemCount(int32_t count) {
   const auto capacity = static_cast<int32_t>(sizes_.size());
   if (count > capacity) {
     sizes_.resize(count, 0.0f);
-    offsets_.resize(count, 0.0f);
+    offsets_.resize(count, 0.0);
     measured_.resize(count, 0);
     types_.resize(count, 0);
   }
@@ -61,8 +69,11 @@ void LayoutCore::setDirectionalBuffers(bool enabled) {
     return;
   }
   directionalBuffers_ = enabled;
-  velocity_ = 0.0f;
+  velocity_ = 0.0;
   lastSampleTimeMs_ = -1.0;
+  regime_ = 0;
+  pendingRegime_ = 0;
+  pendingRegimeCount_ = 0;
   hasRangeWindow_ = false;
 }
 
@@ -80,19 +91,26 @@ bool LayoutCore::setEstimatesFrozen(bool frozen) {
 
 void LayoutCore::resetScrollVelocity() {
   std::lock_guard<std::mutex> guard(mutex_);
-  velocity_ = 0.0f;
+  velocity_ = 0.0;
   lastSampleTimeMs_ = -1.0;
+  lastSampleOffset_ = 0.0;
+  regime_ = 0;
+  pendingRegime_ = 0;
+  pendingRegimeCount_ = 0;
 }
 
 void LayoutCore::setClockForTesting(ClockFn clock) {
   std::lock_guard<std::mutex> guard(mutex_);
   clock_ = clock;
-  velocity_ = 0.0f;
+  velocity_ = 0.0;
   lastSampleTimeMs_ = -1.0;
+  regime_ = 0;
+  pendingRegime_ = 0;
+  pendingRegimeCount_ = 0;
   hasRangeWindow_ = false;
 }
 
-bool LayoutCore::setEstimate(float value) {
+bool LayoutCore::setEstimate(double value) {
   std::lock_guard<std::mutex> guard(mutex_);
   const float rounded = roundToOctave(value);
   if (rounded == estimate_) {
@@ -110,12 +128,12 @@ bool LayoutCore::setEstimate(float value) {
   return anyChanged;
 }
 
-void LayoutCore::setMeasurementEpsilon(float value) {
+void LayoutCore::setMeasurementEpsilon(double value) {
   std::lock_guard<std::mutex> guard(mutex_);
-  measurementEpsilon_ = std::max(0.0f, value);
+  measurementEpsilon_ = std::max(0.0, value);
 }
 
-bool LayoutCore::setItemSize(int32_t index, float size) {
+bool LayoutCore::setItemSize(int32_t index, double size) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (index < 0 || index >= itemCount_) {
     return false;
@@ -132,29 +150,29 @@ bool LayoutCore::setItemSize(int32_t index, float size) {
   return true;
 }
 
-bool LayoutCore::setItemSizes(const double* pairs, int32_t pairCount, float scale) {
+bool LayoutCore::setItemSizes(const double* pairs, int32_t pairCount, double scale) {
   std::lock_guard<std::mutex> guard(mutex_);
   return applyItemSizesLocked(pairs, pairCount, scale);
 }
 
-float LayoutCore::setItemSizesAnchored(const double* pairs, int32_t pairCount, float scale,
-                                       int32_t anchorIndex) {
+double LayoutCore::setItemSizesAnchored(const double* pairs, int32_t pairCount, double scale,
+                                        int32_t anchorIndex) {
   std::lock_guard<std::mutex> guard(mutex_);
   const bool anchorValid = anchorIndex >= 0 && anchorIndex < itemCount_;
-  float before = 0.0f;
+  double before = 0.0;
   if (anchorValid) {
     ensureClean();
     before = offsets_[anchorIndex];
   }
   const bool anyChanged = applyItemSizesLocked(pairs, pairCount, scale);
   if (!anchorValid || !anyChanged) {
-    return 0.0f;
+    return 0.0;
   }
   ensureClean();
   return offsets_[anchorIndex] - before;
 }
 
-bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, float scale) {
+bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, double scale) {
   if (pairs == nullptr || pairCount <= 0) {
     return false;
   }
@@ -164,7 +182,7 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, fl
     if (idx < 0 || idx >= itemCount_) {
       continue;
     }
-    const float rounded = std::max(0.0f, roundToOctave(static_cast<float>(pairs[i * 2 + 1]) * scale));
+    const float rounded = std::max(0.0f, roundToOctave(pairs[i * 2 + 1] * scale));
     if (measured_[idx] != 0 && std::abs(sizes_[idx] - rounded) <= measurementEpsilon_) {
       continue;
     }
@@ -250,7 +268,7 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
 void LayoutCore::resetAll() {
   std::lock_guard<std::mutex> guard(mutex_);
   std::vector<float>().swap(sizes_);
-  std::vector<float>().swap(offsets_);
+  std::vector<double>().swap(offsets_);
   std::vector<uint8_t>().swap(measured_);
   std::vector<uint16_t>().swap(types_);
   std::vector<uint16_t>().swap(spans_);
@@ -259,40 +277,62 @@ void LayoutCore::resetAll() {
   columnCount_ = 1;
   itemCount_ = 0;
   estimate_ = 0.0f;
-  totalSize_ = 0.0f;
+  totalSize_ = 0.0;
   estimatesFrozen_ = false;
   minDirtyIndex_ = INT32_MAX;
   layoutVersion_ = 0;
   hasRangeWindow_ = false;
-  rangeWindowMin_ = 0.0f;
-  rangeWindowMax_ = 0.0f;
-  rangeWindowViewport_ = -1.0f;
-  rangeWindowDraw_ = -1.0f;
+  rangeWindowMin_ = 0.0;
+  rangeWindowMax_ = 0.0;
+  rangeWindowViewport_ = -1.0;
+  rangeWindowDraw_ = -1.0;
   cachedStart_ = 0;
   cachedEnd_ = -1;
   cachedVersion_ = -1;
   cachedRegime_ = 0;
   lastSampleTimeMs_ = -1.0;
-  lastSampleOffset_ = 0.0f;
-  velocity_ = 0.0f;
+  lastSampleOffset_ = 0.0;
+  velocity_ = 0.0;
+  regime_ = 0;
+  pendingRegime_ = 0;
+  pendingRegimeCount_ = 0;
 }
 
 size_t LayoutCore::getMemoryFootprint() {
   std::lock_guard<std::mutex> guard(mutex_);
-  return sizes_.capacity() * sizeof(float) + offsets_.capacity() * sizeof(float) +
+  return sizes_.capacity() * sizeof(float) + offsets_.capacity() * sizeof(double) +
          measured_.capacity() * sizeof(uint8_t) + types_.capacity() * sizeof(uint16_t) +
          typeStats_.capacity() * sizeof(TypeStats);
 }
 
-void LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {
+bool LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {
   std::lock_guard<std::mutex> guard(mutex_);
+  return assignTypesLocked(0, types, count);
+}
+
+bool LayoutCore::setItemTypesRange(int32_t start, const uint16_t* types, int32_t count) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (start < 0 || start >= itemCount_) {
+    return true;
+  }
+  return assignTypesLocked(start, types, std::min(count, itemCount_ - start));
+}
+
+bool LayoutCore::assignTypesLocked(int32_t start, const uint16_t* types, int32_t count) {
   if (static_cast<int32_t>(types_.size()) < itemCount_) {
     types_.resize(itemCount_, 0);
   }
-  for (int32_t i = 0; i < itemCount_; i++) {
-    types_[i] = (types != nullptr && i < count) ? types[i] : 0;
+  const int32_t end = start == 0 ? itemCount_ : std::min(itemCount_, start + std::max(0, count));
+  bool allTracked = true;
+  for (int32_t i = start; i < end; i++) {
+    const int32_t k = i - start;
+    const uint16_t type = (types != nullptr && k < count) ? types[k] : 0;
+    if (type >= kMaxTypeStats) {
+      allTracked = false;
+    }
+    types_[i] = type;
   }
-  for (int32_t i = 0; i < itemCount_; i++) {
+  for (int32_t i = start; i < end; i++) {
     if (measured_[i] != 0) {
       continue;
     }
@@ -302,9 +342,23 @@ void LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {
       minDirtyIndex_ = std::min(minDirtyIndex_, i);
     }
   }
+  return allTracked;
 }
 
-bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, float scale) {
+int32_t LayoutCore::countUnmeasured(int32_t from, int32_t to) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  const int32_t lo = std::max(0, from);
+  const int32_t hi = std::min(itemCount_, to);
+  int32_t unmeasured = 0;
+  for (int32_t i = lo; i < hi; i++) {
+    if (measured_[i] == 0) {
+      unmeasured++;
+    }
+  }
+  return unmeasured;
+}
+
+bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double scale) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (!typeAverages_ || pairs == nullptr || pairCount <= 0) {
     return false;
@@ -312,7 +366,7 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, float sca
   bool anySeeded = false;
   for (int32_t p = 0; p < pairCount; p++) {
     const auto type = static_cast<int32_t>(pairs[2 * p]);
-    const float mean = roundToOctave(static_cast<float>(pairs[2 * p + 1]) * scale);
+    const float mean = roundToOctave(pairs[2 * p + 1] * scale);
     if (type <= 0 || type >= kMaxTypeStats || !(mean > 0.0f)) {
       continue;
     }
@@ -355,7 +409,7 @@ void LayoutCore::setTypeAverages(bool enabled) {
   typeStats_.clear();
 }
 
-int32_t LayoutCore::fillTypeStats(double* out, int32_t capacityDoubles, float outputScale) {
+int32_t LayoutCore::fillTypeStats(double* out, int32_t capacityDoubles, double outputScale) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (out == nullptr) {
     return -1;
@@ -376,31 +430,31 @@ int32_t LayoutCore::fillTypeStats(double* out, int32_t capacityDoubles, float ou
       continue;
     }
     *cursor++ = static_cast<double>(type);
-    *cursor++ = stats.mean * static_cast<double>(outputScale);
+    *cursor++ = stats.mean * outputScale;
     *cursor++ = static_cast<double>(stats.num);
   }
   return count;
 }
 
-float LayoutCore::getTotalSize() {
+double LayoutCore::getTotalSize() {
   std::lock_guard<std::mutex> guard(mutex_);
   ensureClean();
   return totalSize_;
 }
 
-float LayoutCore::getOffset(int32_t index) {
+double LayoutCore::getOffset(int32_t index) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (index < 0 || index >= itemCount_) {
-    return 0.0f;
+    return 0.0;
   }
   ensureClean();
   return offsets_[index];
 }
 
-float LayoutCore::getSize(int32_t index) {
+double LayoutCore::getSize(int32_t index) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (index < 0 || index >= itemCount_) {
-    return 0.0f;
+    return 0.0;
   }
   return sizes_[index];
 }
@@ -411,15 +465,16 @@ int32_t LayoutCore::getLayoutVersion() {
   return layoutVersion_;
 }
 
-LayoutCore::EngagedRange LayoutCore::getEngagedRange(float scrollOffset,
-                                                     float viewportHeight,
-                                                     float drawDistance) {
+LayoutCore::EngagedRange LayoutCore::getEngagedRange(double scrollOffset,
+                                                     double viewportHeight,
+                                                     double drawDistance) {
   std::lock_guard<std::mutex> guard(mutex_);
   return computeEngagedRangeLocked(scrollOffset, viewportHeight, drawDistance);
 }
 
-int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, float scrollOffset,
-                                   float viewportHeight, float drawDistance, float outputScale) {
+int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, double scrollOffset,
+                                   double viewportHeight, double drawDistance,
+                                   double outputScale) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (out == nullptr || capacityDoubles < 4) {
     return -1;
@@ -430,43 +485,71 @@ int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, float s
     return -1;
   }
   out[0] = range.version;
-  out[1] = static_cast<double>(totalSize_) * outputScale;
+  out[1] = totalSize_ * outputScale;
   out[2] = range.start;
   out[3] = range.end;
   double* cursor = out + 4;
   for (int32_t i = range.start; i < range.start + count; i++) {
-    *cursor++ = static_cast<double>(offsets_[i]) * outputScale;
+    *cursor++ = offsets_[i] * outputScale;
     *cursor++ = static_cast<double>(sizes_[i]) * outputScale;
   }
   return count;
 }
 
-LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffset,
-                                                               float viewportHeight,
-                                                               float drawDistance) {
+LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffset,
+                                                               double viewportHeight,
+                                                               double drawDistance) {
   if (directionalBuffers_ && scrollOffset != lastSampleOffset_) {
     const double now = clock_ != nullptr ? clock_() : defaultClockMs();
+    bool advanceBaseline = true;
+    bool sampled = false;
     if (lastSampleTimeMs_ >= 0.0) {
       const double dt = now - lastSampleTimeMs_;
       if (dt > kVelocityStaleMs) {
-        velocity_ = 0.0f;
-      } else if (dt >= 1.0) {
-        velocity_ = static_cast<float>((scrollOffset - lastSampleOffset_) / dt * 1000.0);
+        velocity_ = 0.0;
+        sampled = true;
+      } else if (dt >= kVelocityMinSampleMs) {
+        velocity_ = (scrollOffset - lastSampleOffset_) / dt * 1000.0;
+        sampled = true;
+      } else {
+        advanceBaseline = false;
       }
     }
-    lastSampleTimeMs_ = now;
-    lastSampleOffset_ = scrollOffset;
+    if (advanceBaseline) {
+      lastSampleTimeMs_ = now;
+      lastSampleOffset_ = scrollOffset;
+    }
+    if (sampled) {
+      int32_t candidate = 0;
+      if (std::abs(velocity_) >= kDirectionalMinVelocity) {
+        candidate = velocity_ > 0.0 ? 1 : -1;
+      }
+      if (candidate == regime_) {
+        pendingRegime_ = 0;
+        pendingRegimeCount_ = 0;
+      } else if (candidate == 0 || regime_ != 0) {
+        regime_ = 0;
+        pendingRegime_ = candidate;
+        pendingRegimeCount_ = candidate == 0 ? 0 : 1;
+      } else if (candidate == pendingRegime_) {
+        if (++pendingRegimeCount_ >= kRegimeConfirmSamples) {
+          regime_ = candidate;
+          pendingRegime_ = 0;
+          pendingRegimeCount_ = 0;
+        }
+      } else {
+        pendingRegime_ = candidate;
+        pendingRegimeCount_ = 1;
+      }
+    }
   }
-  int32_t regime = 0;
-  if (directionalBuffers_ && std::abs(velocity_) >= kDirectionalMinVelocity) {
-    regime = velocity_ > 0.0f ? 1 : -1;
-  }
-  const float topBuffer = regime == 0    ? drawDistance
-                          : regime > 0   ? drawDistance * kBufferBehindRatio
-                                         : drawDistance * kBufferAheadRatio;
-  const float bottomBuffer = regime == 0  ? drawDistance
-                             : regime > 0 ? drawDistance * kBufferAheadRatio
-                                          : drawDistance * kBufferBehindRatio;
+  const int32_t regime = directionalBuffers_ ? regime_ : 0;
+  const double topBuffer = regime == 0    ? drawDistance
+                           : regime > 0   ? drawDistance * kBufferBehindRatio
+                                          : drawDistance * kBufferAheadRatio;
+  const double bottomBuffer = regime == 0  ? drawDistance
+                              : regime > 0 ? drawDistance * kBufferAheadRatio
+                                           : drawDistance * kBufferBehindRatio;
   if (hasRangeWindow_ && minDirtyIndex_ == INT32_MAX && cachedVersion_ == layoutVersion_ &&
       viewportHeight == rangeWindowViewport_ && drawDistance == rangeWindowDraw_ &&
       regime == cachedRegime_ && scrollOffset > rangeWindowMin_ &&
@@ -474,12 +557,12 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
     return EngagedRange{cachedStart_, cachedEnd_, cachedVersion_};
   }
   ensureClean();
-  if (itemCount_ == 0 || viewportHeight <= 0.0f) {
+  if (itemCount_ == 0 || viewportHeight <= 0.0) {
     hasRangeWindow_ = false;
     return EngagedRange{0, -1, layoutVersion_};
   }
-  const float top = std::max(0.0f, scrollOffset - topBuffer);
-  const float bottom = std::min(totalSize_, scrollOffset + viewportHeight + bottomBuffer);
+  const double top = std::max(0.0, scrollOffset - topBuffer);
+  const double bottom = std::min(totalSize_, scrollOffset + viewportHeight + bottomBuffer);
   if (totalSize_ <= top) {
     hasRangeWindow_ = false;
     const int32_t lastStart =
@@ -502,11 +585,11 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(float scrollOffse
     hasRangeWindow_ = false;
     return EngagedRange{start, end, layoutVersion_};
   }
-  float lower = offsets_[end] - viewportHeight - bottomBuffer;
+  double lower = offsets_[end] - viewportHeight - bottomBuffer;
   if (start > 0) {
     lower = std::max(lower, offsets_[start - 1] + sizes_[start - 1] + topBuffer);
   }
-  float upper = offsets_[start] + sizes_[start] + topBuffer;
+  double upper = offsets_[start] + sizes_[start] + topBuffer;
   if (end < itemCount_ - 1) {
     upper = std::min(upper, offsets_[end + 1] - viewportHeight - bottomBuffer);
   }
@@ -573,8 +656,8 @@ void LayoutCore::ensureClean() {
   }
   bool anyChanged = false;
   if (columnCount_ <= 1) {
-    float off =
-        minDirtyIndex_ == 0 ? 0.0f : offsets_[minDirtyIndex_ - 1] + sizes_[minDirtyIndex_ - 1];
+    double off =
+        minDirtyIndex_ == 0 ? 0.0 : offsets_[minDirtyIndex_ - 1] + sizes_[minDirtyIndex_ - 1];
     for (int32_t i = minDirtyIndex_; i < itemCount_; i++) {
       if (offsets_[i] != off) {
         offsets_[i] = off;
@@ -594,12 +677,12 @@ void LayoutCore::ensureClean() {
     if (start > 0) {
       start = rowStart_[start];
     }
-    float off = 0.0f;
+    double off = 0.0;
     if (start > 0) {
       const int32_t prevRow = rowStart_[start - 1];
-      float prevRowMax = 0.0f;
+      double prevRowMax = 0.0;
       for (int32_t j = prevRow; j < start; j++) {
-        prevRowMax = std::max(prevRowMax, sizes_[j]);
+        prevRowMax = std::max(prevRowMax, static_cast<double>(sizes_[j]));
       }
       off = offsets_[prevRow] + prevRowMax;
     }
@@ -607,7 +690,7 @@ void LayoutCore::ensureClean() {
     while (i < itemCount_) {
       const int32_t rowBegin = i;
       int32_t used = 0;
-      float rowMax = 0.0f;
+      double rowMax = 0.0;
       while (i < itemCount_) {
         const int32_t span = spanAtLocked(i);
         if (used > 0 && used + span > columnCount_) {
@@ -618,7 +701,7 @@ void LayoutCore::ensureClean() {
           anyChanged = true;
         }
         rowStart_[i] = rowBegin;
-        rowMax = std::max(rowMax, sizes_[i]);
+        rowMax = std::max(rowMax, static_cast<double>(sizes_[i]));
         used += span;
         i++;
         if (used >= columnCount_) {
@@ -638,11 +721,7 @@ void LayoutCore::ensureClean() {
   }
 }
 
-float LayoutCore::roundToOctave(float value) {
-  return std::round(value * 8.0f) / 8.0f;
-}
-
-float LayoutCore::roundToOctaveFromDouble(double value) {
+float LayoutCore::roundToOctave(double value) {
   return static_cast<float>(std::round(value * 8.0) / 8.0);
 }
 
@@ -678,7 +757,7 @@ bool LayoutCore::applyTypeMeansLocked() {
   bool anyDrifted = false;
   for (TypeStats& stats : typeStats_) {
     if (stats.num > 0 &&
-        std::abs(stats.mean - stats.appliedMean) > static_cast<double>(kTypeMeanSweepThreshold)) {
+        std::abs(stats.mean - stats.appliedMean) > typeMeanSweepBar(stats.appliedMean)) {
       anyDrifted = true;
     }
   }
@@ -695,10 +774,10 @@ bool LayoutCore::applyTypeMeansLocked() {
       continue;
     }
     const TypeStats& stats = typeStats_[type];
-    if (std::abs(stats.mean - stats.appliedMean) <= static_cast<double>(kTypeMeanSweepThreshold)) {
+    if (std::abs(stats.mean - stats.appliedMean) <= typeMeanSweepBar(stats.appliedMean)) {
       continue;
     }
-    const float rounded = roundToOctaveFromDouble(stats.mean);
+    const float rounded = roundToOctave(stats.mean);
     if (sizes_[i] != rounded) {
       sizes_[i] = rounded;
       anyChanged = true;
@@ -716,7 +795,7 @@ bool LayoutCore::applyTypeMeansLocked() {
 float LayoutCore::estimateForTypeLocked(uint16_t type) const {
   if (typeAverages_ && type < typeStats_.size() &&
       (typeStats_[type].num > 0 || typeStats_[type].seeded)) {
-    return roundToOctaveFromDouble(typeStats_[type].mean);
+    return roundToOctave(typeStats_[type].mean);
   }
   return estimate_;
 }

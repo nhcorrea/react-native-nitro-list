@@ -15,10 +15,7 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
-#include "JHybridNitroListViewSpec.hpp"
-#include "JFunc_void_double_double_double_double.hpp"
-#include "views/JHybridNitroListViewStateUpdater.hpp"
-#include <NitroModules/DefaultConstructableObject.hpp>
+#include "HybridNitroListEngine.hpp"
 
 namespace margelo::nitro::nitrolist {
 
@@ -28,29 +25,23 @@ int initialize(JavaVM* vm) {
   });
 }
 
-struct JHybridNitroListViewSpecImpl: public jni::JavaClass<JHybridNitroListViewSpecImpl, JHybridNitroListViewSpec::JavaPart> {
-  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/nitrolist/HybridNitroListView;";
-  static std::shared_ptr<JHybridNitroListViewSpec> create() {
-    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridNitroListViewSpecImpl::javaobject()>();
-    jni::local_ref<JHybridNitroListViewSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
-    return javaPart->getJHybridNitroListViewSpec();
-  }
-};
+
 
 void registerAllNatives() {
   using namespace margelo::nitro;
   using namespace margelo::nitro::nitrolist;
 
   // Register native JNI methods
-  margelo::nitro::nitrolist::JHybridNitroListViewSpec::CxxPart::registerNatives();
-  margelo::nitro::nitrolist::JFunc_void_double_double_double_double_cxx::registerNatives();
-  margelo::nitro::nitrolist::views::JHybridNitroListViewStateUpdater::registerNatives();
+  
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(
-    "NitroListView",
+    "NitroListEngine",
     []() -> std::shared_ptr<HybridObject> {
-      return JHybridNitroListViewSpecImpl::create();
+      static_assert(std::is_default_constructible_v<HybridNitroListEngine>,
+                    "The HybridObject \"HybridNitroListEngine\" is not default-constructible! "
+                    "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
+      return std::make_shared<HybridNitroListEngine>();
     }
   );
 }

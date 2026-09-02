@@ -1,6 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
+import React, {useEffect} from 'react';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
+import type {NitroListRenderItem} from '../NitroList';
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
 
 const VIEWPORT_W = 400;
@@ -32,6 +34,222 @@ describe('imperative scroll integration', () => {
       await harness.settle(stepMs);
     }
   }
+
+  it('animated scrollToOffset mounts each cell at most once and never remounts the origin', async () => {
+    const mounts = new Map<number, number>();
+    const unmounts = new Map<number, number>();
+    const Cell = ({index}: {index: number}) => {
+      useEffect(() => {
+        mounts.set(index, (mounts.get(index) ?? 0) + 1);
+        return () => {
+          unmounts.set(index, (unmounts.get(index) ?? 0) + 1);
+        };
+      }, [index]);
+      return null;
+    };
+    const renderItem: NitroListRenderItem<string> = ({index, target}) =>
+      target === 'Cell' ? <Cell index={index} /> : null;
+    harness = renderNitroList({
+      data: makeItems(200),
+      renderItem,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    const originIndices = harness.renderedIndices();
+    const mountsBefore = new Map(mounts);
+    const unmountsBefore = new Map(unmounts);
+    harness.animatedScrollFrames = 4;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    act(() => {
+      harness.handle.scrollToOffset({offset: 3000, animated: true});
+    });
+    await harness.settleAnimatedScroll();
+
+    expect(harness.lastScrollTop()).toBe(3000);
+    expect(harness.renderedIndices()).toContain(30);
+    expect(harness.renderedIndices()).toContain(35);
+    expect(harness.renderedIndices()).not.toContain(0);
+
+    let newMounts = 0;
+    const newlyMounted = new Set<number>();
+    for (const [index, count] of mounts) {
+      const delta = count - (mountsBefore.get(index) ?? 0);
+      expect(delta).toBeLessThanOrEqual(1);
+      newMounts += delta;
+      if (delta > 0) newlyMounted.add(index);
+    }
+    expect(newMounts).toBe(newlyMounted.size);
+    for (const index of originIndices) {
+      expect(mounts.get(index)).toBe(mountsBefore.get(index));
+      expect((unmounts.get(index) ?? 0) - (unmountsBefore.get(index) ?? 0)).toBe(1);
+    }
+    for (const index of newlyMounted) {
+      expect(originIndices).not.toContain(index);
+    }
+  });
+
+  function trackCellLifecycle(): {
+    mounts: Map<number, number>;
+    unmounts: Map<number, number>;
+    renderItem: NitroListRenderItem<string>;
+  } {
+    const mounts = new Map<number, number>();
+    const unmounts = new Map<number, number>();
+    const Cell = ({index}: {index: number}) => {
+      useEffect(() => {
+        mounts.set(index, (mounts.get(index) ?? 0) + 1);
+        return () => {
+          unmounts.set(index, (unmounts.get(index) ?? 0) + 1);
+        };
+      }, [index]);
+      return null;
+    };
+    const renderItem: NitroListRenderItem<string> = ({index, target}) =>
+      target === 'Cell' ? <Cell index={index} /> : null;
+    return {mounts, unmounts, renderItem};
+  }
+
+  it('a long animated scrollToOffset keeps only origin and destination mounted while flying over content', async () => {
+    const {mounts, unmounts, renderItem} = trackCellLifecycle();
+    harness = renderNitroList({
+      data: makeItems(400),
+      renderItem,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    const origin = harness.renderedIndices();
+    const mountsBefore = new Map(mounts);
+    harness.animatedScrollFrames = 6;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    act(() => {
+      harness.handle.scrollToOffset({offset: 20000, animated: true});
+    });
+    const destination = harness.renderedIndices().filter((index) => !origin.includes(index));
+    expect(destination).toContain(200);
+    expect(destination).toContain(205);
+    const allowed = new Set([...origin, ...destination]);
+
+    for (let k = 0; k < harness.animatedScrollFrames; k++) {
+      await harness.settle(harness.animatedScrollFrameMs);
+      const inFlight = harness.renderedIndices();
+      expect(inFlight.every((index) => allowed.has(index))).toBe(true);
+      expect(inFlight).toEqual(expect.arrayContaining(origin));
+      expect(inFlight).toEqual(expect.arrayContaining(destination));
+    }
+    expect(harness.lastScrollTop()).toBe(20000);
+    await harness.settle(harness.animatedScrollFrameMs);
+
+    const final = harness.renderedIndices();
+    expect(final).toEqual(destination);
+    for (let index = Math.max(...origin) + 1; index < Math.min(...destination); index++) {
+      expect(mounts.has(index)).toBe(false);
+    }
+    for (const index of origin) {
+      expect(mounts.get(index)).toBe(mountsBefore.get(index));
+      expect(unmounts.get(index)).toBe(1);
+    }
+    for (const index of destination) {
+      expect(mounts.get(index)).toBe(1);
+      expect(unmounts.has(index)).toBe(false);
+    }
+  });
+
+  it('animated scrollToIndex to a far row does not mount the rows it flies over', async () => {
+    const {mounts, renderItem} = trackCellLifecycle();
+    harness = renderNitroList({
+      data: makeItems(400),
+      renderItem,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    const origin = harness.renderedIndices();
+    harness.animatedScrollFrames = 6;
+    let promise!: Promise<void>;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    act(() => {
+      promise = harness.handle.scrollToIndex({index: 250, animated: true});
+    });
+    await harness.settleAnimatedScroll();
+    await harness.settle(400);
+    await promise;
+
+    expect(harness.lastScrollTop()).toBe(25000);
+    const final = harness.renderedIndices();
+    expect(final).toContain(250);
+    expect(final).not.toContain(0);
+    for (let index = Math.max(...origin) + 1; index < 240; index++) {
+      expect(mounts.has(index)).toBe(false);
+    }
+  });
+
+  it('a drag that interrupts an animated scrollToOffset commits the range under the finger', async () => {
+    harness = renderNitroList({
+      data: makeItems(400),
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    harness.animatedScrollFrames = 6;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    act(() => {
+      harness.handle.scrollToOffset({offset: 20000, animated: true});
+    });
+    for (let k = 0; k < 3; k++) {
+      await harness.settle(harness.animatedScrollFrameMs);
+    }
+    expect(harness.lastScrollTop()).toBe(10000);
+    expect(harness.renderedIndices()).not.toContain(100);
+
+    harness.beginDrag(10000);
+    expect(harness.renderedIndices()).toContain(100);
+    expect(harness.renderedIndices()).toContain(105);
+    expect(harness.renderedIndices()).not.toContain(0);
+    expect(harness.renderedIndices()).not.toContain(200);
+  });
+
+  it('a touch scroll still commits every intermediate range', async () => {
+    harness = renderNitroList({
+      data: makeItems(400),
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    harness.beginDrag(0);
+    harness.scroll(3000);
+    expect(harness.renderedIndices()).toContain(30);
+    expect(harness.renderedIndices()).toContain(35);
+    harness.scroll(6000);
+    expect(harness.renderedIndices()).toContain(60);
+    expect(harness.renderedIndices()).not.toContain(30);
+    harness.endDrag(6000);
+    harness.momentumBegin(6000);
+    harness.scroll(9000);
+    expect(harness.renderedIndices()).toContain(90);
+    harness.momentumEnd(9000);
+    expect(harness.renderedIndices()).toContain(90);
+    expect(harness.renderedIndices()).not.toContain(60);
+    expect(harness.lastScrollTop()).toBe(9000);
+  });
 
   it('scrollToIndex converges onto under-estimated items and freezes estimates meanwhile', async () => {
     harness = renderNitroList({
