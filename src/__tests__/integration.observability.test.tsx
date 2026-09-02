@@ -1,6 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
+import {NitroListPerfMonitor} from '../PerfMonitor';
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
 
 const VIEWPORT_W = 400;
@@ -127,5 +128,40 @@ describe('public observability integration (T19)', () => {
     const averages = harness.handle.getAverageItemSizes();
     expect(averages['']).toBeDefined();
     expect(averages[''].average).toBeCloseTo(110, 3);
+  });
+});
+
+describe('render cascade (plan 2026-09-01, Fase E)', () => {
+  it('a scroll that moves the range re-renders the cells component, not the orchestrator', async () => {
+    const harness = renderNitroList({
+      data: makeItems(400),
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(400, 800);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    NitroListPerfMonitor.enable();
+    NitroListPerfMonitor.reset();
+    const rangesBefore = harness.renderedIndices().join(',');
+    let rangeChanges = 0;
+    let last = rangesBefore;
+    for (let y = 1000; y <= 12000; y += 1000) {
+      harness.scroll(y);
+      const now = harness.renderedIndices().join(',');
+      if (now !== last) rangeChanges++;
+      last = now;
+    }
+    await harness.settle(50);
+    const snap = NitroListPerfMonitor.getSnapshot();
+    NitroListPerfMonitor.disable();
+
+    expect(rangeChanges).toBeGreaterThanOrEqual(5);
+    expect(snap.cellsRenders).toBeGreaterThanOrEqual(rangeChanges);
+    expect(snap.orchestratorRenders).toBeLessThanOrEqual(1);
+    expect(harness.renderedIndices()).toContain(120);
+    harness.unmount();
   });
 });

@@ -12,6 +12,7 @@ file(GLOB_RECURSE android_files RELATIVE ${CMAKE_SOURCE_DIR}
 add_library(${PACKAGE_NAME} SHARED
             ${android_files}
             ../cpp/LayoutCore.cpp
+            ../cpp/HybridNitroListEngine.cpp
 )
 
 include(${CMAKE_SOURCE_DIR}/../nitrogen/generated/android/NitroList+autolinking.cmake)

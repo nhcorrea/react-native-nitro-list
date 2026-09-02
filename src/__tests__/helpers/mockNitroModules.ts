@@ -11,3 +11,11 @@ export function getHostComponent(): never {
     'getHostComponent must not be reached in jest — NitroListHost is mapped to its mock',
   );
 }
+
+export const NitroModules = {
+  createHybridObject(): never {
+    throw new Error(
+      'createHybridObject must not be reached in jest — NitroListHost is mapped to its mock',
+    );
+  },
+};

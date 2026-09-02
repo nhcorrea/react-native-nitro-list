@@ -1,24 +1,26 @@
 {
   "$schema": "https://nitro.margelo.com/nitro.schema.json",
-  "cxxNamespace": ["nitrolist"],
+  "cxxNamespace": [
+    "nitrolist"
+  ],
   "ios": {
     "iosModuleName": "NitroList"
   },
   "android": {
-    "androidNamespace": ["nitrolist"],
+    "androidNamespace": [
+      "nitrolist"
+    ],
     "androidCxxLibName": "NitroList"
   },
   "autolinking": {
-    "NitroListView": {
-      "ios": {
-        "language": "swift",
-        "implementationClassName": "HybridNitroListView"
-      },
-      "android": {
-        "language": "kotlin",
-        "implementationClassName": "HybridNitroListView"
+    "NitroListEngine": {
+      "all": {
+        "language": "c++",
+        "implementationClassName": "HybridNitroListEngine"
       }
     }
   },
-  "ignorePaths": ["**/node_modules"]
+  "ignorePaths": [
+    "**/node_modules"
+  ]
 }

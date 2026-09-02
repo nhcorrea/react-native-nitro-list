@@ -12,15 +12,5 @@ import NitroModules
 public final class NitroListAutolinking {
   public typealias bridge = margelo.nitro.nitrolist.bridge.swift
 
-  public static func createNitroListView() -> bridge.std__shared_ptr_HybridNitroListViewSpec_ {
-    let hybridObject = HybridNitroListView()
-    return { () -> bridge.std__shared_ptr_HybridNitroListViewSpec_ in
-      let __cxxWrapped = hybridObject.getCxxWrapper()
-      return __cxxWrapped.getCxxPart()
-    }()
-  }
   
-  public static func isNitroListViewRecyclable() -> Bool {
-    return HybridNitroListView.self is any RecyclableView.Type
-  }
 }

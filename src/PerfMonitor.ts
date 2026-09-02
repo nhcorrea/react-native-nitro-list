@@ -14,7 +14,6 @@ export interface NitroListScrollToIndexStats {
   prewarmRestarts: number;
   correctionPasses: number;
   animated: boolean;
-  /** Bench-only trace of how each wait resolved (`commit:evt 12`, `layout(13):raf 33`, …). */
   phases?: string;
 }
 
@@ -46,6 +45,9 @@ export interface NitroListPerfSnapshot {
   flingPrewarmOutcomes: number;
   flingPrewarmMisses: number;
   layoutVersionBumps: number;
+  userCallbacks: number;
+  orchestratorRenders: number;
+  cellsRenders: number;
 }
 
 const RANGE_LATENCY_WINDOW_MS = 200;
@@ -125,6 +127,9 @@ class NitroListPerfMonitorImpl {
   private flingPrewarmOutcomes = 0;
   private flingPrewarmMisses = 0;
   private layoutVersionBumps = 0;
+  private userCallbacks = 0;
+  private orchestratorRenders = 0;
+  private cellsRenders = 0;
 
   enable() {
     this.enabled = true;
@@ -164,6 +169,9 @@ class NitroListPerfMonitorImpl {
     this.flingPrewarmOutcomes = 0;
     this.flingPrewarmMisses = 0;
     this.layoutVersionBumps = 0;
+    this.userCallbacks = 0;
+    this.orchestratorRenders = 0;
+    this.cellsRenders = 0;
   }
 
   recordScrollSample(blankPx: number) {
@@ -271,6 +279,21 @@ class NitroListPerfMonitorImpl {
     this.layoutVersionBumps++;
   }
 
+  recordUserCallbacks(count: number) {
+    if (!this.enabled) return;
+    this.userCallbacks += count;
+  }
+
+  recordOrchestratorRender() {
+    if (!this.enabled) return;
+    this.orchestratorRenders++;
+  }
+
+  recordCellsRender() {
+    if (!this.enabled) return;
+    this.cellsRenders++;
+  }
+
   getSnapshot(): NitroListPerfSnapshot {
     return {
       enabled: this.enabled,
@@ -300,6 +323,9 @@ class NitroListPerfMonitorImpl {
       flingPrewarmOutcomes: this.flingPrewarmOutcomes,
       flingPrewarmMisses: this.flingPrewarmMisses,
       layoutVersionBumps: this.layoutVersionBumps,
+      userCallbacks: this.userCallbacks,
+      orchestratorRenders: this.orchestratorRenders,
+      cellsRenders: this.cellsRenders,
     };
   }
 }

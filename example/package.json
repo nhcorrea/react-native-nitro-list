@@ -9,7 +9,7 @@
     "start": "react-native start --reset-cache",
     "test": "jest",
     "pod": "bundle install && bundle exec pod install --project-directory=ios",
-    "apk": "cd android && ./gradlew :app:createBundleReleaseJsAndAssets --rerun assembleRelease -PreactNativeArchitectures=arm64-v8a",
+    "apk": "rm -rf ./android/app/build/outputs/apk/release/app-release.apk && cd android && ./gradlew :app:createBundleReleaseJsAndAssets --rerun assembleRelease -PreactNativeArchitectures=arm64-v8a",
     "apk:all-abis": "cd android && ./gradlew assembleRelease",
     "apk:clean": "cd android && ./gradlew clean",
     "apk:install": "adb install -r android/app/build/outputs/apk/release/app-release.apk",

@@ -1,4 +1,4 @@
-import type {NitroListViewMethods} from '../../NitroListView.nitro';
+import type {NitroListEngine} from '../../NitroListEngine.nitro';
 
 const f32 = Math.fround;
 
@@ -6,15 +6,18 @@ const BUFFER_AHEAD_RATIO = 1.5;
 const BUFFER_BEHIND_RATIO = 0.5;
 const DIRECTIONAL_MIN_VELOCITY = 300;
 const VELOCITY_STALE_MS = 200;
+const VELOCITY_MIN_SAMPLE_MS = 4;
+const REGIME_CONFIRM_SAMPLES = 2;
 const TYPE_MEAN_SWEEP_THRESHOLD = 0.5;
+const TYPE_MEAN_SWEEP_RELATIVE = 0.02;
+
+function typeMeanSweepBar(appliedMean: number): number {
+  return Math.max(TYPE_MEAN_SWEEP_THRESHOLD, Math.abs(appliedMean) * TYPE_MEAN_SWEEP_RELATIVE);
+}
 const MAX_TYPE_STATS = 4096;
 const NOTHING_DIRTY = Number.MAX_SAFE_INTEGER;
 
 function roundToOctave(value: number): number {
-  return f32(Math.round(f32(f32(value) * 8)) / 8);
-}
-
-function roundToOctaveFromDouble(value: number): number {
   return f32(Math.round(value * 8) / 8);
 }
 
@@ -62,11 +65,21 @@ export class LayoutCoreMirror {
   private lastSampleTimeMs = -1;
   private lastSampleOffset = 0;
   private velocity = 0;
+  private regime = 0;
+  private pendingRegime = 0;
+  private pendingRegimeCount = 0;
 
   setClock(clock: (() => number) | null): void {
     this.clock = clock ?? (() => Date.now());
     this.velocity = 0;
     this.lastSampleTimeMs = -1;
+    this.clearRegime();
+  }
+
+  private clearRegime(): void {
+    this.regime = 0;
+    this.pendingRegime = 0;
+    this.pendingRegimeCount = 0;
   }
 
   setItemCount(count: number): boolean {
@@ -136,6 +149,7 @@ export class LayoutCoreMirror {
     this.directionalBuffers = enabled;
     this.velocity = 0;
     this.lastSampleTimeMs = -1;
+    this.clearRegime();
   }
 
   setEstimatesFrozen(frozen: boolean): boolean {
@@ -148,6 +162,8 @@ export class LayoutCoreMirror {
   resetScrollVelocity(): void {
     this.velocity = 0;
     this.lastSampleTimeMs = -1;
+    this.lastSampleOffset = 0;
+    this.clearRegime();
   }
 
   setEstimate(value: number): boolean {
@@ -193,7 +209,7 @@ export class LayoutCoreMirror {
     for (let i = 0; i < pairCount; i++) {
       const idx = Math.trunc(pairs[i * 2]);
       if (idx < 0 || idx >= this.itemCount) continue;
-      const rounded = Math.max(0, roundToOctave(f32(f32(pairs[i * 2 + 1]) * f32(scale))));
+      const rounded = Math.max(0, roundToOctave(pairs[i * 2 + 1] * scale));
       if (this.measured[idx] !== 0 && Math.abs(this.sizes[idx] - rounded) <= this.measurementEpsilon) {
         continue;
       }
@@ -296,14 +312,29 @@ export class LayoutCoreMirror {
     this.lastSampleTimeMs = -1;
     this.lastSampleOffset = 0;
     this.velocity = 0;
+    this.clearRegime();
   }
 
-  setItemTypes(types: ArrayLike<number> | null, count: number): void {
+  setItemTypes(types: ArrayLike<number> | null, count: number): boolean {
+    return this.assignTypes(0, types, count);
+  }
+
+  setItemTypesRange(start: number, types: ArrayLike<number> | null, count: number): boolean {
+    if (start < 0 || start >= this.itemCount) return true;
+    return this.assignTypes(start, types, Math.min(count, this.itemCount - start));
+  }
+
+  private assignTypes(start: number, types: ArrayLike<number> | null, count: number): boolean {
     while (this.types.length < this.itemCount) this.types.push(0);
-    for (let i = 0; i < this.itemCount; i++) {
-      this.types[i] = types != null && i < count ? types[i] : 0;
+    const end = start === 0 ? this.itemCount : Math.min(this.itemCount, start + Math.max(0, count));
+    let allTracked = true;
+    for (let i = start; i < end; i++) {
+      const k = i - start;
+      const type = types != null && k < count ? types[k] : 0;
+      if (type >= MAX_TYPE_STATS) allTracked = false;
+      this.types[i] = type;
     }
-    for (let i = 0; i < this.itemCount; i++) {
+    for (let i = start; i < end; i++) {
       if (this.measured[i] !== 0) continue;
       const target = this.estimateForType(this.types[i]);
       if (this.sizes[i] !== target) {
@@ -311,6 +342,17 @@ export class LayoutCoreMirror {
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
       }
     }
+    return allTracked;
+  }
+
+  countUnmeasured(from: number, to: number): number {
+    const lo = Math.max(0, from);
+    const hi = Math.min(this.itemCount, to);
+    let unmeasured = 0;
+    for (let i = lo; i < hi; i++) {
+      if (this.measured[i] === 0) unmeasured++;
+    }
+    return unmeasured;
   }
 
   seedTypeMeans(pairs: ArrayLike<number>, pairCount: number, scale: number): boolean {
@@ -318,7 +360,7 @@ export class LayoutCoreMirror {
     let anySeeded = false;
     for (let p = 0; p < pairCount; p++) {
       const type = Math.trunc(pairs[2 * p]);
-      const mean = roundToOctave(f32(f32(pairs[2 * p + 1]) * f32(scale)));
+      const mean = roundToOctave(pairs[2 * p + 1] * scale);
       if (type <= 0 || type >= MAX_TYPE_STATS || !(mean > 0)) continue;
       while (this.typeStats.length <= type) {
         this.typeStats.push({mean: 0, appliedMean: 0, num: 0, seeded: false});
@@ -400,21 +442,49 @@ export class LayoutCoreMirror {
   getEngagedRange(scrollOffset: number, viewportHeight: number, drawDistance: number): EngagedRange {
     if (this.directionalBuffers && scrollOffset !== this.lastSampleOffset) {
       const now = this.clock();
+      let advanceBaseline = true;
+      let sampled = false;
       if (this.lastSampleTimeMs >= 0) {
         const dt = now - this.lastSampleTimeMs;
         if (dt > VELOCITY_STALE_MS) {
           this.velocity = 0;
-        } else if (dt >= 1) {
-          this.velocity = f32(((scrollOffset - this.lastSampleOffset) / dt) * 1000);
+          sampled = true;
+        } else if (dt >= VELOCITY_MIN_SAMPLE_MS) {
+          this.velocity = ((scrollOffset - this.lastSampleOffset) / dt) * 1000;
+          sampled = true;
+        } else {
+          advanceBaseline = false;
         }
       }
-      this.lastSampleTimeMs = now;
-      this.lastSampleOffset = scrollOffset;
+      if (advanceBaseline) {
+        this.lastSampleTimeMs = now;
+        this.lastSampleOffset = scrollOffset;
+      }
+      if (sampled) {
+        let candidate = 0;
+        if (Math.abs(this.velocity) >= DIRECTIONAL_MIN_VELOCITY) {
+          candidate = this.velocity > 0 ? 1 : -1;
+        }
+        if (candidate === this.regime) {
+          this.pendingRegime = 0;
+          this.pendingRegimeCount = 0;
+        } else if (candidate === 0 || this.regime !== 0) {
+          this.regime = 0;
+          this.pendingRegime = candidate;
+          this.pendingRegimeCount = candidate === 0 ? 0 : 1;
+        } else if (candidate === this.pendingRegime) {
+          if (++this.pendingRegimeCount >= REGIME_CONFIRM_SAMPLES) {
+            this.regime = candidate;
+            this.pendingRegime = 0;
+            this.pendingRegimeCount = 0;
+          }
+        } else {
+          this.pendingRegime = candidate;
+          this.pendingRegimeCount = 1;
+        }
+      }
     }
-    let regime = 0;
-    if (this.directionalBuffers && Math.abs(this.velocity) >= DIRECTIONAL_MIN_VELOCITY) {
-      regime = this.velocity > 0 ? 1 : -1;
-    }
+    const regime = this.directionalBuffers ? this.regime : 0;
     const topBuffer =
       regime === 0
         ? drawDistance
@@ -482,13 +552,13 @@ export class LayoutCoreMirror {
       let off =
         this.minDirtyIndex === 0
           ? 0
-          : f32(this.offsets[this.minDirtyIndex - 1] + this.sizes[this.minDirtyIndex - 1]);
+          : this.offsets[this.minDirtyIndex - 1] + this.sizes[this.minDirtyIndex - 1];
       for (let i = this.minDirtyIndex; i < this.itemCount; i++) {
         if (this.offsets[i] !== off) {
           this.offsets[i] = off;
           anyChanged = true;
         }
-        off = f32(off + this.sizes[i]);
+        off += this.sizes[i];
       }
       if (this.totalSize !== off) {
         this.totalSize = off;
@@ -503,7 +573,7 @@ export class LayoutCoreMirror {
         const prevRow = this.rowStart[start - 1];
         let prevRowMax = 0;
         for (let j = prevRow; j < start; j++) prevRowMax = Math.max(prevRowMax, this.sizes[j]);
-        off = f32(this.offsets[prevRow] + prevRowMax);
+        off = this.offsets[prevRow] + prevRowMax;
       }
       let i = start;
       while (i < this.itemCount) {
@@ -523,7 +593,7 @@ export class LayoutCoreMirror {
           i++;
           if (used >= this.columnCount) break;
         }
-        off = f32(off + rowMax);
+        off += rowMax;
       }
       if (this.totalSize !== off) {
         this.totalSize = off;
@@ -556,7 +626,7 @@ export class LayoutCoreMirror {
     if (!this.typeAverages || this.typeStats.length === 0 || this.estimatesFrozen) return false;
     let anyDrifted = false;
     for (const stats of this.typeStats) {
-      if (stats.num > 0 && Math.abs(stats.mean - stats.appliedMean) > TYPE_MEAN_SWEEP_THRESHOLD) {
+      if (stats.num > 0 && Math.abs(stats.mean - stats.appliedMean) > typeMeanSweepBar(stats.appliedMean)) {
         anyDrifted = true;
       }
     }
@@ -567,8 +637,8 @@ export class LayoutCoreMirror {
       const type = i < this.types.length ? this.types[i] : 0;
       if (type >= this.typeStats.length || this.typeStats[type].num === 0) continue;
       const stats = this.typeStats[type];
-      if (Math.abs(stats.mean - stats.appliedMean) <= TYPE_MEAN_SWEEP_THRESHOLD) continue;
-      const rounded = roundToOctaveFromDouble(stats.mean);
+      if (Math.abs(stats.mean - stats.appliedMean) <= typeMeanSweepBar(stats.appliedMean)) continue;
+      const rounded = roundToOctave(stats.mean);
       if (this.sizes[i] !== rounded) {
         this.sizes[i] = rounded;
         anyChanged = true;
@@ -587,7 +657,7 @@ export class LayoutCoreMirror {
       type < this.typeStats.length &&
       (this.typeStats[type].num > 0 || this.typeStats[type].seeded)
     ) {
-      return roundToOctaveFromDouble(this.typeStats[type].mean);
+      return roundToOctave(this.typeStats[type].mean);
     }
     return this.estimate;
   }
@@ -611,10 +681,13 @@ export type HybridMirrorProps = {
     | null;
 };
 
-export class HybridNitroListViewMirror implements NitroListViewMethods {
+export class HybridNitroListEngineMirror implements NitroListEngine {
   readonly core = new LayoutCoreMirror();
-  name = 'NitroListViewMirror';
+  name = 'NitroListEngineMirror';
   equals = (other: unknown): boolean => other === this;
+  toString(): string {
+    return this.name;
+  }
 
   private scrollOffset = 0;
   private viewportWidth = 0;
@@ -625,14 +698,17 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
   private lastEnd = -2;
   private lastVersion = -1;
   private isUpdatingProps = false;
-  private onRangeChange:
+  private rangeCallback:
     | ((start: number, end: number, layoutVersion: number, offset: number) => void)
     | null = null;
 
   readonly callLog: string[] = [];
   private readonly asyncRangeDelivery: boolean;
+  private readonly explicitEpsilon: boolean;
+  disposed = false;
 
   constructor(config: HybridMirrorConfig = {}) {
+    this.explicitEpsilon = config.measurementEpsilon != null;
     this.core.setMeasurementEpsilon(config.measurementEpsilon ?? 0.51);
     this.core.setDirectionalBuffers(config.directionalBuffers ?? true);
     this.core.setTypeAverages(config.typeAverages ?? true);
@@ -643,7 +719,35 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
     return 0;
   }
 
-  dispose(): void {}
+  dispose(): void {
+    this.callLog.push('dispose');
+    this.disposed = true;
+  }
+
+  get onRangeChange():
+    | ((start: number, end: number, layoutVersion: number, offset: number) => void)
+    | undefined {
+    return this.rangeCallback ?? undefined;
+  }
+
+  set onRangeChange(
+    value: ((start: number, end: number, layoutVersion: number, offset: number) => void) | undefined,
+  ) {
+    this.applyProps({onRangeChange: value ?? null});
+  }
+
+  configure(
+    itemCount: number,
+    estimatedItemSize: number,
+    drawDistance: number,
+    horizontal: boolean,
+    numColumns: number,
+    measurementEpsilon: number,
+  ): void {
+    this.callLog.push('configure');
+    if (!this.explicitEpsilon) this.core.setMeasurementEpsilon(measurementEpsilon);
+    this.applyProps({itemCount, estimatedItemSize, drawDistance, horizontal, numColumns});
+  }
 
   applyProps(props: Partial<HybridMirrorProps>): void {
     this.isUpdatingProps = true;
@@ -652,8 +756,8 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
     if (props.drawDistance != null) this.drawDistance = props.drawDistance;
     if (props.horizontal != null) this.horizontal = props.horizontal;
     if (props.numColumns != null) this.core.setColumnCount(props.numColumns);
-    if (props.onRangeChange !== undefined && props.onRangeChange !== this.onRangeChange) {
-      this.onRangeChange = props.onRangeChange ?? null;
+    if (props.onRangeChange !== undefined && props.onRangeChange !== this.rangeCallback) {
+      this.rangeCallback = props.onRangeChange ?? null;
       this.lastStart = -1;
       this.lastEnd = -2;
       this.lastVersion = -1;
@@ -779,11 +883,25 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
     }
   }
 
-  setItemTypes(types: ArrayBuffer): void {
+  setItemTypes(types: ArrayBuffer): boolean {
     this.callLog.push('setItemTypes');
     const typed = new Uint16Array(types);
-    this.core.setItemTypes(typed.length === 0 ? null : typed, typed.length);
+    const allTracked = this.core.setItemTypes(typed.length === 0 ? null : typed, typed.length);
     this.maybeEmitRange();
+    return allTracked;
+  }
+
+  setItemTypesRange(start: number, types: ArrayBuffer): boolean {
+    this.callLog.push('setItemTypesRange');
+    const typed = new Uint16Array(types);
+    if (typed.length === 0) return true;
+    const allTracked = this.core.setItemTypesRange(Math.trunc(start), typed, typed.length);
+    this.maybeEmitRange();
+    return allTracked;
+  }
+
+  countUnmeasured(from: number, to: number): number {
+    return this.core.countUnmeasured(Math.trunc(from), Math.trunc(to));
   }
 
   seedTypeMeans(pairs: ArrayBuffer): void {
@@ -830,7 +948,7 @@ export class HybridNitroListViewMirror implements NitroListViewMethods {
   }
 
   private maybeEmitRange(): void {
-    const cb = this.onRangeChange;
+    const cb = this.rangeCallback;
     if (cb == null || this.isUpdatingProps) return;
     const range = this.core.getEngagedRange(this.scrollOffset, this.mainViewport(), this.drawDistance);
     if (range.start === this.lastStart && range.end === this.lastEnd && range.version === this.lastVersion) {

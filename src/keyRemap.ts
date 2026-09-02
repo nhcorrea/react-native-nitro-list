@@ -1,3 +1,5 @@
+import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
+
 export const REMAP_MIN_MAPPED_FRACTION = 0.6;
 
 export type KeyRemapResult = {
@@ -31,3 +33,27 @@ export function buildKeyRemapPairs<T>(
   }
   return {pairs, mappedCount};
 }
+
+export function didKeysChangeStructurally<T>(
+  prev: ReadonlyArray<T>,
+  next: ReadonlyArray<T>,
+  keyExtractor: (item: T, index: number) => string,
+): boolean {
+  const common = Math.min(prev.length, next.length);
+  for (let i = 0; i < common; i++) {
+    const p = prev[i];
+    const n = next[i];
+    if (p === n) continue;
+    if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordUserCallbacks(2);
+    if (keyExtractor(p, i) !== keyExtractor(n, i)) return true;
+  }
+  return false;
+}
+
+export function firstDifferingIndex<T>(prev: ReadonlyArray<T>, next: ReadonlyArray<T>): number {
+  const common = Math.min(prev.length, next.length);
+  let i = 0;
+  while (i < common && prev[i] === next[i]) i++;
+  return i;
+}
+

@@ -26,6 +26,18 @@ export function maybeWarnMissingKeyExtractor(
   );
 }
 
+export const MAX_TRACKED_ITEM_TYPES = 4096;
+
+export function maybeWarnTooManyItemTypes(distinctTypes: number): void {
+  if (distinctTypes <= MAX_TRACKED_ITEM_TYPES) return;
+  warnDevOnce(
+    'too-many-item-types',
+    `getItemType produced ${distinctTypes} distinct types; the engine only keeps per-type ` +
+      `size statistics for the first ${MAX_TRACKED_ITEM_TYPES}. Items of the other types fall ` +
+      'back to estimatedItemSize until measured. Types should describe layout, not identity.',
+  );
+}
+
 export function checkDuplicateKeyDev(seenKeys: Set<string>, key: string): void {
   if (seenKeys.has(key)) {
     warnDevOnce(

@@ -15,18 +15,7 @@ Pod::Spec.new do |s|
 
   s.source_files = [
     "ios/**/*.{swift,h,m,mm}",
-    # Shared C++ layout engine (also compiled on Android via CMake).
-    # Non-recursive on purpose: cpp/tests/ is host-only.
     "cpp/*.{hpp,cpp}",
-  ]
-  # add_nitrogen_files sets public_header_files explicitly, which makes every
-  # unlisted header private — and a private header is excluded from the
-  # framework umbrella, so same-module Swift (LayoutManager.swift) would not
-  # see NitroListLayoutCore. The bridge header must be listed as public here
-  # (the nitrogen script merges with, not replaces, this list). It is plain
-  # ObjC (no C++ leaks into the umbrella); the C++ stays in the .mm.
-  s.public_header_files = [
-    "ios/LayoutCoreBridge.h",
   ]
   s.private_header_files = [
     "cpp/*.hpp",

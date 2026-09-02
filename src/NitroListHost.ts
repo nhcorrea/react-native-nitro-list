@@ -1,12 +1,9 @@
-import {getHostComponent} from 'react-native-nitro-modules';
+import {NitroModules} from 'react-native-nitro-modules';
 
-import NitroListViewConfig from '../nitrogen/generated/shared/json/NitroListViewConfig.json';
+import type {NitroListEngine} from './NitroListEngine.nitro';
 
-import type {NitroListViewMethods, NitroListViewProps} from './NitroListView.nitro';
+export type {NitroListEngine};
 
-export const NitroListView = getHostComponent<NitroListViewProps, NitroListViewMethods>(
-  'NitroListView',
-  () => NitroListViewConfig,
-);
-
-export type {NitroListViewMethods, NitroListViewProps};
+export function createNitroListEngine(): NitroListEngine {
+  return NitroModules.createHybridObject<NitroListEngine>('NitroListEngine');
+}

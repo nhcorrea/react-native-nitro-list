@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
+import React, {useEffect} from 'react';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
 import type {NitroListRenderItem} from '../NitroList';
@@ -61,7 +62,7 @@ describe('sticky header integration', () => {
     expect(stickyChanges[stickyChanges.length - 1]).toBe(0);
   });
 
-  it('hideRelatedCell replaces the active header cell with a placeholder', async () => {
+  it('hideRelatedCell keeps the active header cell mounted but hidden', async () => {
     harness = renderNitroList({
       data: makeItems(100),
       renderItem: () => null,
@@ -74,13 +75,59 @@ describe('sticky header integration', () => {
     harness.measureAllCells(() => 100);
     await harness.settle(50);
 
-    expect(harness.renderedIndices()).not.toContain(0);
-    expect(harness.renderedIndices()).toContain(1);
+    expect(harness.renderedIndices()).toContain(0);
+    expect(harness.cellHidden(0)).toBe(true);
+    expect(harness.cellHidden(1)).toBe(false);
 
     harness.scroll(1050);
     await harness.settle(50);
-    expect(harness.renderedIndices()).not.toContain(10);
-    expect(harness.renderedIndices()).toContain(11);
+    expect(harness.renderedIndices()).toContain(10);
+    expect(harness.cellHidden(10)).toBe(true);
+    expect(harness.cellHidden(11)).toBe(false);
+  });
+
+  it('hideRelatedCell transitions never unmount or remount the hidden cell', async () => {
+    const mounts = new Map<number, number>();
+    const unmounts = new Map<number, number>();
+    const Cell = ({index}: {index: number}) => {
+      useEffect(() => {
+        mounts.set(index, (mounts.get(index) ?? 0) + 1);
+        return () => {
+          unmounts.set(index, (unmounts.get(index) ?? 0) + 1);
+        };
+      }, [index]);
+      return null;
+    };
+    const renderItem: NitroListRenderItem<string> = ({index, target}) =>
+      target === 'Cell' ? <Cell index={index} /> : null;
+    harness = renderNitroList({
+      data: makeItems(100),
+      renderItem,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+      stickyHeaderIndices: [0, 2],
+      stickyHeaderConfig: {hideRelatedCell: true},
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+    expect(harness.cellHidden(0)).toBe(true);
+    expect(harness.cellHidden(2)).toBe(false);
+
+    harness.scroll(250);
+    await harness.settle(50);
+    expect(harness.cellHidden(2)).toBe(true);
+    expect(harness.cellHidden(0)).toBe(false);
+
+    harness.scroll(100);
+    await harness.settle(50);
+    expect(harness.cellHidden(0)).toBe(true);
+    expect(harness.cellHidden(2)).toBe(false);
+
+    expect(mounts.get(0)).toBe(1);
+    expect(mounts.get(2)).toBe(1);
+    expect(unmounts.get(0)).toBeUndefined();
+    expect(unmounts.get(2)).toBeUndefined();
   });
 
   it('same-content stickyHeaderIndices with a new identity does not disturb the active header (T20)', async () => {

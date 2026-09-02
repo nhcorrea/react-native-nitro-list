@@ -74,23 +74,23 @@ struct ReferenceModel {
     }
   }
 
-  float offsetOf(int32_t index) const {
-    float off = 0.0f;
+  double offsetOf(int32_t index) const {
+    double off = 0.0;
     for (int32_t i = 0; i < index && i < static_cast<int32_t>(sizes.size()); i++) off += sizes[i];
     return off;
   }
 
-  float totalSize() const { return offsetOf(static_cast<int32_t>(sizes.size())); }
+  double totalSize() const { return offsetOf(static_cast<int32_t>(sizes.size())); }
 
-  void engagedRange(float scroll, float viewportH, float draw, int32_t& outStart, int32_t& outEnd) const {
+  void engagedRange(double scroll, double viewportH, double draw, int32_t& outStart, int32_t& outEnd) const {
     const auto count = static_cast<int32_t>(sizes.size());
     if (count == 0 || viewportH <= 0.0f) {
       outStart = 0;
       outEnd = -1;
       return;
     }
-    const float top = std::max(0.0f, scroll - draw);
-    const float bottom = std::min(totalSize(), scroll + viewportH + draw);
+    const double top = std::max(0.0, scroll - draw);
+    const double bottom = std::min(totalSize(), scroll + viewportH + draw);
     int32_t start = 0;
     while (start < count && offsetOf(start) + sizes[start] <= top) start++;
     if (start >= count) {
@@ -386,6 +386,30 @@ static void testTypeAverages() {
   CHECK_EQ_F(core.getSize(1), 70.0f);
 }
 
+static void testSmallMeanDriftDoesNotSweep() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(80.0);
+  core.setItemCount(500);
+  std::vector<uint16_t> types(500, 1);
+  core.setItemTypes(types.data(), 500);
+  for (int32_t i = 478; i < 500; i++) {
+    core.setItemSize(i, 80.0);
+  }
+  CHECK_EQ_F(core.getOffset(400), 32000.0);
+  CHECK_EQ_F(core.getTotalSize(), 40000.0);
+
+  core.setItemSize(499, 100.0);
+  CHECK_EQ_F(core.getOffset(400), 32000.0);
+  CHECK_EQ_F(core.getOffset(499), 39920.0);
+  CHECK_EQ_F(core.getTotalSize(), 40020.0);
+
+  for (int32_t i = 478; i < 499; i++) {
+    core.setItemSize(i, 160.0);
+  }
+  CHECK(core.getOffset(400) > 32000.0);
+}
+
 static void testSeedTypeMeans() {
   LayoutCore core;
   core.setTypeAverages(true);
@@ -483,9 +507,13 @@ static void testDirectionalBuffers() {
   CHECK(small.start == 48 && small.end == 61);
 
   gFakeNowMs = 64.0;
-  auto up = core.getEngagedRange(4900.0f, viewportH, draw);
-  CHECK(up.start == 45);
-  CHECK(up.end == 58);
+  auto reversing = core.getEngagedRange(4900.0f, viewportH, draw);
+  CHECK(reversing.start == 46);
+  CHECK(reversing.end == 59);
+  gFakeNowMs = 80.0;
+  auto up = core.getEngagedRange(4800.0f, viewportH, draw);
+  CHECK(up.start == 44);
+  CHECK(up.end == 57);
 
   gFakeNowMs = 1000.0;
   auto idle = core.getEngagedRange(5000.0f, viewportH, draw);
@@ -551,8 +579,62 @@ static void testResetScrollVelocity() {
 
   gFakeNowMs = 2056.0;
   auto after = core.getEngagedRange(15100.0f, viewportH, draw);
-  CHECK(after.start == 149);
-  CHECK(after.end == 162);
+  CHECK(after.start == 148);
+  CHECK(after.end == 161);
+  gFakeNowMs = 2072.0;
+  auto confirmed = core.getEngagedRange(15200.0f, viewportH, draw);
+  CHECK(confirmed.start == 150);
+  CHECK(confirmed.end == 163);
+
+  core.resetScrollVelocity();
+  gFakeNowMs = 2088.0;
+  auto rebased = core.getEngagedRange(15200.0f, viewportH, draw);
+  CHECK(rebased.start == 149);
+  CHECK(rebased.end == 162);
+  gFakeNowMs = 2104.0;
+  auto resumed = core.getEngagedRange(15300.0f, viewportH, draw);
+  CHECK(resumed.start == 150);
+  CHECK(resumed.end == 163);
+}
+
+static void testSubFrameEchoDoesNotEngageRegime() {
+  LayoutCore core;
+  core.setEstimate(64.0);
+  core.setItemCount(1000);
+  core.setClockForTesting(&fakeClock);
+  core.setDirectionalBuffers(true);
+  const double viewport = 800.0;
+  const double draw = 500.0;
+  double offset = 10000.0;
+  gFakeNowMs = 0.0;
+  for (int tick = 0; tick < 8; tick++) {
+    core.resetScrollVelocity();
+    gFakeNowMs += 16.0;
+    const LayoutCore::EngagedRange pushed = core.getEngagedRange(offset, viewport, draw);
+    gFakeNowMs += 2.0;
+    const LayoutCore::EngagedRange echoed = core.getEngagedRange(offset + 1.0, viewport, draw);
+    CHECK(echoed.start - pushed.start <= 1);
+    CHECK(pushed.start - echoed.start <= 1);
+    offset += 33.0;
+  }
+
+  LayoutCore moving;
+  moving.setEstimate(64.0);
+  moving.setItemCount(1000);
+  moving.setClockForTesting(&fakeClock);
+  moving.setDirectionalBuffers(true);
+  double y = 10000.0;
+  LayoutCore::EngagedRange last{0, -1, 0};
+  for (int frame = 0; frame < 5; frame++) {
+    gFakeNowMs += 16.0;
+    last = moving.getEngagedRange(y, viewport, draw);
+    y += 33.0;
+  }
+  const LayoutCore::EngagedRange symmetric = LayoutCore().getEngagedRange(0.0, viewport, draw);
+  (void)symmetric;
+  CHECK(last.end - last.start + 1 > 0);
+  const double top = y - 33.0;
+  CHECK(moving.getOffset(last.start) > top - draw);
 }
 
 static void testRandomizedDifferential() {
@@ -707,6 +789,121 @@ static void testFillTypeStats() {
   CHECK_EQ_F(static_cast<float>(out[1]), 30.0f);
 }
 
+static void testLargeCountOffsetsAreExact() {
+  constexpr int32_t kCount = 100000;
+  LayoutCore core;
+  core.setEstimate(37.375);
+  core.setItemCount(kCount);
+  std::vector<double> sizes(static_cast<size_t>(kCount), 37.375);
+  std::vector<double> pairs;
+  pairs.reserve(static_cast<size_t>(kCount) * 2);
+  for (int32_t i = 0; i < kCount; i++) {
+    const double size = 20.0 + static_cast<double>((i * 7919) % 1024) / 8.0;
+    pairs.push_back(i);
+    pairs.push_back(size);
+    sizes[static_cast<size_t>(i)] = size;
+  }
+  CHECK(core.setItemSizes(pairs.data(), kCount, 1.0));
+  double running = 0.0;
+  int32_t mismatches = 0;
+  for (int32_t i = 0; i < kCount; i++) {
+    if (core.getOffset(i) != running) mismatches++;
+    running += sizes[static_cast<size_t>(i)];
+  }
+  CHECK(mismatches == 0);
+  CHECK(core.getTotalSize() == running);
+  CHECK(running > 4194304.0);
+
+  std::vector<double> bump;
+  for (int32_t k = 0; k < 10; k++) {
+    bump.push_back(90000 + k);
+    bump.push_back(sizes[static_cast<size_t>(90000 + k)] + 1.0);
+  }
+  CHECK(core.setItemSizesAnchored(bump.data(), 10, 1.0, 95000) == 10.0);
+  CHECK(core.getOffset(95000) == core.getOffset(94999) + core.getSize(94999));
+
+  double slab[4 + 2 * 64];
+  const double scroll = core.getOffset(95000);
+  const int32_t written = core.fillLayoutSlab(slab, 4 + 2 * 64, scroll, 800.0, 250.0, 1.0);
+  CHECK(written > 0);
+  CHECK(slab[1] == core.getTotalSize());
+  const auto start = static_cast<int32_t>(slab[2]);
+  CHECK(slab[4] == core.getOffset(start));
+  CHECK(start <= 95000 && static_cast<int32_t>(slab[3]) >= 95000);
+}
+
+static void testFractionalScaleStaysExact() {
+  const double scales[] = {2.75, 3.5};
+  for (const double scale : scales) {
+    constexpr int32_t kCount = 50000;
+    LayoutCore core;
+    core.setEstimate(40.0);
+    core.setItemCount(kCount);
+    std::vector<double> pairs;
+    std::vector<double> expected(static_cast<size_t>(kCount));
+    pairs.reserve(static_cast<size_t>(kCount) * 2);
+    for (int32_t i = 0; i < kCount; i++) {
+      const double sizeDp = 24.0 + static_cast<double>((i * 31) % 64) / 8.0;
+      pairs.push_back(i);
+      pairs.push_back(sizeDp);
+      expected[static_cast<size_t>(i)] = static_cast<float>(std::round(sizeDp * scale * 8.0) / 8.0);
+    }
+    CHECK(core.setItemSizes(pairs.data(), kCount, scale));
+    double running = 0.0;
+    int32_t mismatches = 0;
+    for (int32_t i = 0; i < kCount; i++) {
+      if (core.getOffset(i) != running || core.getSize(i) != expected[static_cast<size_t>(i)]) {
+        mismatches++;
+      }
+      running += expected[static_cast<size_t>(i)];
+    }
+    CHECK(mismatches == 0);
+    CHECK(core.getTotalSize() == running);
+    double slab[4 + 2 * 64];
+    CHECK(core.fillLayoutSlab(slab, 4 + 2 * 64, 0.0, 800.0, 250.0, 1.0 / scale) > 0);
+    CHECK(slab[1] == running * (1.0 / scale));
+  }
+}
+
+static void testTypesRangeAndUnmeasured() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(100.0);
+  core.setItemCount(10);
+  const uint16_t all[10] = {1, 1, 1, 1, 1, 2, 2, 2, 2, 2};
+  CHECK(core.setItemTypes(all, 10));
+  core.setItemSize(0, 50.0);
+  CHECK_EQ_F(core.getSize(4), 50.0f);
+  CHECK(core.countUnmeasured(0, 10) == 9);
+  CHECK(core.countUnmeasured(0, 1) == 0);
+  CHECK(core.countUnmeasured(-5, 100) == 9);
+  CHECK(core.countUnmeasured(5, 5) == 0);
+
+  const uint16_t part[3] = {1, 1, 1};
+  CHECK(core.setItemTypesRange(5, part, 3));
+  CHECK_EQ_F(core.getSize(5), 50.0f);
+  CHECK_EQ_F(core.getSize(7), 50.0f);
+  CHECK_EQ_F(core.getSize(8), 100.0f);
+  CHECK(core.setItemTypesRange(10, part, 3));
+  CHECK(core.setItemTypesRange(-1, part, 3));
+  CHECK_EQ_F(core.getSize(9), 100.0f);
+  const uint16_t tail[5] = {1, 1, 1, 1, 1};
+  CHECK(core.setItemTypesRange(8, tail, 5));
+  CHECK_EQ_F(core.getSize(9), 50.0f);
+
+  const uint16_t big[10] = {5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000};
+  CHECK(!core.setItemTypes(big, 10));
+  CHECK_EQ_F(core.getSize(1), 100.0f);
+  const uint16_t bigOne[1] = {4096};
+  CHECK(!core.setItemTypesRange(3, bigOne, 1));
+  const uint16_t okOne[1] = {4095};
+  CHECK(core.setItemTypesRange(3, okOne, 1));
+  CHECK_EQ_F(core.getSize(0), 50.0f);
+  CHECK(core.countUnmeasured(0, 10) == 9);
+  CHECK(core.setItemTypes(nullptr, 0));
+  CHECK_EQ_F(core.getSize(1), 100.0f);
+}
+
 static double gScriptedClockMs = 0.0;
 static double scriptedClock() { return gScriptedClockMs; }
 
@@ -730,11 +927,11 @@ static int runReplay(const char* path) {
     } else if (cmd == "estimate") {
       double v = 0;
       input >> v;
-      core.setEstimate(static_cast<float>(v));
+      core.setEstimate(v);
     } else if (cmd == "epsilon") {
       double v = 0;
       input >> v;
-      core.setMeasurementEpsilon(static_cast<float>(v));
+      core.setMeasurementEpsilon(v);
     } else if (cmd == "typeavg") {
       int b = 0;
       input >> b;
@@ -773,18 +970,18 @@ static int runReplay(const char* path) {
       int32_t idx = 0;
       double v = 0;
       input >> idx >> v;
-      core.setItemSize(idx, static_cast<float>(v));
+      core.setItemSize(idx, v);
     } else if (cmd == "batch" || cmd == "remap" || cmd == "seed") {
       int32_t n = 0;
       input >> n;
       std::vector<double> pairs(static_cast<size_t>(n) * 2);
       for (int32_t i = 0; i < n * 2; i++) input >> pairs[i];
       if (cmd == "batch") {
-        core.setItemSizes(pairs.data(), n, 1.0f);
+        core.setItemSizes(pairs.data(), n, 1.0);
       } else if (cmd == "remap") {
         core.remapItemSizes(pairs.data(), n);
       } else {
-        core.seedTypeMeans(pairs.data(), n, 1.0f);
+        core.seedTypeMeans(pairs.data(), n, 1.0);
       }
     } else if (cmd == "anchored") {
       int32_t anchor = 0;
@@ -792,7 +989,7 @@ static int runReplay(const char* path) {
       input >> anchor >> n;
       std::vector<double> pairs(static_cast<size_t>(n) * 2);
       for (int32_t i = 0; i < n * 2; i++) input >> pairs[i];
-      probes.push_back(core.setItemSizesAnchored(pairs.data(), n, 1.0f, anchor));
+      probes.push_back(core.setItemSizesAnchored(pairs.data(), n, 1.0, anchor));
     } else if (cmd == "types") {
       int32_t n = 0;
       input >> n;
@@ -810,8 +1007,7 @@ static int runReplay(const char* path) {
       double viewport = 0;
       double draw = 0;
       input >> scroll >> viewport >> draw;
-      const LayoutCore::EngagedRange range = core.getEngagedRange(
-          static_cast<float>(scroll), static_cast<float>(viewport), static_cast<float>(draw));
+      const LayoutCore::EngagedRange range = core.getEngagedRange(scroll, viewport, draw);
       probes.push_back(range.start);
       probes.push_back(range.end);
       probes.push_back(range.version);
@@ -827,7 +1023,7 @@ static int runReplay(const char* path) {
       probes.push_back(core.getTotalSize());
     } else if (cmd == "stats") {
       double statsOut[4096 * 3];
-      const int32_t written = core.fillTypeStats(statsOut, 4096 * 3, 1.0f);
+      const int32_t written = core.fillTypeStats(statsOut, 4096 * 3, 1.0);
       probes.push_back(written);
       for (int32_t s = 0; s < written * 3; s++) {
         probes.push_back(statsOut[s]);
@@ -840,7 +1036,7 @@ static int runReplay(const char* path) {
     }
   }
   std::ostringstream out;
-  out.precision(12);
+  out.precision(17);
   out << "{\"probes\":[";
   for (size_t i = 0; i < probes.size(); i++) {
     if (i > 0) out << ",";
@@ -882,6 +1078,7 @@ int main(int argc, char** argv) {
   testBatchWithScale();
   testAnchoredBatch();
   testTypeAverages();
+  testSmallMeanDriftDoesNotSweep();
   testSeedTypeMeans();
   testFillLayoutSlab();
   testDirectionalBuffers();
@@ -889,6 +1086,10 @@ int main(int argc, char** argv) {
   testResetScrollVelocity();
   testFillTypeStats();
   testColumnLayout();
+  testLargeCountOffsetsAreExact();
+  testFractionalScaleStaysExact();
+  testTypesRangeAndUnmeasured();
+  testSubFrameEchoDoesNotEngageRegime();
   testRandomizedDifferential();
   if (failures == 0) {
     std::printf("OK — all LayoutCore tests passed\n");

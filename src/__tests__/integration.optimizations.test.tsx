@@ -354,6 +354,14 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       const result = await jumpWithWarmTypeMean();
       expect(result.steps).toBeGreaterThanOrEqual(5);
     });
+
+    it('lands the same jump with the commit waiter released from the layout effect (B3 flag)', async () => {
+      NitroListDevFlags.stiLayoutEffectWaiter = true;
+      const result = await jumpWithWarmTypeMean();
+      expect(result.steps).toBeLessThanOrEqual(3);
+      expect(result.batches).toBeLessThanOrEqual(3);
+      expect(result.passes).toBeLessThanOrEqual(1);
+    });
   });
 
   describe('O3.2 — auto-fixed item types', () => {

@@ -7,10 +7,10 @@
 
 #import <Foundation/Foundation.h>
 #import <NitroModules/HybridObjectRegistry.hpp>
-#import "NitroList-Swift-Cxx-Umbrella.hpp"
+
 #import <type_traits>
 
-#include "HybridNitroListViewSpecSwift.hpp"
+#include "HybridNitroListEngine.hpp"
 
 @interface NitroListAutolinking : NSObject
 @end
@@ -22,10 +22,12 @@
   using namespace margelo::nitro::nitrolist;
 
   HybridObjectRegistry::registerHybridObjectConstructor(
-    "NitroListView",
+    "NitroListEngine",
     []() -> std::shared_ptr<HybridObject> {
-      std::shared_ptr<HybridNitroListViewSpec> hybridObject = NitroList::NitroListAutolinking::createNitroListView();
-      return hybridObject;
+      static_assert(std::is_default_constructible_v<HybridNitroListEngine>,
+                    "The HybridObject \"HybridNitroListEngine\" is not default-constructible! "
+                    "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
+      return std::make_shared<HybridNitroListEngine>();
     }
   );
 }

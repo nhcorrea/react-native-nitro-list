@@ -178,3 +178,23 @@ describe('NitroListPerfMonitor layout version bumps', () => {
     expect(NitroListPerfMonitor.getSnapshot().layoutVersionBumps).toBe(0);
   });
 });
+
+describe('NitroListPerfMonitor régua v5 counters', () => {
+  it('counts user callbacks and orchestrator/cells renders, and resets them', () => {
+    NitroListPerfMonitor.enable();
+    NitroListPerfMonitor.recordUserCallbacks(3);
+    NitroListPerfMonitor.recordUserCallbacks(2);
+    NitroListPerfMonitor.recordOrchestratorRender();
+    NitroListPerfMonitor.recordCellsRender();
+    const snap = NitroListPerfMonitor.getSnapshot();
+    expect(snap.userCallbacks).toBe(5);
+    expect(snap.orchestratorRenders).toBe(1);
+    expect(snap.cellsRenders).toBe(1);
+    NitroListPerfMonitor.reset();
+    expect(NitroListPerfMonitor.getSnapshot().userCallbacks).toBe(0);
+    expect(NitroListPerfMonitor.getSnapshot().orchestratorRenders).toBe(0);
+    NitroListPerfMonitor.disable();
+    NitroListPerfMonitor.recordUserCallbacks(1);
+    expect(NitroListPerfMonitor.getSnapshot().userCallbacks).toBe(0);
+  });
+});

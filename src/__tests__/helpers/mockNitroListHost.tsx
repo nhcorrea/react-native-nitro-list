@@ -1,44 +1,17 @@
-import React, {useLayoutEffect, useRef} from 'react';
-import {View, type StyleProp, type ViewStyle} from 'react-native';
+import type {NitroListEngine} from '../../NitroListEngine.nitro';
+import {HybridNitroListEngineMirror, type HybridMirrorConfig} from './layoutCoreMirror';
 
-import type {NitroListViewMethods} from '../../NitroListView.nitro';
-import {HybridNitroListViewMirror, type HybridMirrorConfig} from './layoutCoreMirror';
-
-type WrappedCallback<T> = T | {f: T};
-
-function unwrap<T>(value: WrappedCallback<T> | undefined | null): T | null {
-  if (value == null) return null;
-  if (typeof value === 'object' && 'f' in (value as object)) {
-    return (value as {f: T}).f;
-  }
-  return value as T;
-}
-
-type MockHostProps = {
-  hybridRef?: WrappedCallback<(ref: NitroListViewMethods | null) => void>;
-  itemCount: number;
-  estimatedItemSize: number;
-  drawDistance: number;
-  horizontal?: boolean;
-  numColumns?: number;
-  onRangeChange?: WrappedCallback<
-    (start: number, end: number, layoutVersion: number, offset: number) => void
-  >;
-  style?: StyleProp<ViewStyle>;
-  children?: React.ReactNode;
-};
-
-const mirrors: HybridNitroListViewMirror[] = [];
+const mirrors: HybridNitroListEngineMirror[] = [];
 let nextMirrorConfig: HybridMirrorConfig = {};
 
 export function setMirrorConfigForTests(config: HybridMirrorConfig): void {
   nextMirrorConfig = config;
 }
 
-export function getLastMirror(): HybridNitroListViewMirror {
+export function getLastMirror(): HybridNitroListEngineMirror {
   const mirror = mirrors[mirrors.length - 1];
   if (mirror == null) {
-    throw new Error('no NitroListView mock has mounted yet');
+    throw new Error('no NitroList engine has been created yet');
   }
   return mirror;
 }
@@ -48,35 +21,10 @@ export function clearMirrorsForTests(): void {
   nextMirrorConfig = {};
 }
 
-export function NitroListView(props: MockHostProps): React.ReactElement {
-  const mirrorRef = useRef<HybridNitroListViewMirror | null>(null);
-  if (mirrorRef.current == null) {
-    mirrorRef.current = new HybridNitroListViewMirror(nextMirrorConfig);
-    mirrors.push(mirrorRef.current);
-  }
-  const mirror = mirrorRef.current;
-
-  const {itemCount, estimatedItemSize, drawDistance, horizontal, numColumns} = props;
-  const onRangeChange = unwrap(props.onRangeChange);
-  useLayoutEffect(() => {
-    mirror.applyProps({
-      itemCount,
-      estimatedItemSize,
-      drawDistance,
-      horizontal,
-      numColumns,
-      onRangeChange,
-    });
-  });
-
-  const attachRef = useRef(unwrap(props.hybridRef));
-  attachRef.current = unwrap(props.hybridRef);
-  useLayoutEffect(() => {
-    attachRef.current?.(mirror as unknown as NitroListViewMethods);
-    return () => {
-      attachRef.current?.(null);
-    };
-  }, []);
-
-  return <View testID="mock-nitro-list-view">{props.children}</View>;
+export function createNitroListEngine(): NitroListEngine {
+  const mirror = new HybridNitroListEngineMirror(nextMirrorConfig);
+  mirrors.push(mirror);
+  return mirror;
 }
+
+export type {NitroListEngine};

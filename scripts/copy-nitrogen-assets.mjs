@@ -1,7 +1,3 @@
-// bob emits src/*.js into lib/module/ and lib/commonjs/ — one level deeper than
-// the source — so the literal "../nitrogen/..." specifier in NitroListHost stops
-// pointing at the package root and lands on lib/nitrogen/ instead. Mirror the
-// generated json there so the same relative path resolves from both flavors.
 import {cpSync, existsSync, mkdirSync} from 'node:fs'
 import {dirname, join, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -12,8 +8,8 @@ const from = join(root, relative)
 const to = join(root, 'lib', relative)
 
 if (!existsSync(from)) {
-  console.error(`missing generated nitro config: ${relative} — run nitrogen first`)
-  process.exit(1)
+  console.log(`no ${relative} to copy (no Nitro views in this package)`)
+  process.exit(0)
 }
 
 mkdirSync(dirname(to), {recursive: true})
