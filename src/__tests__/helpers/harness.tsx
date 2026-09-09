@@ -90,7 +90,7 @@ export class NitroListHarness<T = string> {
     getNativeScrollRef: () => this.fakeScrollRef,
   };
 
-  constructor(props: NitroListProps<T>) {
+  constructor(props: NitroListProps<T>, private readonly strictMode = false) {
     this.props = props;
     this.horizontal = props.horizontal === true;
   }
@@ -107,13 +107,14 @@ export class NitroListHarness<T = string> {
   };
 
   private element(props: NitroListProps<T>): React.ReactElement {
-    return (
+    const content = (
       <NitroList<T>
         ref={this.ref}
         renderScrollComponent={this.renderScrollComponent}
         {...props}
       />
     );
+    return this.strictMode ? <React.StrictMode>{content}</React.StrictMode> : content;
   }
 
   mount(): this {
@@ -374,10 +375,11 @@ export function webOnlyDependencyUsages(): ReadonlyArray<string> {
 export function renderNitroList<T = string>(
   props: NitroListProps<T>,
   mirrorConfig?: HybridMirrorConfig,
+  strictMode = false,
 ): NitroListHarness<T> {
   clearMirrorsForTests();
   clearCreatedSharedValuesForTests();
   clearWebOnlyDependencyUsagesForTests();
   if (mirrorConfig != null) setMirrorConfigForTests(mirrorConfig);
-  return new NitroListHarness<T>(props).mount();
+  return new NitroListHarness<T>(props, strictMode).mount();
 }

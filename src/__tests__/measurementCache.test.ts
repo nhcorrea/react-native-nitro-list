@@ -15,16 +15,21 @@ afterEach(() => {
 });
 
 describe('measurementCacheKey', () => {
-  it('buckets width to 10dp so sub-bucket resizes share an entry', () => {
-    expect(measurementCacheKey('row', 393, 1)).toBe(measurementCacheKey('row', 390, 1));
+  it('separates nearby widths which can wrap text differently', () => {
+    expect(measurementCacheKey('row', 393, 1)).not.toBe(measurementCacheKey('row', 390, 1));
     expect(measurementCacheKey('row', 393, 1)).not.toBe(measurementCacheKey('row', 411, 1));
   });
 
-  it('separates type, width bucket and font scale', () => {
+  it('separates tagged types, exact constraints and instance/template domains', () => {
     const base = measurementCacheKey('row', 390, 1);
     expect(measurementCacheKey('header', 390, 1)).not.toBe(base);
     expect(measurementCacheKey('row', 490, 1)).not.toBe(base);
     expect(measurementCacheKey('row', 390, 1.3)).not.toBe(base);
+    expect(measurementCacheKey(1, 390, 1)).not.toBe(measurementCacheKey('1', 390, 1));
+    const first = {};
+    const second = {};
+    expect(measurementCacheKey('row', 390, 1, first)).not.toBe(measurementCacheKey('row', 390, 1, second));
+    expect(measurementCacheKey('row', 390, 1, first)).toBe(measurementCacheKey('row', 390, 1, first));
   });
 });
 
@@ -42,6 +47,7 @@ describe('recordMeasurement / getCachedMean', () => {
     recordMeasurement(key, 0);
     recordMeasurement(key, -5);
     recordMeasurement(key, Number.NaN);
+    recordMeasurement(key, Infinity);
     expect(getCachedMean(key)).toBeNull();
   });
 
@@ -57,12 +63,19 @@ describe('recordMeasurement / getCachedMean', () => {
     expect(getCachedMean(measurementCacheKey('overflow', 390, 1))).toBe(10);
   });
 
-  it('stops refining after the per-key sample cap instead of freezing wrongly early', () => {
+  it('continues learning with bounded effective weight after sample 64', () => {
     const key = measurementCacheKey('row', 390, 1);
     for (let i = 0; i < 64; i++) recordMeasurement(key, 100);
-    const frozen = getCachedMean(key);
     recordMeasurement(key, 900);
-    expect(getCachedMean(key)).toBe(frozen);
+    expect(getCachedMean(key)).toBe(112.5);
+    expect(getCachedFixedSize(key)).toBeNull();
+  });
+
+  it('bounds insertions through the variable-measurement path too', () => {
+    const first = measurementCacheKey('first', 390, 1);
+    markMeasurementVariable(first, 10);
+    for (let i = 0; i < 512; i++) markMeasurementVariable(measurementCacheKey(i, 390, 1), 20);
+    expect(getCachedMean(first)).toBeNull();
   });
 });
 

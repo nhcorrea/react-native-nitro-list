@@ -11,6 +11,7 @@ export function buildKeyRemapPairs<T>(
   prev: ReadonlyArray<T>,
   next: ReadonlyArray<T>,
   keyExtractor: (item: T, index: number) => string,
+  equivalent?: (previous: T, next: T, index: number) => boolean,
 ): KeyRemapResult | null {
   if (prev.length === 0 || next.length === 0) return null;
   const oldIndexByKey = new Map<string, number>();
@@ -22,7 +23,7 @@ export function buildKeyRemapPairs<T>(
   let mappedCount = 0;
   for (let i = 0; i < next.length; i++) {
     const oldIndex = oldIndexByKey.get(keyExtractor(next[i], i));
-    if (oldIndex == null) continue;
+    if (oldIndex == null || (equivalent != null && !equivalent(prev[oldIndex], next[i], i))) continue;
     pairs[mappedCount * 2] = oldIndex;
     pairs[mappedCount * 2 + 1] = i;
     mappedCount++;
@@ -38,9 +39,10 @@ export function didKeysChangeStructurally<T>(
   prev: ReadonlyArray<T>,
   next: ReadonlyArray<T>,
   keyExtractor: (item: T, index: number) => string,
+  from = 0,
 ): boolean {
   const common = Math.min(prev.length, next.length);
-  for (let i = 0; i < common; i++) {
+  for (let i = from; i < common; i++) {
     const p = prev[i];
     const n = next[i];
     if (p === n) continue;

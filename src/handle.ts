@@ -17,6 +17,10 @@ export interface HandleCtx<T> {
   itemCount: number;
   keyExtractor?: (item: T, index: number) => string;
   effectivePaddingStart: number;
+  columnLayout: {colOf: Uint16Array; spans: Uint16Array} | null;
+  resolvedColumns: number;
+  crossPadding: {start: number; end: number};
+  mainAxisGap: number;
   engineRef: Ref<NitroListEngine | null>;
   scrollRef: Ref<ScrollView | null>;
   typeIdMapRef: Ref<Map<ItemTypeKey, number>>;
@@ -92,13 +96,20 @@ export function createNitroListHandle<T>(ctx: HandleCtx<T>): NitroListHandle {
       return ctx.readTotalSize();
     },
     getLayout(index: number) {
-      if (index < 0 || index >= ctx.itemCount) return undefined;
+      if (!Number.isInteger(index) || index < 0 || index >= ctx.itemCount) return undefined;
       const offset = ctx.readItemOffset(index);
-      const size = ctx.readItemSize(index);
+      const size = Math.max(0, ctx.readItemSize(index) - ctx.mainAxisGap);
+      const crossSize = Math.max(0, ctx.crossViewportRef.current - ctx.crossPadding.start - ctx.crossPadding.end);
       if (ctx.isHorizontalRef.current) {
-        return {x: offset, y: 0, width: size, height: ctx.crossViewportRef.current};
+        return {x: offset, y: 0, width: size, height: crossSize};
       }
-      return {x: 0, y: offset, width: ctx.crossViewportRef.current, height: size};
+      const columns = ctx.columnLayout;
+      return {
+        x: columns == null ? 0 : crossSize * columns.colOf[index] / ctx.resolvedColumns,
+        y: offset,
+        width: columns == null ? crossSize : crossSize * columns.spans[index] / ctx.resolvedColumns,
+        height: size,
+      };
     },
     getWindowSize() {
       return {

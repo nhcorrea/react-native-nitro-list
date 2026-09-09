@@ -80,7 +80,6 @@ export interface ScrollHandlersCtx {
   cancelPendingStickToEnd: () => void;
   captureMvcpAnchor: (engineOffset: number) => void;
   endProgrammaticAnimatedScroll: () => void;
-  flushDeferredLiveRange: () => void;
   flushPendingItemSizes: (emitRange?: boolean) => void;
   getMaxScrollOffset: () => number;
   noteVelocityForAdaptive: (velocityDpS: number) => void;
@@ -117,7 +116,6 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     ctx.lastScrollOffsetRef.current = target;
     ctx.uiScrollOffsetSv.value = engineOffset;
     ctx.applyScrollOffsetSync(engineOffset);
-    ctx.flushDeferredLiveRange();
     ctx.updateSticky(engineOffset);
     ctx.evaluateViewabilityRef.current();
     ctx.checkEdgeCallbacksRef.current();
@@ -263,7 +261,6 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   const handleScrollBeginDrag = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
     ctx.endProgrammaticAnimatedScroll();
     ctx.pendingScrollCommandRef.current = null;
-    ctx.flushDeferredLiveRange();
     flushPendingMvcpAdjust();
     ctx.beginScrollCommand();
     ctx.cancelPendingStickToEnd();

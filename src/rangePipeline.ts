@@ -1,3 +1,4 @@
+import {validSnapshot} from './layoutSnapshot';
 import type {CellBridge} from './cells';
 import {NitroListDevFlags} from './devFlags';
 import type {LayoutCacheApi} from './layoutCache';
@@ -16,6 +17,7 @@ import {flushWaiters, waitForLayoutPass} from './scrollCommands';
 type Ref<V> = {current: V};
 
 export interface RangePipelineCtx {
+  dataRevisionRef: Ref<number>;
   store: ListStore;
   layout: LayoutCacheApi;
   engineRef: Ref<NitroListEngine | null>;
@@ -25,12 +27,6 @@ export interface RangePipelineCtx {
   lastSeenLayoutVersionRef: Ref<number>;
   lastPushedEngineOffsetRef: Ref<number | null>;
   lastLiveEngineOffsetRef: Ref<number>;
-  deferredLiveRangeRef: Ref<{
-    start: number;
-    end: number;
-    version: number;
-    engineOffset: number;
-  } | null>;
   isPrewarmingRangeRef: Ref<boolean>;
   uiThreadDriverActiveRef: Ref<boolean>;
   prewarmFocusRef: Ref<{focus: {start: number; end: number}; direction: 1 | -1} | null>;
@@ -77,15 +73,9 @@ export interface RangePipelineCtx {
 }
 
 export interface RangePipelineApi {
-  noteLayoutVersion: (version: number) => void;
+  consumeSnapshot: (slab: Float64Array, written: number, commitRange?: boolean) => boolean;
   applyPrewarmRange: (start: number, end: number, version: number) => void;
-  commitLiveRange: (
-    start: number,
-    end: number,
-    version: number,
-    engineOffset: number,
-  ) => void;
-  flushDeferredLiveRange: () => void;
+  commitLiveRange: (start: number, end: number, version: number, engineOffset: number) => void;
   handleRangeChange: (
     start: number,
     end: number,
@@ -98,15 +88,6 @@ export interface RangePipelineApi {
 }
 
 export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
-  const noteLayoutVersion = (version: number): void => {
-    if (version === ctx.lastSeenLayoutVersionRef.current) return;
-    ctx.lastSeenLayoutVersionRef.current = version;
-    if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordLayoutVersionBump();
-    ctx.invalidateLayoutCache();
-    ctx.store.set('totalSize', ctx.readTotalSizeRef.current());
-    ctx.checkEdgeCallbacksRef.current();
-  };
-
   const applyPrewarmRange = (start: number, end: number, version: number): void => {
     ctx.lastPrewarmRangeRef.current = {start, end, layoutVersion: version};
     const focusInfo = ctx.prewarmFocusRef.current;
@@ -175,12 +156,14 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     admitSlice();
   };
 
-  const commitLiveRange = (start: number, end: number, version: number, engineOffset: number): void => {
-    if (ctx.scrollActivityRef.current.programmaticAnimated) {
-      ctx.deferredLiveRangeRef.current = {start, end, version, engineOffset};
-      return;
-    }
-    ctx.deferredLiveRangeRef.current = null;
+  const commitLiveRange = (
+    start: number,
+    end: number,
+    version: number,
+    engineOffset: number,
+  ): void => {
+    // Destination prewarm is additional content. The native animation still
+    // needs the live window at every intermediate offset.
     const direction = engineOffset - ctx.lastLiveEngineOffsetRef.current;
     ctx.lastLiveEngineOffsetRef.current = engineOffset;
     const raw: AdmissionRange = {start, end};
@@ -191,80 +174,94 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     ctx.setRangeTracked({start: stable.start, end: stable.end, layoutVersion: version});
   };
 
-  const flushDeferredLiveRange = (): void => {
-  const deferred = ctx.deferredLiveRangeRef.current;
-  if (deferred == null) return;
-  commitLiveRange(deferred.start, deferred.end, deferred.version, deferred.engineOffset);
+  let lastSequence = -1;
+  let lastDataRevision = -1;
+  let sequenceEngine: NitroListEngine | null = null;
+  const consumeSnapshot = (slab: Float64Array, written: number, commitRange = true): boolean => {
+    if (!validSnapshot(slab, written) || slab[6] !== ctx.dataRevisionRef.current) return false;
+    if (sequenceEngine !== ctx.engineRef.current) {
+      sequenceEngine = ctx.engineRef.current;
+      lastSequence = -1;
+      lastDataRevision = -1;
+    }
+    if (slab[7] <= lastSequence) return false;
+    lastSequence = slab[7];
+    const version = slab[0],
+      start = slab[2],
+      end = slab[3],
+      offset = slab[8];
+    const versionChanged = version !== ctx.lastSeenLayoutVersionRef.current;
+    const rangeChanged =
+      start !== ctx.latestRangeRef.current.start || end !== ctx.latestRangeRef.current.end;
+    if (commitRange && (versionChanged || rangeChanged) && NITRO_LIST_PERF_COMPILED) {
+      NitroListPerfMonitor.recordRangeEvent();
+      if (end >= start) NitroListPerfMonitor.recordFirstRange(ctx.mountTimestampRef.current);
+    }
+    if (versionChanged) {
+      ctx.lastSeenLayoutVersionRef.current = version;
+      ctx.invalidateLayoutCache();
+      if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordLayoutVersionBump();
+    }
+    if (ctx.uiThreadDriverActiveRef.current && !ctx.isPrewarmingRangeRef.current) {
+      ctx.lastScrollOffsetRef.current = offset + ctx.effectivePaddingStartRef.current;
+      if (ctx.scrollActivityRef.current.programmaticAnimated)
+        ctx.programmaticAnimatedScrollSeenRef.current = true;
+    }
+    // Publish the complete geometry before callbacks can read it or reenter.
+    if (
+      versionChanged ||
+      rangeChanged ||
+      lastDataRevision !== slab[6] ||
+      !ctx.layout.hasCurrentSnapshot()
+    ) {
+      ctx.writeSlabToCache(slab, written);
+      ctx.store.set('totalSize', slab[1]);
+    }
+    lastDataRevision = slab[6];
+    if (commitRange) {
+      if (ctx.isPrewarmingRangeRef.current) {
+        ctx.latestRangeRef.current = {start, end};
+        applyPrewarmRange(start, end, version);
+      } else commitLiveRange(start, end, version, offset);
+    }
+    if (versionChanged) ctx.checkEdgeCallbacksRef.current();
+    return true;
   };
 
-  const handleRangeChange = (start: number, end: number, layoutVersion: number, engineOffset: number): void => {
+  const handleRangeChange = (
+    start: number,
+    end: number,
+    _version: number,
+    _offset: number,
+  ): void => {
+    // Async events are invalidation hints. Their offset/range can already be obsolete.
     const filled = ctx.fillSlab(start, end);
-    let eventStart = start;
-    let eventEnd = end;
-    let eventVersion = layoutVersion;
-    let eventOffset = engineOffset;
-    if (
-      filled != null &&
-      NitroListDevFlags.staleRangeReconcile &&
-      !ctx.uiThreadDriverActiveRef.current
-    ) {
-      eventVersion = filled.slab[0] | 0;
-      eventStart = filled.slab[2] | 0;
-      eventEnd = filled.slab[3] | 0;
-      const pushed = ctx.lastPushedEngineOffsetRef.current;
-      if (pushed != null) eventOffset = pushed;
-    }
-    if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
-      NitroListPerfMonitor.recordRangeEvent();
-      if (eventEnd >= eventStart) {
-        NitroListPerfMonitor.recordFirstRange(ctx.mountTimestampRef.current);
-      }
-    }
-    const uiDriven = ctx.uiThreadDriverActiveRef.current && !ctx.isPrewarmingRangeRef.current;
-    let offsetConsumed = false;
-    if (uiDriven) {
-      ctx.lastScrollOffsetRef.current = engineOffset + ctx.effectivePaddingStartRef.current;
-      offsetConsumed = true;
-      if (ctx.scrollActivityRef.current.programmaticAnimated) {
+    if (filled == null) return;
+    const offset = filled.slab[8];
+    if (!consumeSnapshot(filled.slab, filled.written)) return;
+    if (ctx.uiThreadDriverActiveRef.current && !ctx.isPrewarmingRangeRef.current) {
+      ctx.lastScrollOffsetRef.current = offset + ctx.effectivePaddingStartRef.current;
+      if (ctx.scrollActivityRef.current.programmaticAnimated)
         ctx.programmaticAnimatedScrollSeenRef.current = true;
-      }
-    }
-    noteLayoutVersion(eventVersion);
-    if (filled != null) ctx.writeSlabToCache(filled.slab, filled.written);
-
-    if (ctx.isPrewarmingRangeRef.current) {
-      ctx.latestRangeRef.current = {start: eventStart, end: eventEnd};
-      applyPrewarmRange(eventStart, eventEnd, eventVersion);
-      return;
-    }
-    commitLiveRange(eventStart, eventEnd, eventVersion, eventOffset);
-
-    if (offsetConsumed) {
       ctx.evaluateViewabilityRef.current();
       ctx.checkEdgeCallbacksRef.current();
-      ctx.captureMvcpAnchorRef.current(engineOffset);
+      ctx.captureMvcpAnchorRef.current(offset);
       ctx.emitFirstVisibleRef.current();
       if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
-        const viewportH = ctx.mainViewportRef.current;
-        if (viewportH > 0) {
-          const visTop = Math.max(0, engineOffset);
-          const visBottom = Math.min(
-            engineOffset + viewportH,
-            ctx.readTotalSize(),
-          );
-          if (visBottom > visTop) {
-            const mounted = ctx.latestRangeRef.current;
-            let blankPx: number;
-            if (mounted.end < mounted.start) {
-              blankPx = visBottom - visTop;
-            } else {
-              const coveredTop = ctx.readItemOffset(mounted.start);
-              const coveredBottom = ctx.readItemOffset(mounted.end) + ctx.readItemSize(mounted.end);
-              blankPx =
-                Math.max(0, coveredTop - visTop) + Math.max(0, visBottom - coveredBottom);
-            }
-            NitroListPerfMonitor.recordScrollSample(blankPx);
-          }
+        const viewport = ctx.mainViewportRef.current;
+        const visibleTop = Math.max(0, offset);
+        const visibleBottom = Math.min(offset + viewport, ctx.readTotalSize());
+        if (viewport > 0 && visibleBottom > visibleTop) {
+          const mounted = ctx.latestRangeRef.current;
+          const blank =
+            mounted.end < mounted.start
+              ? visibleBottom - visibleTop
+              : Math.max(0, ctx.readItemOffset(mounted.start) - visibleTop) +
+                Math.max(
+                  0,
+                  visibleBottom - ctx.readItemOffset(mounted.end) - ctx.readItemSize(mounted.end),
+                );
+          NitroListPerfMonitor.recordScrollSample(blank);
         }
       }
     }
@@ -273,52 +270,19 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
   const applyScrollOffsetSync = (engineOffset: number): void => {
     const hybrid = ctx.engineRef.current;
     if (!hybrid) return;
-    let slab = ctx.layout.getSlab();
-    let written = hybrid.setScrollOffsetAndFill(engineOffset, slab.buffer);
+    const written = hybrid.setScrollOffsetAndFill(engineOffset, ctx.layout.getSlab().buffer);
     ctx.lastPushedEngineOffsetRef.current = engineOffset;
     if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
-    if (written < 0) {
-      slab = ctx.layout.growSlab();
-      written = hybrid.setScrollOffsetAndFill(engineOffset, slab.buffer);
-      if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
-      if (written < 0) return;
-    }
-    if (written === 0) {
-      if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.clearScrollDispatchMark();
-      return;
-    }
-    const version = slab[0] | 0;
-    const start = slab[2] | 0;
-    const end = slab[3] | 0;
-    if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
-      NitroListPerfMonitor.recordRangeEvent();
-      if (end >= start) {
-        NitroListPerfMonitor.recordFirstRange(ctx.mountTimestampRef.current);
-      }
-    }
-    noteLayoutVersion(version);
-    ctx.writeSlabToCache(slab, written);
-    if (ctx.isPrewarmingRangeRef.current) {
-      ctx.latestRangeRef.current = {start, end};
-      applyPrewarmRange(start, end, version);
-      return;
-    }
-    commitLiveRange(start, end, version, engineOffset);
+    const filled = ctx.layout.completeSnapshot(written);
+    if (filled != null) consumeSnapshot(filled.slab, filled.written);
   };
 
   const resyncPrewarmFromEngine = (): void => {
-  if (!ctx.isPrewarmingRangeRef.current) return;
-  const latest = ctx.latestRangeRef.current;
-  const filled = ctx.fillSlab(latest.start, latest.end);
-  if (filled == null) return;
-  const version = filled.slab[0] | 0;
-  const start = filled.slab[2] | 0;
-  const end = filled.slab[3] | 0;
-  noteLayoutVersion(version);
-  ctx.writeSlabToCache(filled.slab, filled.written);
-  if (end < start) return;
-  ctx.latestRangeRef.current = {start, end};
-  ctx.lastPrewarmRangeRef.current = {start, end, layoutVersion: version};
+    if (!ctx.isPrewarmingRangeRef.current) return;
+    const latest = ctx.latestRangeRef.current;
+    const filled = ctx.fillSlab(latest.start, latest.end);
+    if (filled == null) return;
+    consumeSnapshot(filled.slab, filled.written);
   };
 
   const waitForLayoutSettle = async (trace?: string[]): Promise<void> => {
@@ -346,7 +310,9 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     if (awaiting > 0) {
       const t = trace ? Date.now() : 0;
       const by = await Promise.race([
-        new Promise<'evt'>((resolve) => ctx.layoutSettleWaitersRef.current.push(() => resolve('evt'))),
+        new Promise<'evt'>((resolve) =>
+          ctx.layoutSettleWaitersRef.current.push(() => resolve('evt')),
+        ),
         waitForLayoutPass().then(() => 'raf' as const),
       ]);
       if (trace) trace.push(`layout(${awaiting}):${by} ${Date.now() - t}`);
@@ -359,10 +325,9 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     resyncPrewarmFromEngine();
   };
   return {
-    noteLayoutVersion,
+    consumeSnapshot,
     applyPrewarmRange,
     commitLiveRange,
-    flushDeferredLiveRange,
     handleRangeChange,
     applyScrollOffsetSync,
     resyncPrewarmFromEngine,

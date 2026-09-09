@@ -1,8 +1,11 @@
+import {analyzeData} from './dataAnalysis';
+import {dataConfig, EMPTY_DATA_BUFFER} from './dataTransaction';
 import React, {
   forwardRef,
   useCallback,
   useEffect,
   useImperativeHandle,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -13,6 +16,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
   type LayoutChangeEvent,
 } from 'react-native';
@@ -68,6 +72,7 @@ import {
 } from './viewability';
 import {flushWaiters, waitForNextFrame} from './scrollCommands';
 import {createMeasurement, type MeasurementApi, type MeasurementCtx} from './measurement';
+import {createMeasurementRevision, isCurrentMeasurement, type MeasurementIdentity} from './measurementIdentity';
 import {
   createLayoutCache,
   type LayoutCacheApi,
@@ -233,6 +238,13 @@ type UiScrollContext = {
 };
 
 function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHandle>) {
+  // Publish bindings before child layout effects. This phase only assigns refs;
+  // engine mutations and notifications remain in layout effects. Abandoned
+  // renders never execute these publications.
+  const commitBindings: Array<() => void> = [];
+  useInsertionEffect(() => {
+    for (const publish of commitBindings) publish();
+  });
   if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordOrchestratorRender();
   const {
     data,
@@ -296,6 +308,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const items = (data ?? EMPTY) as ReadonlyArray<T>;
   const itemCount = items.length;
+  const {fontScale} = useWindowDimensions();
+  const analyzedCommitRef = useRef({items, dataVersion});
+  const dataAnalysis = useMemo(() => analyzeData(analyzedCommitRef.current.items, items,
+    !Object.is(analyzedCommitRef.current.dataVersion, dataVersion), keyExtractor),
+    [items, dataVersion, keyExtractor]);
+  commitBindings.push(() => { analyzedCommitRef.current = {items, dataVersion}; });
   const storeRef = useRef<ListStore | null>(null);
   if (storeRef.current == null) {
     storeRef.current = new ListStore({
@@ -310,11 +328,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     });
   }
   const store = storeRef.current;
-  const latestStickyHeaderIndicesRef = useRef(stickyHeaderIndices);
-  latestStickyHeaderIndicesRef.current = stickyHeaderIndices;
   const stickyIndicesKey = stickyHeaderIndices != null ? stickyHeaderIndices.join(',') : '';
   const stickyIndices = useMemo<readonly number[]>(() => {
-    const latest = latestStickyHeaderIndicesRef.current;
+    const latest = stickyHeaderIndices;
     return latest != null && latest.length > 0 ? latest.slice() : NO_STICKY;
   }, [stickyIndicesKey]);
   const stickyOffset = stickyHeaderConfig?.offset ?? 0;
@@ -323,9 +339,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const isHorizontal = horizontal === true;
   const isHorizontalRef = useRef(isHorizontal);
-  isHorizontalRef.current = isHorizontal;
+  commitBindings.push(() => {
+    isHorizontalRef.current = isHorizontal;
+  });
   const {start: paddingStart, end: paddingEnd} = useMemo(
     () => extractAxisPadding(contentContainerStyle, isHorizontal),
+    [contentContainerStyle, isHorizontal],
+  );
+  const crossPadding = useMemo(
+    () => extractAxisPadding(contentContainerStyle, !isHorizontal),
     [contentContainerStyle, isHorizontal],
   );
 
@@ -341,8 +363,23 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, [isHorizontal, requestedColumns]);
   const mainAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.rowGap ?? 0) : 0;
   const crossAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.columnGap ?? 0) : 0;
+  // A cache entry belongs to this list/template and constraint domain. Type
+  // labels alone do not establish compatibility across lists or mixed spans.
+  const measurementCacheDomain = useMemo(() => ({}), [
+    renderItem, getItemType, ItemSeparatorComponent, dataVersion, fontScale,
+    isHorizontal, resolvedColumns, mainAxisGap, crossAxisGap, overrideItemLayout,
+  ]);
+  const cacheEnabled = overrideItemLayout == null;
+  const measurementRevision = useMemo(createMeasurementRevision, [
+    measurementCacheDomain, getFixedItemSize, keyExtractor, itemsAreEqual,
+    crossPadding.start, crossPadding.end,
+  ]);
+  const [, setMeasurementGeometry] = useState(0);
+  const measurementGeometry = measurementRevision.geometry;
   const columnsRef = useRef(resolvedColumns);
-  columnsRef.current = resolvedColumns;
+  commitBindings.push(() => {
+    columnsRef.current = resolvedColumns;
+  });
   const columnLayoutCacheRef = useRef<{
     items: ReadonlyArray<T>;
     resolvedColumns: number;
@@ -355,11 +392,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const reusable =
       NitroListDevFlags.dataAppendFastPath &&
       cached != null &&
+      !dataAnalysis.versionChanged &&
       cached.resolvedColumns === resolvedColumns &&
       cached.overrideItemLayout === overrideItemLayout
         ? cached
         : null;
-    const from = reusable != null ? Math.min(firstDifferingIndex(reusable.items, items), itemCount) : 0;
+    const from = reusable != null ? Math.min(reusable.items === items ? itemCount : dataAnalysis.firstChanged, itemCount) : 0;
     const spans = new Uint16Array(itemCount);
     const colOf = new Uint16Array(itemCount);
     const rowStarts = new Int32Array(itemCount);
@@ -392,17 +430,21 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       used += span;
       if (used >= resolvedColumns) used = 0;
     }
-    const layout = {spans, colOf, rowStarts};
-    columnLayoutCacheRef.current = {items, resolvedColumns, overrideItemLayout, layout};
+    const layout = {spans, colOf, rowStarts, changedFrom: from};
     return layout;
-  }, [resolvedColumns, itemCount, items, overrideItemLayout]);
+  }, [resolvedColumns, itemCount, items, overrideItemLayout, dataAnalysis]);
+  commitBindings.push(() => {
+    columnLayoutCacheRef.current = columnLayout == null ? null : {items, resolvedColumns, overrideItemLayout, layout: columnLayout};
+  });
 
   const [headerSize, setHeaderSize] = useState(0);
   const [footerSize, setFooterSize] = useState(0);
   const [alignPad, setAlignPad] = useState(0);
   const endSpaceRef = useRef(0);
   const anchoredEndSpaceRef = useRef(anchoredEndSpace);
-  anchoredEndSpaceRef.current = anchoredEndSpace;
+  commitBindings.push(() => {
+    anchoredEndSpaceRef.current = anchoredEndSpace;
+  });
   const anchoredReadyRef = useRef<{anchorIndex: number; fired: boolean}>({
     anchorIndex: -1,
     fired: false,
@@ -411,7 +453,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const effectivePaddingStart = paddingStart + headerSize + alignPad;
   const effectivePaddingStartRef = useRef(effectivePaddingStart);
-  effectivePaddingStartRef.current = effectivePaddingStart;
+  commitBindings.push(() => {
+    effectivePaddingStartRef.current = effectivePaddingStart;
+  });
 
   const initialTargetRef = useRef<{
     offset: number;
@@ -459,7 +503,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       ? drawDistance
       : Math.min(INITIAL_DRAW_DISTANCE_DP, drawDistance);
   const effectiveDrawDistanceRef = useRef(effectiveDrawDistance);
-  effectiveDrawDistanceRef.current = effectiveDrawDistance;
+  commitBindings.push(() => {
+    effectiveDrawDistanceRef.current = effectiveDrawDistance;
+  });
 
   const initialContentOffset = useMemo<{x: number; y: number} | undefined>(() => {
     const initial = initialTargetRef.current;
@@ -479,7 +525,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const layoutCacheCtxRef = useRef<LayoutCacheCtx | null>(null);
   if (layoutCacheCtxRef.current == null) {
-    layoutCacheCtxRef.current = {} as LayoutCacheCtx;
+    // Pinned cells can read estimated geometry on the first render, before
+    // there is a published engine or live range.
+    layoutCacheCtxRef.current = {engineRef: hybridRef,
+      liveRangeRef: {current: {start: 0, end: -1}}, estimatedItemSize, itemCount};
   }
   const layoutCacheApiRef = useRef<LayoutCacheApi | null>(null);
   if (layoutCacheApiRef.current == null) {
@@ -512,26 +561,34 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         : false;
   const mvcpEnabled = mvcpSizeEnabled || mvcpDataEnabled;
   const mvcpResolvedRef = useRef({size: mvcpSizeEnabled, data: mvcpDataEnabled});
-  mvcpResolvedRef.current = {size: mvcpSizeEnabled, data: mvcpDataEnabled};
+  commitBindings.push(() => {
+    mvcpResolvedRef.current = {size: mvcpSizeEnabled, data: mvcpDataEnabled};
+  });
   const mvcpShouldRestoreRef = useRef<((item: T, index: number) => boolean) | null>(null);
-  mvcpShouldRestoreRef.current = mvcpConfigObject?.shouldRestorePosition ?? null;
+  commitBindings.push(() => {
+    mvcpShouldRestoreRef.current = mvcpConfigObject?.shouldRestorePosition ?? null;
+  });
   const mvcpStateRef = useRef<{
     enabled: boolean;
     anchor: {index: number; key: string | null; offset: number} | null;
   }>({enabled: false, anchor: null});
-  mvcpStateRef.current.enabled = mvcpEnabled;
-  if (!mvcpStateRef.current.enabled) {
-    mvcpStateRef.current.anchor = null;
-  }
+  commitBindings.push(() => {
+    mvcpStateRef.current.enabled = mvcpEnabled;
+  });
+  commitBindings.push(() => {
+    if (!mvcpEnabled) mvcpStateRef.current.anchor = null;
+  });
   const applyMvcpCorrectionRef = useRef<(diff: number) => void>(() => {});
   const latestRangeRef = useRef<{start: number; end: number}>({start: 0, end: -1});
 
-  Object.assign(layoutCacheCtxRef.current, {
-    engineRef: hybridRef,
-    liveRangeRef: latestRangeRef,
-    estimatedItemSize,
-    itemCount,
-  } satisfies LayoutCacheCtx);
+  commitBindings.push(() => {
+    Object.assign(layoutCacheCtxRef.current!, {
+      engineRef: hybridRef,
+      liveRangeRef: latestRangeRef,
+      estimatedItemSize,
+      itemCount,
+    } satisfies LayoutCacheCtx);
+  });
 
   const isPrewarmingRangeRef = useRef(false);
   const scrollActivityRef = useRef<{
@@ -566,7 +623,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   });
   const velocityRingRef = useRef(createVelocityRing());
   const adaptiveEnabledRef = useRef(adaptiveRenderMode === true);
-  adaptiveEnabledRef.current = adaptiveRenderMode === true;
+  commitBindings.push(() => {
+    adaptiveEnabledRef.current = adaptiveRenderMode === true;
+  });
   const adaptiveStateRef = useRef<{
     mode: NitroListRenderMode;
     timer: ReturnType<typeof setTimeout> | null;
@@ -653,19 +712,21 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const notifyLayoutSettled = useCallback(() => {
     flushWaiters(layoutSettleWaitersRef.current);
   }, []);
-  cellBridgeRef.current.onLayoutSettled = notifyLayoutSettled;
+  commitBindings.push(() => {
+    cellBridgeRef.current.onLayoutSettled = notifyLayoutSettled;
+  });
 
   const measurementCtxRef = useRef<{
     items: ReadonlyArray<T>;
     getItemType?: (item: T, index: number) => ItemTypeKey;
     estimatedItemSize: number;
   }>({items, getItemType, estimatedItemSize});
-  useEffect(() => {
+  commitBindings.push(() => {
     measurementCtxRef.current = {items, getItemType, estimatedItemSize};
   });
   const estimateDriftStatsRef = useRef<Map<string, EstimateDriftStats> | null>(null);
   const onItemSizeChangedRef = useRef(onItemSizeChanged);
-  useEffect(() => {
+  commitBindings.push(() => {
     onItemSizeChangedRef.current = onItemSizeChanged;
   });
 
@@ -685,30 +746,33 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     [measurement],
   );
   const enqueueItemSize = useCallback(
-    (index: number, sizeDp: number) => measurement.enqueue(index, sizeDp),
+    (index: number, sizeDp: number, identity?: MeasurementIdentity) => measurement.enqueue(index, sizeDp, identity),
     [measurement],
   );
   useEffect(() => () => measurement.cancelPending(), [measurement]);
 
 
-  const autoFixedEnabled = autoFixedItemSizes === true && getItemType != null;
+  const autoFixedEnabled = autoFixedItemSizes === true && getItemType != null && cacheEnabled;
   const autoFixedEnabledRef = useRef(autoFixedEnabled);
-  autoFixedEnabledRef.current = autoFixedEnabled;
+  commitBindings.push(() => {
+    autoFixedEnabledRef.current = autoFixedEnabled;
+  });
   const autoFixedTypesRef = useRef<ReadonlyMap<ItemTypeKey, number>>(new Map());
   const resolveFixedSize = useCallback(
     (item: T, index: number, type: ItemTypeKey | undefined): number | undefined => {
       const explicit = getFixedItemSize?.(item, index, type);
-      if (explicit != null) return explicit;
+      if (explicit != null) return explicit + mainAxisGap;
       if (type === undefined) return undefined;
       return autoFixedTypesRef.current.get(type);
     },
-    [getFixedItemSize],
+    [getFixedItemSize, mainAxisGap],
   );
   const lastFixedPushRef = useRef<{
     items: ReadonlyArray<T>;
     getFixedItemSize: typeof getFixedItemSize;
     getItemType: typeof getItemType;
     autoFixed: ReadonlyMap<ItemTypeKey, number>;
+    mainAxisGap: number;
   } | null>(null);
   const pushFixedItemSizes = useCallback((full: boolean = false) => {
     if (itemCount === 0 || hybridRef.current == null) return;
@@ -724,6 +788,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       last != null &&
       last.getFixedItemSize === getFixedItemSize &&
       last.getItemType === getItemType &&
+      last.mainAxisGap === mainAxisGap &&
       last.autoFixed === autoFixed
         ? firstDifferingIndex(last.items, items)
         : 0;
@@ -739,7 +804,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         (itemCount - from) * ((getItemType != null ? 1 : 0) + (getFixedItemSize != null ? 1 : 0)),
       );
     }
-    lastFixedPushRef.current = {items, getFixedItemSize, getItemType, autoFixed};
+    lastFixedPushRef.current = {items, getFixedItemSize, getItemType, autoFixed, mainAxisGap};
     flushPendingItemSizes();
   }, [
     getFixedItemSize,
@@ -749,9 +814,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     enqueueItemSize,
     flushPendingItemSizes,
     resolveFixedSize,
+    mainAxisGap,
   ]);
   const pushFixedItemSizesRef = useRef(pushFixedItemSizes);
-  pushFixedItemSizesRef.current = pushFixedItemSizes;
+  commitBindings.push(() => {
+    pushFixedItemSizesRef.current = pushFixedItemSizes;
+  });
   const commitAutoFixedTypes = useCallback(
     (next: Map<ItemTypeKey, number>, pushSizes: boolean) => {
       autoFixedTypesRef.current = next;
@@ -765,26 +833,29 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const freezeAutoFixedTypesRef = useRef<
     (candidates: Set<ItemTypeKey>, widthDp: number, fontScale: number) => void
   >(() => {});
-  freezeAutoFixedTypesRef.current = (candidates, widthDp, fontScale) => {
-    let next: Map<ItemTypeKey, number> | null = null;
-    for (const type of candidates) {
-      const size = getCachedFixedSize(measurementCacheKey(type, widthDp, fontScale));
-      if (size == null) continue;
-      if (next == null) next = new Map(autoFixedTypesRef.current);
-      next.set(type, size);
-    }
-    if (next != null) commitAutoFixedTypes(next, true);
-  };
+  commitBindings.push(() => {
+    freezeAutoFixedTypesRef.current = (candidates, widthDp, fontScale) => {
+      let next: Map<ItemTypeKey, number> | null = null;
+      for (const type of candidates) {
+        const size = getCachedFixedSize(measurementCacheKey(type, widthDp, fontScale, measurementCacheDomain));
+        if (size == null) continue;
+        if (next == null) next = new Map(autoFixedTypesRef.current);
+        next.set(type, size);
+      }
+      if (next != null) commitAutoFixedTypes(next, true);
+    };
+  });
   const handleAutoFixedMismatch = useCallback(
-    (index: number, sizeDp: number) => {
+    (index: number, sizeDp: number, identity?: MeasurementIdentity) => {
       const ctx = measurementCtxRef.current;
+      if (identity != null && !isCurrentMeasurement(identity, ctx.items, measurementApiCtxRef.current!.revision)) return;
       const item = ctx.items[index];
       if (item !== undefined && ctx.getItemType != null) {
         const type = ctx.getItemType(item, index);
-        const widthDp = crossViewportRef.current / columnsRef.current;
+        const widthDp = measurementApiCtxRef.current!.cacheWidth();
         if (widthDp > 0) {
           markMeasurementVariable(
-            measurementCacheKey(type, widthDp, PixelRatio.getFontScale()),
+            measurementCacheKey(type, widthDp, PixelRatio.getFontScale(), measurementApiCtxRef.current!.measurementCacheDomain),
             sizeDp,
           );
         }
@@ -794,47 +865,69 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           commitAutoFixedTypes(next, false);
         }
       }
-      enqueueItemSize(index, sizeDp);
+      enqueueItemSize(index, sizeDp, identity);
     },
     [enqueueItemSize, commitAutoFixedTypes],
   );
-  cellBridgeRef.current.onAutoFixedMismatch = handleAutoFixedMismatch;
+  commitBindings.push(() => {
+    cellBridgeRef.current.onAutoFixedMismatch = handleAutoFixedMismatch;
+  });
+  const previousCacheDomainRef = useRef(measurementCacheDomain);
   useEffect(() => {
-    if (!autoFixedEnabled && autoFixedTypesRef.current.size > 0) {
-      commitAutoFixedTypes(new Map(), false);
-    }
-  }, [autoFixedEnabled, commitAutoFixedTypes]);
+    if (previousCacheDomainRef.current === measurementCacheDomain && autoFixedEnabled) return;
+    previousCacheDomainRef.current = measurementCacheDomain;
+    if (autoFixedTypesRef.current.size === 0) return;
+    commitAutoFixedTypes(new Map(), false);
+    measurement.cancelPending();
+    dataChangeCtxRef.current!.commitData(null, true, -1);
+    invalidateLayoutCache();
+    refillLayoutCacheRef.current();
+  }, [measurementCacheDomain, autoFixedEnabled, commitAutoFixedTypes, measurement, invalidateLayoutCache]);
 
 
   const readTotalSizeRef = useRef(readTotalSize);
-  readTotalSizeRef.current = readTotalSize;
+  commitBindings.push(() => {
+    readTotalSizeRef.current = readTotalSize;
+  });
 
   const lastScrollOffsetRef = useRef(initialTargetRef.current?.offset ?? 0);
   const viewportSizeRef = useRef<{width: number; height: number}>({width: 0, height: 0});
   const mainViewportRef = useRef(0);
   const crossViewportRef = useRef(0);
+  const cacheWidth = () => Math.max(0,
+    (crossViewportRef.current - crossPadding.start - crossPadding.end) / resolvedColumns - crossAxisGap,
+  );
 
-  Object.assign(measurementApiCtxRef.current, {
-    pendingSizesRef,
-    engineRef: hybridRef,
-    mvcpStateRef,
-    mvcpResolvedRef,
-    isPrewarmingRangeRef,
-    measurementCtxRef,
-    crossViewportRef,
-    columnsRef,
-    autoFixedEnabledRef,
-    autoFixedTypesRef,
-    estimateDriftStatsRef,
-    freezeAutoFixedTypesRef,
-    onItemSizeChangedRef,
-    anchoredEndSpaceRef,
-    updateEndSpaceRef,
-    refillLayoutCacheRef,
-    applyMvcpCorrectionRef,
-    invalidateLayoutCache,
-    readItemOffset,
-  } satisfies MeasurementCtx<T>);
+  commitBindings.push(() => {
+    Object.assign(measurementApiCtxRef.current!, {
+      revision: measurementRevision,
+      dataRevisionRef: nativeDataRevisionRef,
+      layout,
+      consumeSnapshot: (slab, written, commitRange) => rangePipeline.consumeSnapshot(slab, written, commitRange),
+      measurementCacheDomain,
+      cacheWidth,
+      cacheEnabled,
+      pendingSizesRef,
+      engineRef: hybridRef,
+      mvcpStateRef,
+      mvcpResolvedRef,
+      isPrewarmingRangeRef,
+      measurementCtxRef,
+      crossViewportRef,
+      columnsRef,
+      autoFixedEnabledRef,
+      autoFixedTypesRef,
+      estimateDriftStatsRef,
+      freezeAutoFixedTypesRef,
+      onItemSizeChangedRef,
+      anchoredEndSpaceRef,
+      updateEndSpaceRef,
+      refillLayoutCacheRef,
+      applyMvcpCorrectionRef,
+      invalidateLayoutCache,
+      readItemOffset,
+    } satisfies MeasurementCtx<T>);
+  });
   const hasFiredOnLoadRef = useRef(false);
   const mountTimestampRef = useRef(Date.now());
   const stickyIndexRef = useRef(-1);
@@ -851,15 +944,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   });
 
   const maintainAtEndRef = useRef<{threshold: number; animated: boolean} | null>(null);
-  maintainAtEndRef.current = maintainScrollAtEnd
-    ? {
-        threshold:
-          typeof maintainScrollAtEnd === 'object' && maintainScrollAtEnd.threshold != null
-            ? maintainScrollAtEnd.threshold
-            : 0.1,
-        animated: typeof maintainScrollAtEnd === 'object' && maintainScrollAtEnd.animated === true,
-      }
-    : null;
+  commitBindings.push(() => {
+    maintainAtEndRef.current = maintainScrollAtEnd
+      ? {
+          threshold:
+            typeof maintainScrollAtEnd === 'object' && maintainScrollAtEnd.threshold != null
+              ? maintainScrollAtEnd.threshold
+              : 0.1,
+          animated: typeof maintainScrollAtEnd === 'object' && maintainScrollAtEnd.animated === true,
+        }
+      : null;
+  });
   const stickToEndRef = useRef<{
     wasAtEnd: boolean;
     lastContent: number;
@@ -904,34 +999,38 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, []);
 
   const itemCountRef = useRef(itemCount);
-  itemCountRef.current = itemCount;
+  commitBindings.push(() => {
+    itemCountRef.current = itemCount;
+  });
 
   const edgeCtxRef = useRef<EdgeCallbacksCtx | null>(null);
   if (edgeCtxRef.current == null) {
     edgeCtxRef.current = {} as EdgeCallbacksCtx;
   }
-  Object.assign(edgeCtxRef.current, {
-    onEndReached,
-    onStartReached,
-    onEndReachedThreshold,
-    onStartReachedThreshold,
-    footerSize,
-    paddingEnd,
-    suppressEdgeRearmRef,
-    anchoredEndSpaceRef,
-    maintainAtEndRef,
-    itemCountRef,
-    mainViewportRef,
-    effectivePaddingStartRef,
-    endSpaceRef,
-    lastScrollOffsetRef,
-    stickToEndRef,
-    scrollActivityRef,
-    endEdgeStateRef,
-    startEdgeStateRef,
-    readTotalSize,
-    scheduleStickToEnd,
-  } satisfies EdgeCallbacksCtx);
+  commitBindings.push(() => {
+    Object.assign(edgeCtxRef.current!, {
+      onEndReached,
+      onStartReached,
+      onEndReachedThreshold,
+      onStartReachedThreshold,
+      footerSize,
+      paddingEnd,
+      suppressEdgeRearmRef,
+      anchoredEndSpaceRef,
+      maintainAtEndRef,
+      itemCountRef,
+      mainViewportRef,
+      effectivePaddingStartRef,
+      endSpaceRef,
+      lastScrollOffsetRef,
+      stickToEndRef,
+      scrollActivityRef,
+      endEdgeStateRef,
+      startEdgeStateRef,
+      readTotalSize,
+      scheduleStickToEnd,
+    } satisfies EdgeCallbacksCtx);
+  });
   const checkEdgeCallbacksImplRef = useRef<(() => void) | null>(null);
   if (checkEdgeCallbacksImplRef.current == null) {
     checkEdgeCallbacksImplRef.current = createEdgeCallbacks(edgeCtxRef.current);
@@ -969,19 +1068,25 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   if (itemTypesCtxRef.current == null) {
     itemTypesCtxRef.current = {} as ItemTypesCtx<T>;
   }
-  Object.assign(itemTypesCtxRef.current, {
-    items,
-    itemCount,
-    getItemType,
-    columnLayout,
-    engineRef: hybridRef,
-    typeIdMapRef,
-    crossViewportRef,
-    columnsRef,
-    autoFixedEnabledRef,
-    autoFixedTypesRef,
-    commitAutoFixedTypes,
-  } satisfies ItemTypesCtx<T>);
+  commitBindings.push(() => {
+    Object.assign(itemTypesCtxRef.current!, {
+      measurementCacheDomain,
+      cacheWidth,
+      cacheEnabled,
+      items,
+      analysis: dataAnalysis,
+      itemCount,
+      getItemType,
+      columnLayout,
+      engineRef: hybridRef,
+      typeIdMapRef,
+      crossViewportRef,
+      columnsRef,
+      autoFixedEnabledRef,
+      autoFixedTypesRef,
+      commitAutoFixedTypes,
+    } satisfies ItemTypesCtx<T>);
+  });
   const itemTypesApiRef = useRef<ItemTypesApi | null>(null);
   if (itemTypesApiRef.current == null) {
     itemTypesApiRef.current = createItemTypes(itemTypesCtxRef.current);
@@ -1080,22 +1185,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     layoutVersion: number;
   } | null>(null);
 
-  const pushItemTypes = useCallback(() => itemTypes.pushItemTypes(), [itemTypes]);
-
-  const pushItemTypesRef = useRef(pushItemTypes);
-  useEffect(() => {
-    pushItemTypesRef.current = pushItemTypes;
-    pushItemTypes();
-  }, [pushItemTypes, items, itemCount, getItemType]);
-
-  const pushItemSpans = useCallback(() => itemTypes.pushItemSpans(), [itemTypes]);
-
-  const pushItemSpansRef = useRef(pushItemSpans);
-  useEffect(() => {
-    pushItemSpansRef.current = pushItemSpans;
-    pushItemSpans();
-  }, [pushItemSpans, columnLayout]);
-
   const attachEngine = useCallback(
     (value: NitroListEngine | null) => {
       hybridRef.current = value;
@@ -1111,27 +1200,27 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       value.setScrollOffset(replayEngineOffset);
       lastPushedEngineOffsetRef.current = replayEngineOffset;
       if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
-      itemTypes.forgetSent();
-      pushItemTypesRef.current();
-      pushItemSpansRef.current();
       if (estimateFreezeDepthRef.current > 0) {
         value.setEstimatesFrozen(true);
         if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
       }
-      pushFixedItemSizesRef.current(true);
       flushPendingItemSizes();
       evaluateViewabilityRef.current();
     },
     [invalidateLayoutCache, flushPendingItemSizes],
   );
   const attachEngineRef = useRef(attachEngine);
-  attachEngineRef.current = attachEngine;
+  commitBindings.push(() => {
+    attachEngineRef.current = attachEngine;
+  });
 
   const [attachedHybrid, setAttachedHybrid] = useState<NitroListEngine | null>(null);
   const uiThreadDriverActive =
     experimentalUiThreadScroll === true && attachedHybrid != null;
   const uiThreadDriverActiveRef = useRef(uiThreadDriverActive);
-  uiThreadDriverActiveRef.current = uiThreadDriverActive;
+  commitBindings.push(() => {
+    uiThreadDriverActiveRef.current = uiThreadDriverActive;
+  });
 
   const uiPaddingTopSv = useSharedValue(0);
   useEffect(() => {
@@ -1193,7 +1282,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
 
   const refillLayoutCache = layout.refillIfCold;
-  refillLayoutCacheRef.current = refillLayoutCache;
+  commitBindings.push(() => {
+    refillLayoutCacheRef.current = refillLayoutCache;
+  });
 
 
   const lastSeenLayoutVersionRef = useRef<number>(-1);
@@ -1208,67 +1299,62 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const pendingScrollCommandRef = useRef<NitroListScrollCommandEcho | null>(null);
   const mvcpAnchorHintRef = useRef(0);
   const lastLiveEngineOffsetRef = useRef(lastScrollOffsetRef.current);
-  const deferredLiveRangeRef = useRef<{
-    start: number;
-    end: number;
-    version: number;
-    engineOffset: number;
-  } | null>(null);
 
   const rangeCtxRef = useRef<RangePipelineCtx | null>(null);
   if (rangeCtxRef.current == null) {
     rangeCtxRef.current = {} as RangePipelineCtx;
   }
-  Object.assign(rangeCtxRef.current, {
-    store,
-    layout,
-    engineRef: hybridRef,
-    itemCountRef,
-    latestRangeRef,
-    lastPrewarmRangeRef,
-    lastSeenLayoutVersionRef,
-    lastPushedEngineOffsetRef,
-    lastLiveEngineOffsetRef,
-    deferredLiveRangeRef,
-    isPrewarmingRangeRef,
-    uiThreadDriverActiveRef,
-    prewarmFocusRef,
-    prewarmAdmissionRef,
-    prewarmStateRef,
-    pendingCommitRef,
-    scrollActivityRef,
-    programmaticAnimatedScrollSeenRef,
-    effectivePaddingStartRef,
-    lastScrollOffsetRef,
-    mainViewportRef,
-    mountTimestampRef,
-    layoutSettleWaitersRef,
-    commitWaitersRef,
-    commitCounterRef,
-    pendingSizesRef,
-    cellBridgeRef,
-    checkEdgeCallbacksRef,
-    captureMvcpAnchorRef,
-    evaluateViewabilityRef,
-    emitFirstVisibleRef,
-    readTotalSizeRef,
-    readItemOffset,
-    readItemSize,
-    readTotalSize,
-    invalidateLayoutCache,
-    fillSlab,
-    writeSlabToCache,
-    setRangeTracked,
-    setPrewarmRangeTracked,
-    cancelPrewarmAdmission,
-    flushPendingItemSizes,
-  } satisfies RangePipelineCtx);
+  commitBindings.push(() => {
+    Object.assign(rangeCtxRef.current!, {
+      store,
+      dataRevisionRef: nativeDataRevisionRef,
+      layout,
+      engineRef: hybridRef,
+      itemCountRef,
+      latestRangeRef,
+      lastPrewarmRangeRef,
+      lastSeenLayoutVersionRef,
+      lastPushedEngineOffsetRef,
+      lastLiveEngineOffsetRef,
+      isPrewarmingRangeRef,
+      uiThreadDriverActiveRef,
+      prewarmFocusRef,
+      prewarmAdmissionRef,
+      prewarmStateRef,
+      pendingCommitRef,
+      scrollActivityRef,
+      programmaticAnimatedScrollSeenRef,
+      effectivePaddingStartRef,
+      lastScrollOffsetRef,
+      mainViewportRef,
+      mountTimestampRef,
+      layoutSettleWaitersRef,
+      commitWaitersRef,
+      commitCounterRef,
+      pendingSizesRef,
+      cellBridgeRef,
+      checkEdgeCallbacksRef,
+      captureMvcpAnchorRef,
+      evaluateViewabilityRef,
+      emitFirstVisibleRef,
+      readTotalSizeRef,
+      readItemOffset,
+      readItemSize,
+      readTotalSize,
+      invalidateLayoutCache,
+      fillSlab,
+      writeSlabToCache,
+      setRangeTracked,
+      setPrewarmRangeTracked,
+      cancelPrewarmAdmission,
+      flushPendingItemSizes,
+    } satisfies RangePipelineCtx);
+  });
   const rangePipelineRef = useRef<RangePipelineApi | null>(null);
   if (rangePipelineRef.current == null) {
     rangePipelineRef.current = createRangePipeline(rangeCtxRef.current);
   }
   const rangePipeline = rangePipelineRef.current;
-  const flushDeferredLiveRange = rangePipeline.flushDeferredLiveRange;
   const handleRangeChange = rangePipeline.handleRangeChange;
   const applyScrollOffsetSync = rangePipeline.applyScrollOffsetSync;
   const waitForLayoutSettle = rangePipeline.waitForLayoutSettle;
@@ -1357,7 +1443,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   );
 
   const updateStickyRef = useRef(updateSticky);
-  updateStickyRef.current = updateSticky;
+  commitBindings.push(() => {
+    updateStickyRef.current = updateSticky;
+  });
 
   const applyStickyOverlaySize = useCallback(
     (size: number) => {
@@ -1388,26 +1476,28 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   if (viewabilityCtxRef.current == null) {
     viewabilityCtxRef.current = {} as ViewabilityCtx<T>;
   }
-  Object.assign(viewabilityCtxRef.current, {
-    items,
-    keyExtractor,
-    config: viewabilityConfig,
-    onViewableItemsChanged,
-    hasEngine: () => hybridRef.current != null,
-    viewableRef: viewableMapRef,
-    pendingRef: pendingMapRef,
-    scratchRef: viewabilityScratchRef,
-    lastEvalRef: lastViewabilityEvalRef,
-    committedRangeRef,
-    timerRef: viewabilityTimerRef,
-    hasInteractedRef,
-    mainViewportRef,
-    lastScrollOffsetRef,
-    effectivePaddingStartRef,
-    readItemOffset,
-    readItemSize,
-    reschedule: () => evaluateViewabilityRef.current(),
-  } satisfies ViewabilityCtx<T>);
+  commitBindings.push(() => {
+    Object.assign(viewabilityCtxRef.current!, {
+      items,
+      keyExtractor,
+      config: viewabilityConfig,
+      onViewableItemsChanged,
+      hasEngine: () => hybridRef.current != null,
+      viewableRef: viewableMapRef,
+      pendingRef: pendingMapRef,
+      scratchRef: viewabilityScratchRef,
+      lastEvalRef: lastViewabilityEvalRef,
+      committedRangeRef,
+      timerRef: viewabilityTimerRef,
+      hasInteractedRef,
+      mainViewportRef,
+      lastScrollOffsetRef,
+      effectivePaddingStartRef,
+      readItemOffset,
+      readItemSize,
+      reschedule: () => evaluateViewabilityRef.current(),
+    } satisfies ViewabilityCtx<T>);
+  });
   const evaluateViewabilityImplRef = useRef<(() => void) | null>(null);
   if (evaluateViewabilityImplRef.current == null) {
     evaluateViewabilityImplRef.current = createViewability(viewabilityCtxRef.current);
@@ -1415,35 +1505,88 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const evaluateViewability = evaluateViewabilityImplRef.current;
 
 
+  const nativeDataRevisionRef = useRef(0);
+  const nativeMeasurementRevisionRef = useRef<typeof measurementRevision | null>(null);
+  const fixedDataBufferRef = useRef(new Float64Array(128));
+  const commitNativeData = (remap: Float64Array | null, reset: boolean, invalidateFrom: number): void => {
+    const engine = engineRef.current;
+    if (engine == null) return;
+    const domainChanged = nativeMeasurementRevisionRef.current !== measurementRevision;
+    if (domainChanged) {
+      reset = true;
+      itemTypes.forgetSent();
+      if (nativeMeasurementRevisionRef.current != null) {
+        measurement.cancelPending();
+        commitAutoFixedTypes(new Map(), false);
+      }
+    }
+    nativeMeasurementRevisionRef.current = measurementRevision;
+    const prepared = itemTypes.prepareTypes();
+    if (fixedDataBufferRef.current.length > Math.max(128, itemCount * 8)) {
+      fixedDataBufferRef.current = new Float64Array(Math.max(128, itemCount * 2));
+    }
+    let fixedCount = 0;
+    const from = reset ? 0 : invalidateFrom < 0 ? itemCount : invalidateFrom;
+    if (getFixedItemSize != null || autoFixedTypesRef.current.size > 0) {
+      for (let i = from; i < itemCount; ++i) {
+        const size = resolveFixedSize(items[i], i, getItemType?.(items[i], i));
+        if (size == null || !Number.isFinite(size) || size < 0) continue;
+        if ((fixedCount + 1) * 2 > fixedDataBufferRef.current.length) {
+          const grown = new Float64Array(fixedDataBufferRef.current.length * 2);
+          grown.set(fixedDataBufferRef.current);
+          fixedDataBufferRef.current = grown;
+        }
+        fixedDataBufferRef.current[fixedCount * 2] = i;
+        fixedDataBufferRef.current[fixedCount * 2 + 1] = size;
+        ++fixedCount;
+      }
+    }
+    invalidateLayoutCache();
+    engine.updateData(dataConfig({count: itemCount, estimate: estimatedItemSize,
+      draw: effectiveDrawDistance, horizontal: isHorizontal, columns: resolvedColumns,
+      epsilon: MEASUREMENT_EPSILON_DP, reset, revision: ++nativeDataRevisionRef.current,
+      invalidateFrom, typeStart: prepared.start, typeCount: prepared.count, typeOffset: prepared.offset,
+      fixedCount, remapCount: remap == null ? 0 : remap.length / 2,
+      spanCount: columnLayout == null ? 0 : itemCount - (reset ? 0 : columnLayout.changedFrom),
+      spanStart: reset ? 0 : columnLayout?.changedFrom ?? 0}), prepared.types.buffer,
+      (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER,
+      fixedDataBufferRef.current.buffer, (remap?.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER);
+  };
+
   const previousItemsRef = useRef<ReadonlyArray<T>>(items);
   const previousDataVersionRef = useRef<unknown>(dataVersion);
   const dataChangeCtxRef = useRef<DataChangeCtx<T> | null>(null);
   if (dataChangeCtxRef.current == null) {
     dataChangeCtxRef.current = {} as DataChangeCtx<T>;
   }
-  Object.assign(dataChangeCtxRef.current, {
-    items,
-    dataVersion,
-    keyExtractor,
-    previousItemsRef,
-    previousDataVersionRef,
-    dataJustChangedRef,
-    engineRef: hybridRef,
-    mvcpStateRef,
-    mvcpResolvedRef,
-    applyMvcpCorrectionRef,
-    viewableRef: viewableMapRef,
-    pendingRef: pendingMapRef,
-    isPrewarmingRangeRef,
-    lastPrewarmRangeRef,
-    lastViewabilityEvalRef,
-    viewabilityTimerRef,
-    cancelFlingPrewarm,
-    setPrewarmRangeTracked,
-    invalidateLayoutCache,
-    readItemOffset,
-    evaluateViewability,
-  } satisfies DataChangeCtx<T>);
+  commitBindings.push(() => {
+    Object.assign(dataChangeCtxRef.current!, {
+      items,
+      dataVersion,
+      keyExtractor,
+      previousItemsRef,
+      commitData: commitNativeData,
+      analysis: dataAnalysis,
+      itemsAreEqual,
+      previousDataVersionRef,
+      dataJustChangedRef,
+      engineRef: hybridRef,
+      mvcpStateRef,
+      mvcpResolvedRef,
+      applyMvcpCorrectionRef,
+      viewableRef: viewableMapRef,
+      pendingRef: pendingMapRef,
+      isPrewarmingRangeRef,
+      lastPrewarmRangeRef,
+      lastViewabilityEvalRef,
+      viewabilityTimerRef,
+      cancelFlingPrewarm,
+      setPrewarmRangeTracked,
+      invalidateLayoutCache,
+      readItemOffset,
+      evaluateViewability,
+    } satisfies DataChangeCtx<T>);
+  });
   const onDataMaybeChangedRef = useRef<(() => void) | null>(null);
   if (onDataMaybeChangedRef.current == null) {
     onDataMaybeChangedRef.current = createDataChangeHandler(dataChangeCtxRef.current);
@@ -1451,7 +1594,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const onDataMaybeChanged = onDataMaybeChangedRef.current;
   useEffect(() => {
     evaluateViewabilityRef.current = evaluateViewability;
-    onDataMaybeChanged();
+    evaluateViewability();
   }, [
     evaluateViewability,
     onDataMaybeChanged,
@@ -1459,12 +1602,13 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     dataVersion,
     keyExtractor,
     viewabilityConfig,
+    viewabilityConfig?.minimumViewTime,
+    viewabilityConfig?.waitForInteraction,
+    viewabilityConfig?.itemVisiblePercentThreshold,
+    viewabilityConfig?.viewAreaCoveragePercentThreshold,
     onViewableItemsChanged,
   ]);
 
-  useEffect(() => {
-    pushFixedItemSizes();
-  }, [pushFixedItemSizes]);
 
   useEffect(() => {
     if (!IS_DEV || itemCount === 0) return;
@@ -1686,28 +1830,30 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   if (geometryCtxRef.current == null) {
     geometryCtxRef.current = {} as GeometryCtx;
   }
-  Object.assign(geometryCtxRef.current, {
-    itemCount,
-    footerSize,
-    paddingStart,
-    paddingEnd,
-    headerSize,
-    alignItemsAtEnd: alignItemsAtEnd === true,
-    snapToIndices,
-    store,
-    engineRef: hybridRef,
-    mainViewportRef,
-    effectivePaddingStartRef,
-    endSpaceRef,
-    contentInsetBottomRef,
-    anchoredEndSpaceRef,
-    anchoredReadyRef,
-    readTotalSize,
-    readItemOffset,
-    readItemSize,
-    setAlignPad,
-    setSnapOffsets,
-  } satisfies GeometryCtx);
+  commitBindings.push(() => {
+    Object.assign(geometryCtxRef.current!, {
+      itemCount,
+      footerSize,
+      paddingStart,
+      paddingEnd,
+      headerSize,
+      alignItemsAtEnd: alignItemsAtEnd === true,
+      snapToIndices,
+      store,
+      engineRef: hybridRef,
+      mainViewportRef,
+      effectivePaddingStartRef,
+      endSpaceRef,
+      contentInsetBottomRef,
+      anchoredEndSpaceRef,
+      anchoredReadyRef,
+      readTotalSize,
+      readItemOffset,
+      readItemSize,
+      setAlignPad,
+      setSnapOffsets,
+    } satisfies GeometryCtx);
+  });
   const geometryApiRef = useRef<GeometryApi | null>(null);
   if (geometryApiRef.current == null) {
     geometryApiRef.current = createGeometry(geometryCtxRef.current);
@@ -1739,7 +1885,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, [items, itemCount, keyExtractor, indexAtOffset]);
 
   const updateAlignPad = geometry.updateAlignPad;
-  updateAlignPadRef.current = updateAlignPad;
+  commitBindings.push(() => {
+    updateAlignPadRef.current = updateAlignPad;
+  });
   useEffect(() => {
     updateAlignPad();
   }, [
@@ -1753,14 +1901,18 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   ]);
 
   const updateEndSpace = geometry.updateEndSpace;
-  updateEndSpaceRef.current = updateEndSpace;
+  commitBindings.push(() => {
+    updateEndSpaceRef.current = updateEndSpace;
+  });
   useEffect(() => {
     updateEndSpace();
   }, [updateEndSpace, items, anchoredEndSpace, itemCount, footerSize, paddingEnd]);
 
   const recomputeSnapOffsets = geometry.recomputeSnapOffsets;
   const recomputeSnapOffsetsRef = useRef(recomputeSnapOffsets);
-  recomputeSnapOffsetsRef.current = recomputeSnapOffsets;
+  commitBindings.push(() => {
+    recomputeSnapOffsetsRef.current = recomputeSnapOffsets;
+  });
   useEffect(() => {
     recomputeSnapOffsets();
   }, [recomputeSnapOffsets, snapIndicesKey, snapToIndices, itemCount, effectivePaddingStart]);
@@ -1972,112 +2124,129 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     hybridRef.current?.resetScrollVelocity();
     if (NITRO_LIST_PERF_COMPILED && hybridRef.current) NitroListPerfMonitor.recordJsiCall();
   }, []);
+  const measuredConstraintsRef = useRef({cross: 0, fontScale: PixelRatio.getFontScale()});
   const setEngineViewport = useCallback((width: number, height: number) => {
+    const cross = isHorizontalRef.current ? height : width;
+    const fontScale = PixelRatio.getFontScale();
+    const previous = measuredConstraintsRef.current;
+    if (previous.cross > 0 && (previous.cross !== cross || previous.fontScale !== fontScale)) {
+      const revision = measurementApiCtxRef.current!.revision;
+      revision.geometry++;
+      measurement.cancelPending();
+      commitAutoFixedTypes(new Map(), false);
+      dataChangeCtxRef.current!.commitData(null, true, -1);
+      invalidateLayoutCache();
+      setMeasurementGeometry(value => value + 1);
+    }
+    measuredConstraintsRef.current = {cross, fontScale};
     hybridRef.current?.setViewport(width, height);
     if (NITRO_LIST_PERF_COMPILED && hybridRef.current) NitroListPerfMonitor.recordJsiCall();
-  }, []);
+  }, [measurement, commitAutoFixedTypes, invalidateLayoutCache]);
 
-  Object.assign(scrollHandlersCtxRef.current, {
-    userOnScroll,
-    onScrollBeginDrag,
-    onScrollEndDrag,
-    onMomentumScrollBegin,
-    onMomentumScrollEnd,
-    scrollOffsetSharedValue,
-    uiScrollOffsetSv,
-    applyMvcpCorrectionRef,
-    captureMvcpAnchorRef,
-    checkEdgeCallbacksRef,
-    crossViewportRef,
-    effectivePaddingStartRef,
-    emitFirstVisibleRef,
-    evaluateViewabilityRef,
-    hasInteractedRef,
-    isHorizontalRef,
-    isPrewarmingRangeRef,
-    lastPrewarmRangeRef,
-    lastPushedEngineOffsetRef,
-    lastScrollOffsetRef,
-    lastViewabilityEvalRef,
-    latestRangeRef,
-    mainViewportRef,
-    mvcpStateRef,
-    pendingScrollCommandRef,
-    pendingSizesRef,
-    prewarmFlingDestinationRef,
-    programmaticAnimatedScrollSeenRef,
-    recordFlingOutcomeRef,
-    scrollActivityRef,
-    scrollVelocityRef,
-    suppressEdgeRearmRef,
-    uiThreadDriverActiveRef,
-    updateAlignPadRef,
-    updateEndSpaceRef,
-    velocityRingRef,
-    viewportSizeRef,
-    mountTimestampRef,
-    applyScrollOffsetSync,
-    beginScrollCommand,
-    cancelFlingPrewarm,
-    cancelPendingStickToEnd,
-    captureMvcpAnchor,
-    endProgrammaticAnimatedScroll,
-    flushDeferredLiveRange,
-    flushPendingItemSizes,
-    getMaxScrollOffset,
-    noteVelocityForAdaptive,
-    readItemOffset,
-    readItemSize,
-    readTotalSize,
-    resetScrollVelocity,
-    seedTypeMeansFromCache,
-    setPrewarmRangeTracked,
-    setEngineViewport,
-    updateSticky,
-    userOnScrollRef,
-  } satisfies ScrollHandlersCtx);
+  commitBindings.push(() => {
+    Object.assign(scrollHandlersCtxRef.current!, {
+      userOnScroll,
+      onScrollBeginDrag,
+      onScrollEndDrag,
+      onMomentumScrollBegin,
+      onMomentumScrollEnd,
+      scrollOffsetSharedValue,
+      uiScrollOffsetSv,
+      applyMvcpCorrectionRef,
+      captureMvcpAnchorRef,
+      checkEdgeCallbacksRef,
+      crossViewportRef,
+      effectivePaddingStartRef,
+      emitFirstVisibleRef,
+      evaluateViewabilityRef,
+      hasInteractedRef,
+      isHorizontalRef,
+      isPrewarmingRangeRef,
+      lastPrewarmRangeRef,
+      lastPushedEngineOffsetRef,
+      lastScrollOffsetRef,
+      lastViewabilityEvalRef,
+      latestRangeRef,
+      mainViewportRef,
+      mvcpStateRef,
+      pendingScrollCommandRef,
+      pendingSizesRef,
+      prewarmFlingDestinationRef,
+      programmaticAnimatedScrollSeenRef,
+      recordFlingOutcomeRef,
+      scrollActivityRef,
+      scrollVelocityRef,
+      suppressEdgeRearmRef,
+      uiThreadDriverActiveRef,
+      updateAlignPadRef,
+      updateEndSpaceRef,
+      velocityRingRef,
+      viewportSizeRef,
+      mountTimestampRef,
+      applyScrollOffsetSync,
+      beginScrollCommand,
+      cancelFlingPrewarm,
+      cancelPendingStickToEnd,
+      captureMvcpAnchor,
+      endProgrammaticAnimatedScroll,
+      flushPendingItemSizes,
+      getMaxScrollOffset,
+      noteVelocityForAdaptive,
+      readItemOffset,
+      readItemSize,
+      readTotalSize,
+      resetScrollVelocity,
+      seedTypeMeansFromCache,
+      setPrewarmRangeTracked,
+      setEngineViewport,
+      updateSticky,
+      userOnScrollRef,
+    } satisfies ScrollHandlersCtx);
+  });
 
 
   const stiCtxRef = useRef<ScrollToIndexCtx | null>(null);
   if (stiCtxRef.current == null) {
     stiCtxRef.current = {} as ScrollToIndexCtx;
   }
-  Object.assign(stiCtxRef.current, {
-    itemCount,
-    footerSize,
-    paddingEnd,
-    scrollCommandIdRef,
-    lastScrollOffsetRef,
-    lastPrewarmRangeRef,
-    isPrewarmingRangeRef,
-    prewarmFocusRef,
-    mainViewportRef,
-    effectivePaddingStartRef,
-    effectiveDrawDistanceRef,
-    lastSeenLayoutVersionRef,
-    endSpaceRef,
-    contentInsetBottomRef,
-    animatedScrollResolverRef,
-    beginScrollCommand,
-    resolveScrollCommand,
-    trackScrollCommand,
-    awaitScrollReadiness,
-    waitForLayoutSettle,
-    indexAtOffset,
-    clampScrollOffset,
-    getMaxScrollOffset,
-    readItemOffset,
-    readItemSize,
-    applyScrollOffsetSync,
-    resetScrollVelocity,
-    scrollToAbsoluteOffset,
-    setRangeTracked,
-    setPrewarmRangeTracked,
-    cancelFlingPrewarm,
-    cancelPrewarmAdmission,
-    acquireEstimateFreeze,
-    releaseEstimateFreeze,
-  } satisfies ScrollToIndexCtx);
+  commitBindings.push(() => {
+    Object.assign(stiCtxRef.current!, {
+      itemCount,
+      footerSize,
+      paddingEnd,
+      scrollCommandIdRef,
+      lastScrollOffsetRef,
+      lastPrewarmRangeRef,
+      isPrewarmingRangeRef,
+      prewarmFocusRef,
+      mainViewportRef,
+      effectivePaddingStartRef,
+      effectiveDrawDistanceRef,
+      lastSeenLayoutVersionRef,
+      endSpaceRef,
+      contentInsetBottomRef,
+      animatedScrollResolverRef,
+      beginScrollCommand,
+      resolveScrollCommand,
+      trackScrollCommand,
+      awaitScrollReadiness,
+      waitForLayoutSettle,
+      indexAtOffset,
+      clampScrollOffset,
+      getMaxScrollOffset,
+      readItemOffset,
+      readItemSize,
+      applyScrollOffsetSync,
+      resetScrollVelocity,
+      scrollToAbsoluteOffset,
+      setRangeTracked,
+      setPrewarmRangeTracked,
+      cancelFlingPrewarm,
+      cancelPrewarmAdmission,
+      acquireEstimateFreeze,
+      releaseEstimateFreeze,
+    } satisfies ScrollToIndexCtx);
+  });
   const stiRef = useRef<ScrollToIndexApi | null>(null);
   if (stiRef.current == null) {
     stiRef.current = createScrollToIndex(stiCtxRef.current);
@@ -2106,30 +2275,34 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   if (initialRevealCtxRef.current == null) {
     initialRevealCtxRef.current = {} as InitialRevealCtx;
   }
-  Object.assign(initialRevealCtxRef.current, {
-    itemCount,
-    initialTargetRef,
-    committedRangeRef,
-    scrollCommandIdRef,
-    lastScrollOffsetRef,
-    effectivePaddingStartRef,
-    mainViewportRef,
-    getMaxScrollOffset,
-    computeIndexScrollOffset,
-    clampScrollOffset,
-    scrollToAbsoluteOffset,
-    scrollToIndexPrecisely,
-    scrollToEndPrecisely,
-    indexAtOffset,
-    setRevealPending: setInitialRevealPending,
-  } satisfies InitialRevealCtx);
+  commitBindings.push(() => {
+    Object.assign(initialRevealCtxRef.current!, {
+      itemCount,
+      initialTargetRef,
+      committedRangeRef,
+      scrollCommandIdRef,
+      lastScrollOffsetRef,
+      effectivePaddingStartRef,
+      mainViewportRef,
+      getMaxScrollOffset,
+      computeIndexScrollOffset,
+      clampScrollOffset,
+      scrollToAbsoluteOffset,
+      scrollToIndexPrecisely,
+      scrollToEndPrecisely,
+      indexAtOffset,
+      setRevealPending: setInitialRevealPending,
+    } satisfies InitialRevealCtx);
+  });
   const initialRevealApiRef = useRef<InitialRevealApi | null>(null);
   if (initialRevealApiRef.current == null) {
     initialRevealApiRef.current = createInitialReveal(initialRevealCtxRef.current);
   }
   const initialReveal = initialRevealApiRef.current;
   const initialPassRef = useRef<() => {diff: number; visKey: string} | null>(initialReveal.pass);
-  initialPassRef.current = initialReveal.pass;
+  commitBindings.push(() => {
+    initialPassRef.current = initialReveal.pass;
+  });
 
   useEffect(() => {
     if (!initialRevealPending) return;
@@ -2139,7 +2312,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const settleInitialTarget = useCallback(() => initialReveal.settle(), [initialReveal]);
   const settleInitialTargetRef = useRef(settleInitialTarget);
-  settleInitialTargetRef.current = settleInitialTarget;
+  commitBindings.push(() => {
+    settleInitialTargetRef.current = settleInitialTarget;
+  });
   useEffect(() => {
     settleInitialTarget();
   }, [settleInitialTarget, itemCount, scrollToIndexPrecisely, scrollToEndPrecisely]);
@@ -2160,7 +2335,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     emitFirstVisibleRef.current();
   }, [updateSticky, effectivePaddingStart]);
   const syncOffsetAfterLayoutRef = useRef(syncOffsetAfterLayout);
-  syncOffsetAfterLayoutRef.current = syncOffsetAfterLayout;
+  commitBindings.push(() => {
+    syncOffsetAfterLayoutRef.current = syncOffsetAfterLayout;
+  });
   useEffect(() => {
     syncOffsetAfterLayout();
   }, [syncOffsetAfterLayout]);
@@ -2178,13 +2355,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     onLoad?.({elapsedTimeInMs: Date.now() - mountTimestampRef.current});
   }, [onLoad]);
   const fireOnLoadIfReadyRef = useRef(fireOnLoadIfReady);
-  fireOnLoadIfReadyRef.current = fireOnLoadIfReady;
+  commitBindings.push(() => {
+    fireOnLoadIfReadyRef.current = fireOnLoadIfReady;
+  });
   useEffect(() => {
     fireOnLoadIfReady();
   }, [fireOnLoadIfReady]);
 
   const drawDistanceExpandedStateRef = useRef(drawDistanceExpanded);
-  drawDistanceExpandedStateRef.current = drawDistanceExpanded;
+  commitBindings.push(() => {
+    drawDistanceExpandedStateRef.current = drawDistanceExpanded;
+  });
   const expandDrawDistanceRafRef = useRef<number | null>(null);
   const maybeExpandDrawDistance = useCallback(() => {
     if (drawDistanceExpandedStateRef.current || expandDrawDistanceRafRef.current != null) return;
@@ -2196,7 +2377,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     });
   }, []);
   const maybeExpandDrawDistanceRef = useRef(maybeExpandDrawDistance);
-  maybeExpandDrawDistanceRef.current = maybeExpandDrawDistance;
+  commitBindings.push(() => {
+    maybeExpandDrawDistanceRef.current = maybeExpandDrawDistance;
+  });
   useEffect(() => {
     maybeExpandDrawDistance();
     return () => {
@@ -2260,36 +2443,42 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   if (handleCtxRef.current == null) {
     handleCtxRef.current = {} as HandleCtx<T>;
   }
-  Object.assign(handleCtxRef.current, {
-    items,
-    itemCount,
-    keyExtractor,
-    effectivePaddingStart,
-    engineRef: hybridRef,
-    scrollRef,
-    typeIdMapRef,
-    viewportSizeRef,
-    crossViewportRef,
-    isHorizontalRef,
-    lastScrollOffsetRef,
-    contentInsetBottomRef,
-    isPrewarmingRangeRef,
-    lastPrewarmRangeRef,
-    animatedScrollResolverRef,
-    checkEdgeCallbacksRef,
-    readItemOffset,
-    readItemSize,
-    readTotalSize,
-    beginScrollCommand,
-    trackScrollCommand,
-    resolveScrollCommand,
-    cancelFlingPrewarm,
-    setPrewarmRangeTracked,
-    scrollToAbsoluteOffset,
-    scrollToIndexPrecisely,
-    scrollToEndPrecisely,
-    scrollIndexIntoViewImpl,
-  } satisfies HandleCtx<T>);
+  commitBindings.push(() => {
+    Object.assign(handleCtxRef.current!, {
+      columnLayout,
+      resolvedColumns,
+      crossPadding,
+      mainAxisGap,
+      items,
+      itemCount,
+      keyExtractor,
+      effectivePaddingStart,
+      engineRef: hybridRef,
+      scrollRef,
+      typeIdMapRef,
+      viewportSizeRef,
+      crossViewportRef,
+      isHorizontalRef,
+      lastScrollOffsetRef,
+      contentInsetBottomRef,
+      isPrewarmingRangeRef,
+      lastPrewarmRangeRef,
+      animatedScrollResolverRef,
+      checkEdgeCallbacksRef,
+      readItemOffset,
+      readItemSize,
+      readTotalSize,
+      beginScrollCommand,
+      trackScrollCommand,
+      resolveScrollCommand,
+      cancelFlingPrewarm,
+      setPrewarmRangeTracked,
+      scrollToAbsoluteOffset,
+      scrollToIndexPrecisely,
+      scrollToEndPrecisely,
+      scrollIndexIntoViewImpl,
+    } satisfies HandleCtx<T>);
+  });
   const imperativeHandleRef = useRef<NitroListHandle | null>(null);
   if (imperativeHandleRef.current == null) {
     imperativeHandleRef.current = createNitroListHandle(handleCtxRef.current);
@@ -2315,18 +2504,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     if (engine == null) {
       engine = createNitroListEngine();
       engineRef.current = engine;
+      nativeMeasurementRevisionRef.current = null;
+      itemTypes.forgetSent();
     }
-    engine.configure(
-      itemCount,
-      estimatedItemSize,
-      effectiveDrawDistance,
-      isHorizontal,
-      resolvedColumns,
-      MEASUREMENT_EPSILON_DP,
-    );
-    if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
+    // The data handler remaps old sources before a shrinking count is applied.
+    onDataMaybeChanged();
     if (first) attachEngineRef.current(engine);
-  }, [itemCount, estimatedItemSize, effectiveDrawDistance, isHorizontal, resolvedColumns]);
+    itemTypes.seedTypeMeans();
+  }, [items, dataVersion, keyExtractor, measurementRevision, itemCount, estimatedItemSize,
+    effectiveDrawDistance, isHorizontal, resolvedColumns, columnLayout, getFixedItemSize,
+    getItemType, onDataMaybeChanged, itemTypes]);
   useLayoutEffect(() => {
     const engine = engineRef.current;
     if (engine == null || attachedRangeCallbackRef.current === handleRangeChange) return;
@@ -2386,6 +2573,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
             {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
             <ListContainer store={store} horizontal={isHorizontal}>
               <NitroListCells
+                measurementRevision={measurementRevision}
+                measurementGeometry={measurementGeometry}
                 store={store}
                 items={items as ReadonlyArray<unknown>}
                 itemCount={itemCount}

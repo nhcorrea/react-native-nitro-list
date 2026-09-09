@@ -57,6 +57,7 @@ export class LayoutCoreMirror {
   private measurementEpsilon = 0;
   private minDirtyIndex = NOTHING_DIRTY;
   private layoutVersion = 0;
+  private geometryChanged = false;
   private directionalBuffers = false;
   private columnCount = 1;
   private spans: number[] = [];
@@ -95,6 +96,7 @@ export class LayoutCoreMirror {
     while (this.spans.length < count) this.spans.push(1);
     if (count > this.itemCount) {
       for (let i = this.itemCount; i < count; i++) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== this.estimate;
         this.sizes[i] = this.estimate;
         this.measured[i] = 0;
         this.types[i] = 0;
@@ -102,11 +104,18 @@ export class LayoutCoreMirror {
       }
     } else {
       for (let i = count; i < this.itemCount; i++) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== 0;
         this.sizes[i] = 0;
         this.measured[i] = 0;
       }
     }
+    this.geometryChanged = true;
+    const shrank = count < this.itemCount;
     this.itemCount = count;
+    if (shrank) {
+      this.rebuildTypeObservations();
+      this.applyTypeMeans();
+    }
     this.minDirtyIndex = 0;
     return true;
   }
@@ -118,6 +127,7 @@ export class LayoutCoreMirror {
     this.typeStats = [];
     for (let i = 0; i < this.itemCount; i++) {
       this.measured[i] = 0;
+      this.geometryChanged = this.geometryChanged || this.sizes[i] !== this.estimate;
       this.sizes[i] = this.estimate;
     }
     this.minDirtyIndex = 0;
@@ -177,6 +187,7 @@ export class LayoutCoreMirror {
         this.estimateForType(this.types[i]) === rounded &&
         this.sizes[i] !== rounded
       ) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== rounded;
         this.sizes[i] = rounded;
         anyChanged = true;
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
@@ -196,6 +207,7 @@ export class LayoutCoreMirror {
       return false;
     }
     this.updateTypeMean(index, this.measured[index] !== 0, this.sizes[index], rounded);
+    this.geometryChanged = this.geometryChanged || this.sizes[index] !== rounded;
     this.sizes[index] = rounded;
     this.measured[index] = 1;
     this.minDirtyIndex = Math.min(this.minDirtyIndex, index);
@@ -214,6 +226,7 @@ export class LayoutCoreMirror {
         continue;
       }
       this.updateTypeMean(idx, this.measured[idx] !== 0, this.sizes[idx], rounded);
+      this.geometryChanged = this.geometryChanged || this.sizes[idx] !== rounded;
       this.sizes[idx] = rounded;
       this.measured[idx] = 1;
       this.minDirtyIndex = Math.min(this.minDirtyIndex, idx);
@@ -242,6 +255,7 @@ export class LayoutCoreMirror {
   }
 
   resetItemSizes(): boolean {
+    this.resetTypeObservations();
     let anyChanged = false;
     for (let i = 0; i < this.itemCount; i++) {
       if (this.measured[i] !== 0) {
@@ -250,12 +264,24 @@ export class LayoutCoreMirror {
       }
       const target = this.estimateForType(this.types[i]);
       if (this.sizes[i] !== target) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== target;
         this.sizes[i] = target;
         anyChanged = true;
       }
     }
     if (anyChanged) this.minDirtyIndex = 0;
     return anyChanged;
+  }
+
+  invalidateItemSizesFrom(start: number, clearPriors: boolean): void {
+    if (clearPriors) this.typeStats = [];
+    for (let i = Math.max(0, start); i < this.itemCount; ++i) {
+      this.measured[i] = 0;
+      this.geometryChanged = this.geometryChanged || this.sizes[i] !== this.estimateForType(this.types[i]);
+      this.sizes[i] = this.estimateForType(this.types[i]);
+    }
+    this.rebuildTypeObservations();
+    this.minDirtyIndex = Math.min(this.minDirtyIndex, start);
   }
 
   remapItemSizes(pairs: ArrayLike<number>, pairCount: number): boolean {
@@ -286,12 +312,14 @@ export class LayoutCoreMirror {
         anyChanged = true;
       }
       if (this.sizes[i] !== newSizes[i]) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== newSizes[i];
         this.sizes[i] = newSizes[i];
         anyChanged = true;
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
       }
     }
-    return anyChanged;
+    this.rebuildTypeObservations();
+    return this.applyTypeMeans() || anyChanged;
   }
 
   resetAll(): void {
@@ -309,6 +337,7 @@ export class LayoutCoreMirror {
     this.estimatesFrozen = false;
     this.minDirtyIndex = NOTHING_DIRTY;
     this.layoutVersion = 0;
+    this.geometryChanged = false;
     this.lastSampleTimeMs = -1;
     this.lastSampleOffset = 0;
     this.velocity = 0;
@@ -316,32 +345,37 @@ export class LayoutCoreMirror {
   }
 
   setItemTypes(types: ArrayLike<number> | null, count: number): boolean {
-    return this.assignTypes(0, types, count);
+    return this.assignTypes(0, types, count, true);
   }
 
   setItemTypesRange(start: number, types: ArrayLike<number> | null, count: number): boolean {
     if (start < 0 || start >= this.itemCount) return true;
-    return this.assignTypes(start, types, Math.min(count, this.itemCount - start));
+    return this.assignTypes(start, types, Math.min(count, this.itemCount - start), false);
   }
 
-  private assignTypes(start: number, types: ArrayLike<number> | null, count: number): boolean {
+  private assignTypes(start: number, types: ArrayLike<number> | null, count: number, replaceAll: boolean): boolean {
     while (this.types.length < this.itemCount) this.types.push(0);
-    const end = start === 0 ? this.itemCount : Math.min(this.itemCount, start + Math.max(0, count));
+    const end = replaceAll ? this.itemCount : start + Math.min(this.itemCount - start, Math.max(0, count));
     let allTracked = true;
+    let measuredTypeChanged = false;
     for (let i = start; i < end; i++) {
       const k = i - start;
       const type = types != null && k < count ? types[k] : 0;
       if (type >= MAX_TYPE_STATS) allTracked = false;
+      measuredTypeChanged ||= this.types[i] !== type && this.measured[i] !== 0;
       this.types[i] = type;
     }
+    if (measuredTypeChanged) this.rebuildTypeObservations();
     for (let i = start; i < end; i++) {
       if (this.measured[i] !== 0) continue;
       const target = this.estimateForType(this.types[i]);
       if (this.sizes[i] !== target) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== target;
         this.sizes[i] = target;
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
       }
     }
+    if (measuredTypeChanged) this.applyTypeMeans();
     return allTracked;
   }
 
@@ -378,6 +412,7 @@ export class LayoutCoreMirror {
       if (this.measured[i] !== 0) continue;
       const target = this.estimateForType(this.types[i]);
       if (this.sizes[i] !== target) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== target;
         this.sizes[i] = target;
         anyChanged = true;
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
@@ -390,6 +425,7 @@ export class LayoutCoreMirror {
     if (this.typeAverages === enabled) return;
     this.typeAverages = enabled;
     this.typeStats = [];
+    if (enabled) this.rebuildTypeObservations();
   }
 
   getTotalSize(): number {
@@ -547,7 +583,8 @@ export class LayoutCoreMirror {
 
   private ensureClean(): void {
     if (this.minDirtyIndex === NOTHING_DIRTY) return;
-    let anyChanged = false;
+    let anyChanged = this.geometryChanged;
+    this.geometryChanged = false;
     if (this.columnCount <= 1) {
       let off =
         this.minDirtyIndex === 0
@@ -605,20 +642,40 @@ export class LayoutCoreMirror {
   }
 
   private updateTypeMean(index: number, wasMeasured: boolean, prevSize: number, newSize: number): void {
-    if (!this.typeAverages || newSize <= 0) return;
+    if (!this.typeAverages) return;
     const type = index < this.types.length ? this.types[index] : 0;
     if (type >= MAX_TYPE_STATS) return;
     while (this.typeStats.length <= type) {
       this.typeStats.push({mean: 0, appliedMean: 0, num: 0, seeded: false});
     }
     const stats = this.typeStats[type];
-    if (wasMeasured) {
-      if (stats.num > 0) {
+    if (wasMeasured && prevSize > 0) {
+      if (newSize <= 0) {
+        if (stats.num > 1) stats.mean = (stats.mean * stats.num - prevSize) / (stats.num - 1);
+        if (stats.num > 0) stats.num--;
+        if (stats.num === 0) stats.seeded = stats.mean > 0;
+      } else if (stats.num > 0) {
         stats.mean += (newSize - prevSize) / stats.num;
       }
-    } else {
+    } else if (newSize > 0) {
       stats.mean = (stats.mean * stats.num + newSize) / (stats.num + 1);
       stats.num++;
+    }
+  }
+
+  private resetTypeObservations(resetApplied = true): void {
+    for (const stats of this.typeStats) {
+      stats.seeded = stats.mean > 0;
+      stats.num = 0;
+      if (resetApplied) stats.appliedMean = stats.mean;
+    }
+  }
+
+  private rebuildTypeObservations(): void {
+    if (!this.typeAverages) return;
+    this.resetTypeObservations(false);
+    for (let i = 0; i < this.itemCount; i++) {
+      if (this.measured[i] !== 0) this.updateTypeMean(i, false, 0, this.sizes[i]);
     }
   }
 
@@ -640,13 +697,16 @@ export class LayoutCoreMirror {
       if (Math.abs(stats.mean - stats.appliedMean) <= typeMeanSweepBar(stats.appliedMean)) continue;
       const rounded = roundToOctave(stats.mean);
       if (this.sizes[i] !== rounded) {
+        this.geometryChanged = this.geometryChanged || this.sizes[i] !== rounded;
         this.sizes[i] = rounded;
         anyChanged = true;
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
       }
     }
     for (const stats of this.typeStats) {
-      if (stats.num > 0) stats.appliedMean = stats.mean;
+      if (stats.num > 0 && Math.abs(stats.mean - stats.appliedMean) > typeMeanSweepBar(stats.appliedMean)) {
+        stats.appliedMean = stats.mean;
+      }
     }
     return anyChanged;
   }
@@ -657,7 +717,8 @@ export class LayoutCoreMirror {
       type < this.typeStats.length &&
       (this.typeStats[type].num > 0 || this.typeStats[type].seeded)
     ) {
-      return roundToOctave(this.typeStats[type].mean);
+      const published = this.typeStats[type].appliedMean;
+      return published > 0 ? roundToOctave(published) : this.estimate;
     }
     return this.estimate;
   }
@@ -703,6 +764,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     | null = null;
 
   readonly callLog: string[] = [];
+  readonly dataCommits: number[][] = [];
   private readonly asyncRangeDelivery: boolean;
   private readonly explicitEpsilon: boolean;
   disposed = false;
@@ -734,6 +796,35 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     value: ((start: number, end: number, layoutVersion: number, offset: number) => void) | undefined,
   ) {
     this.applyProps({onRangeChange: value ?? null});
+  }
+
+  private dataItemCount = 0;
+  updateData(config: ArrayBuffer, types: ArrayBuffer, spans: ArrayBuffer,
+    fixedSizes: ArrayBuffer, remap: ArrayBuffer): void {
+    this.callLog.push('updateData');
+    const c = new Float64Array(config);
+    this.dataCommits.push(Array.from(c));
+    this.dataRevision = c[8];
+    const count = c[1];
+    this.isUpdatingProps = true;
+    this.drawDistance = c[3];
+    this.horizontal = c[4] !== 0;
+    if (!this.explicitEpsilon) this.core.setMeasurementEpsilon(c[6]);
+    this.core.setEstimate(c[2]);
+    if (count > this.dataItemCount) this.core.setItemCount(count);
+    if (c[7] !== 0) this.core.invalidateItemSizesFrom(0, true);
+    else if (c[13] > 0) this.core.remapItemSizes(new Float64Array(remap), c[13]);
+    else if (c[9] >= 0) this.core.invalidateItemSizesFrom(c[9], false);
+    this.core.setItemCount(count);
+    this.dataItemCount = count;
+    this.core.setColumnCount(c[5]);
+    const typed = new Uint16Array(types).subarray(c[15]);
+    if (c[10] === 0) this.core.setItemTypes(typed, c[11]);
+    else if (c[10] > 0) this.core.setItemTypesRange(c[10], typed, c[11]);
+    if (c[14] > 0) this.core.setItemSpans(new Uint16Array(spans), c[14] + c[16]);
+    if (c[12] > 0) this.core.setItemSizes(new Float64Array(fixedSizes), c[12], 1);
+    this.isUpdatingProps = false;
+    this.maybeEmitRange();
   }
 
   configure(
@@ -782,34 +873,56 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     this.callLog.push('setScrollOffset');
     if (offset === this.scrollOffset) return;
     this.scrollOffset = offset;
+    ++this.snapshotSequence;
     this.maybeEmitRange();
   }
 
+  private dataRevision = 0;
+  private snapshotSequence = 0;
+  private pendingSnapshot: Float64Array | null = null;
+  private fillSnapshot(slab: ArrayBuffer, delta = 0): number {
+    const out = new Float64Array(slab);
+    if (out.length < 12) return -1;
+    const range = this.core.getEngagedRange(this.scrollOffset, this.mainViewport(), this.drawDistance);
+    const count = Math.max(0, range.end - range.start + 1);
+    const required = 12 + count * 2;
+    const target = out.length < required ? new Float64Array(required) : out;
+    this.core.fillLayoutSlab(target.subarray(8), required - 8, this.scrollOffset, this.mainViewport(), this.drawDistance, 1);
+    target.copyWithin(0, 8, 12);
+    const changed = range.start !== this.lastStart || range.end !== this.lastEnd || range.version !== this.lastVersion;
+    target.set([1, 12, this.dataRevision, ++this.snapshotSequence, this.scrollOffset, delta,
+      count === 0 ? 2 : changed ? 1 : 0, required], 4);
+    this.lastStart = range.start; this.lastEnd = range.end; this.lastVersion = range.version;
+    if (target !== out) {
+      this.pendingSnapshot = target;
+      out.set(target.subarray(0, 12)); out[10] = -1;
+      return -1;
+    }
+    return count;
+  }
+  readSnapshot(sequence: number, slab: ArrayBuffer): number {
+    this.callLog.push('readSnapshot');
+    const pending = this.pendingSnapshot;
+    if (pending == null || pending[7] !== sequence || sequence !== this.snapshotSequence || pending[6] !== this.dataRevision || pending[0] !== this.core.getLayoutVersion() || pending[8] !== this.scrollOffset) return -2;
+    const out = new Float64Array(slab);
+    if (out.length < pending.length) return -1;
+    out.set(pending);
+    return Math.max(0, out[3] - out[2] + 1);
+  }
+  setItemSizesAndFill(pairs: ArrayBuffer, pairCount: number, anchorIndex: number,
+    revision: number, slab: ArrayBuffer): number {
+    this.callLog.push('setItemSizesAndFill');
+    if (revision !== this.dataRevision || pairCount < 0 || pairCount * 16 > pairs.byteLength) return -2;
+    const typed = new Float64Array(pairs);
+    let delta = 0;
+    if (anchorIndex >= 0) delta = this.core.setItemSizesAnchored(typed, pairCount, 1, anchorIndex);
+    else this.core.setItemSizes(typed, pairCount, 1);
+    return this.fillSnapshot(slab, delta);
+  }
   setScrollOffsetAndFill(offset: number, slab: ArrayBuffer): number {
     this.callLog.push('setScrollOffsetAndFill');
-    const capacity = slab.byteLength / 8;
-    if (capacity === 0) return -1;
     this.scrollOffset = offset;
-    const typed = new Float64Array(slab);
-    const written = this.core.fillLayoutSlab(
-      typed,
-      capacity,
-      this.scrollOffset,
-      this.mainViewport(),
-      this.drawDistance,
-      1,
-    );
-    if (written < 0) return -1;
-    const version = typed[0];
-    const start = typed[2];
-    const end = typed[3];
-    if (start === this.lastStart && end === this.lastEnd && version === this.lastVersion) {
-      return 0;
-    }
-    this.lastStart = start;
-    this.lastEnd = end;
-    this.lastVersion = version;
-    return written;
+    return this.fillSnapshot(slab);
   }
 
   resetScrollVelocity(): void {
@@ -827,6 +940,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   setViewport(width: number, height: number): void {
     this.callLog.push('setViewport');
     if (width === this.viewportWidth && height === this.viewportHeight) return;
+    ++this.snapshotSequence;
     this.viewportWidth = width;
     this.viewportHeight = height;
     this.maybeEmitRange();
@@ -916,16 +1030,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   fillLayoutSlab(slab: ArrayBuffer): number {
     this.callLog.push('fillLayoutSlab');
-    const capacity = slab.byteLength / 8;
-    if (capacity === 0) return -1;
-    return this.core.fillLayoutSlab(
-      new Float64Array(slab),
-      capacity,
-      this.scrollOffset,
-      this.mainViewport(),
-      this.drawDistance,
-      1,
-    );
+    return this.fillSnapshot(slab);
   }
 
   fillTypeStats(out: ArrayBuffer): number {

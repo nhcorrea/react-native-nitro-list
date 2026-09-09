@@ -37,6 +37,7 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
     withFooters: boolean;
     withSeparators: boolean;
   },
+  previous?: FlattenedSections<ItemT, SectionT>,
 ): FlattenedSections<ItemT, SectionT> {
   const rows: Array<NitroSectionRow<ItemT, SectionT>> = [];
   const stickyHeaderIndices: number[] = [];
@@ -83,6 +84,31 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
     }
   }
 
+  if (previous != null) {
+    const oldByKey = new Map(previous.rows.map((row) => [row.key, row]));
+    for (let i = 0; i < rows.length; ++i) {
+      const row = rows[i],
+        old = oldByKey.get(row.key);
+      if (
+        old == null ||
+        old.kind !== row.kind ||
+        old.section !== row.section ||
+        old.sectionIndex !== row.sectionIndex
+      )
+        continue;
+      if (
+        row.kind === 'item' &&
+        (old.kind !== 'item' || old.item !== row.item || old.itemIndex !== row.itemIndex)
+      )
+        continue;
+      if (
+        row.kind === 'separator' &&
+        (old.kind !== 'separator' || old.leadingItem !== row.leadingItem)
+      )
+        continue;
+      rows[i] = old;
+    }
+  }
   return {rows, stickyHeaderIndices, headerFlatIndex, itemFlatIndex};
 }
 

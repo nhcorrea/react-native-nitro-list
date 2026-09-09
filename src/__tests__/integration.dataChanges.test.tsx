@@ -8,10 +8,10 @@ import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './help
 const VIEWPORT_W = 400;
 const VIEWPORT_H = 800;
 
-function countCalls(log: string[], name: string): number {
-  let n = 0;
-  for (const entry of log) if (entry === name) n++;
-  return n;
+function countCalls(log: number[][], name: string): number {
+  return log.filter(c => name === 'setItemTypes' ? c[10] === 0 :
+    name === 'setItemTypesRange' ? c[10] > 0 :
+    name === 'remapItemSizes' ? c[13] > 0 && c[7] === 0 : c[7] !== 0).length;
 }
 
 describe('data changes with an identity-preserving prefix (plan 2026-09-01, Fase F)', () => {
@@ -55,7 +55,7 @@ describe('data changes with an identity-preserving prefix (plan 2026-09-01, Fase
 
   it('appending items runs the callbacks only past the old length and pushes a type range', async () => {
     const {getItemType, getFixedItemSize} = await mountWithSpies(300);
-    const log = harness!.mirror.callLog;
+    const log = harness!.mirror.dataCommits;
     const fullPushesBefore = countCalls(log, 'setItemTypes');
     getItemType.mockClear();
     getFixedItemSize.mockClear();
@@ -78,7 +78,7 @@ describe('data changes with an identity-preserving prefix (plan 2026-09-01, Fase
 
   it('editing the last item re-runs the callbacks for that item only', async () => {
     const {getItemType, getFixedItemSize} = await mountWithSpies(300);
-    const log = harness!.mirror.callLog;
+    const log = harness!.mirror.dataCommits;
     const fullPushesBefore = countCalls(log, 'setItemTypes');
     getItemType.mockClear();
     getFixedItemSize.mockClear();
@@ -107,7 +107,7 @@ describe('data changes with an identity-preserving prefix (plan 2026-09-01, Fase
       });
       harness.layout(VIEWPORT_W, VIEWPORT_H);
       await harness.settle(50);
-      const log = harness.mirror.callLog;
+      const log = harness.mirror.dataCommits;
       log.length = 0;
       const next = makeItems(total).map((item, i) => (i < kept ? item : `fresh-${i}`));
       harness.update({data: next});
@@ -124,7 +124,7 @@ describe('data changes with an identity-preserving prefix (plan 2026-09-01, Fase
 
   it('prepending items falls back to the full type push', async () => {
     const {getItemType} = await mountWithSpies(100);
-    const log = harness!.mirror.callLog;
+    const log = harness!.mirror.dataCommits;
     const fullPushesBefore = countCalls(log, 'setItemTypes');
     getItemType.mockClear();
 

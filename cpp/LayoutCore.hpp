@@ -29,6 +29,8 @@ public:
 
   bool resetItemSizes();
 
+  void invalidateItemSizesFrom(int32_t start, bool clearPriors);
+
   bool remapItemSizes(const double* pairs, int32_t pairCount);
 
   void resetAll();
@@ -51,6 +53,7 @@ public:
   void setColumnCount(int32_t columns);
 
   bool setItemSpans(const uint16_t* spans, int32_t count);
+  bool setItemSpansRange(int32_t start, const uint16_t* spans, int32_t count);
 
   int32_t fillTypeStats(double* out, int32_t capacityDoubles, double outputScale);
 
@@ -89,7 +92,10 @@ private:
 
   bool applyTypeMeansLocked();
 
-  bool assignTypesLocked(int32_t start, const uint16_t* types, int32_t count);
+  bool assignTypesLocked(int32_t start, const uint16_t* types, int32_t count, bool replaceAll);
+
+  void resetTypeObservationsLocked(bool resetApplied = true);
+  void rebuildTypeObservationsLocked();
 
   float estimateForTypeLocked(uint16_t type) const;
 
@@ -120,6 +126,7 @@ private:
   int32_t minDirtyIndex_ = INT32_MAX;
 
   int32_t layoutVersion_ = 0;
+  bool geometryChanged_ = false;
 
   bool hasRangeWindow_ = false;
   double rangeWindowMin_ = 0.0;

@@ -64,7 +64,7 @@ describe('numColumns grid (T30)', () => {
     harness.layout(VIEWPORT_W, VIEWPORT_H);
     await harness.settle(50);
 
-    expect(harness.mirror.callLog).toContain('setItemSpans');
+    expect(harness.mirror.dataCommits.some(c => c[14] > 0)).toBe(true);
     expect(harness.handle.getItemOffset(0)).toBe(0);
     expect(harness.handle.getItemOffset(1)).toBe(100);
     expect(harness.handle.getItemOffset(2)).toBe(100);
@@ -125,5 +125,37 @@ describe('numColumns grid (T30)', () => {
     const indices = harness.renderedIndices();
     expect(indices[0] % 2).toBe(0);
     expect((indices[indices.length - 1] + 1) % 2).toBe(0);
+  });
+
+  it('getLayout reports slots with spans, cross padding and gaps in container coordinates', async () => {
+    harness = renderNitroList({
+      data: makeItems(12), renderItem: () => null, estimatedItemSize: 100, keyExtractor: itemKey,
+      numColumns: 3, contentContainerStyle: {paddingHorizontal: 20, paddingTop: 30},
+      columnWrapperStyle: {rowGap: 8, columnGap: 12},
+      overrideItemLayout: (layout, _item, index) => { if (index === 0) layout.span = 2; },
+    });
+    harness.layout(400, 600);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+    // Available width 360; slots 240 + 120. Column gap is padding inside slots.
+    expect(harness.handle.getLayout(0)).toEqual({x: 0, y: 0, width: 240, height: 100});
+    expect(harness.handle.getLayout(1)).toEqual({x: 240, y: 0, width: 120, height: 100});
+    expect(harness.handle.getLayout(2)).toEqual({x: 0, y: 108, width: 120, height: 100});
+    expect(harness.handle.getLayout(NaN)).toBeUndefined();
+    expect(harness.handle.getLayout(1.5)).toBeUndefined();
+  });
+
+  it('explicit fixed heights include the row gap in the engine but not the cell rectangle', async () => {
+    harness = renderNitroList({
+      data: makeItems(12), renderItem: () => null, estimatedItemSize: 100, keyExtractor: itemKey,
+      numColumns: 2, getFixedItemSize: () => 100, columnWrapperStyle: {rowGap: 8},
+    });
+    harness.layout(400, 600);
+    await harness.settle(50);
+    expect(harness.handle.getItemOffset(2)).toBe(108);
+    expect(harness.handle.getLayout(2)).toEqual({x: 0, y: 108, width: 200, height: 100});
+    harness.update({columnWrapperStyle: {rowGap: 16}});
+    await harness.settle(50);
+    expect(harness.handle.getLayout(2)).toEqual({x: 0, y: 116, width: 200, height: 100});
   });
 });

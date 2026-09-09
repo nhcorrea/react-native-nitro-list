@@ -264,7 +264,7 @@ static void testRemapItemSizes() {
   const double keepZeroOnly[] = {0, 0};
   CHECK(typed.remapItemSizes(keepZeroOnly, 1));
   CHECK_EQ_F(typed.getSize(0), 60.0f);
-  CHECK_EQ_F(typed.getSize(3), 280.0f);
+  CHECK_EQ_F(typed.getSize(3), 60.0f); // removed measurement no longer contributes to the mean
 
   LayoutCore garbage;
   garbage.setEstimate(100.0f);
@@ -408,6 +408,45 @@ static void testSmallMeanDriftDoesNotSweep() {
     core.setItemSize(i, 160.0);
   }
   CHECK(core.getOffset(400) > 32000.0);
+}
+
+static void testDataChangesKeepPublishedTypeEstimate() {
+  for (uint16_t type : {0, 1}) {
+    LayoutCore core;
+    core.setTypeAverages(true);
+    core.setEstimate(64);
+    core.setItemCount(10000);
+    std::vector<uint16_t> types(10000, type);
+    core.setItemTypes(types.data(), 10000);
+    std::vector<double> measured;
+    for (int i = 9980; i < 10000; ++i) {
+      measured.push_back(i); measured.push_back(80);
+    }
+    core.setItemSizes(measured.data(), 20, 1);
+    core.setItemSize(9999, 76); // mean 79.8; below the threshold for a layout sweep
+    CHECK_EQ_F(core.getSize(100), 80);
+    const double oldAnchor = core.getOffset(9990);
+    const double oldTotal = core.getTotalSize();
+    core.setItemCount(10005);
+    std::vector<double> remap;
+    for (int i = 0; i < 10000; ++i) {
+      remap.push_back(i); remap.push_back(i + 5);
+    }
+    core.remapItemSizes(remap.data(), 10000);
+    types.resize(10005, type);
+    core.setItemTypes(types.data(), 10005);
+    CHECK_EQ_F(core.getOffset(9995) - oldAnchor, 400);
+    CHECK_EQ_F(core.getTotalSize() - oldTotal, 400);
+    CHECK(core.countUnmeasured(0, 10005) == 9985);
+  }
+  LayoutCore frozen;
+  frozen.setTypeAverages(true); frozen.setEstimate(64); frozen.setItemCount(3);
+  frozen.setEstimatesFrozen(true);
+  frozen.setItemSize(0, 80);
+  frozen.setItemTypes(nullptr, 0);
+  CHECK_EQ_F(frozen.getSize(1), 64); // no type estimate has been published yet
+  frozen.setEstimatesFrozen(false);
+  CHECK_EQ_F(frozen.getSize(1), 80);
 }
 
 static void testSeedTypeMeans() {
@@ -901,7 +940,7 @@ static void testTypesRangeAndUnmeasured() {
   CHECK_EQ_F(core.getSize(0), 50.0f);
   CHECK(core.countUnmeasured(0, 10) == 9);
   CHECK(core.setItemTypes(nullptr, 0));
-  CHECK_EQ_F(core.getSize(1), 100.0f);
+  CHECK_EQ_F(core.getSize(1), 50.0f); // surviving observation is now attributed to type zero
 }
 
 static double gScriptedClockMs = 0.0;
@@ -1061,10 +1100,162 @@ static int runReplay(const char* path) {
   return 0;
 }
 
+static void testIndependentTypeDrift() {
+  for (bool reverse : {false, true}) {
+    LayoutCore core;
+    core.setTypeAverages(true);
+    core.setEstimate(100);
+    core.setItemCount(4);
+    const uint16_t types[] = {1, 2, 1, 2};
+    core.setItemTypes(types, 4);
+    const double initial[] = {0, 100, 1, 100};
+    core.setItemSizes(initial, 2, 1);
+    double applied = 100;
+    for (int step = 1; step <= 20; step++) {
+      const double slow = 100 + step;
+      const double fast = 100 + 5 * step;
+      const double pairs[] = {reverse ? 1.0 : 0.0, reverse ? fast : slow,
+                              reverse ? 0.0 : 1.0, reverse ? slow : fast};
+      core.setItemSizes(pairs, 2, 1);
+      if (slow - applied > std::max(0.5, 0.02 * applied)) applied = slow;
+      CHECK_EQ_F(core.getSize(2), applied);
+    }
+  }
+}
+
+static void testPartialTypesAtZero() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(100);
+  core.setItemCount(4);
+  const uint16_t initial[] = {2, 2, 2, 2};
+  core.setItemTypes(initial, 4);
+  const double seeds[] = {2, 200};
+  core.seedTypeMeans(seeds, 1, 1);
+  const uint16_t replacement[] = {1};
+  core.setItemTypesRange(0, replacement, 1);
+  CHECK_EQ_F(core.getSize(0), 100);
+  CHECK_EQ_F(core.getSize(3), 200);
+  core.setItemTypesRange(0, nullptr, 0);
+  CHECK_EQ_F(core.getSize(3), 200);
+  core.setItemTypesRange(2, replacement, 1);
+  CHECK_EQ_F(core.getSize(1), 200);
+  CHECK_EQ_F(core.getSize(2), 100);
+  CHECK_EQ_F(core.getSize(3), 200);
+  core.setItemTypes(nullptr, 0);
+  CHECK_EQ_F(core.getSize(3), 100);
+}
+
+static void testCurrentTypeObservations() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(50);
+  core.setItemCount(4);
+  const uint16_t types[] = {1, 1, 1, 1};
+  core.setItemTypes(types, 4);
+  core.setItemSize(0, 100);
+  core.setItemSize(1, 100);
+  core.resetItemSizes();
+  double stats[12];
+  CHECK(core.fillTypeStats(stats, 12, 1) == 0);
+  CHECK_EQ_F(core.getSize(3), 100); // prior, not two current samples
+  core.setItemSize(0, 200);
+  CHECK(core.fillTypeStats(stats, 12, 1) == 1);
+  CHECK_EQ_F(stats[1], 200);
+  CHECK_EQ_F(stats[2], 1);
+  core.setItemSize(1, 100);
+  core.setItemCount(1);
+  core.fillTypeStats(stats, 12, 1);
+  CHECK_EQ_F(stats[1], 200);
+  CHECK_EQ_F(stats[2], 1);
+  core.setItemSize(0, 0);
+  CHECK(core.fillTypeStats(stats, 12, 1) == 0);
+  core.setItemSize(0, 300);
+  core.fillTypeStats(stats, 12, 1);
+  CHECK_EQ_F(stats[1], 300);
+  CHECK_EQ_F(stats[2], 1);
+  core.setItemCount(4);
+  core.setItemTypes(types, 4);
+  const double remap[] = {0, 3};
+  core.remapItemSizes(remap, 1);
+  core.fillTypeStats(stats, 12, 1);
+  CHECK_EQ_F(stats[1], 300);
+  CHECK_EQ_F(stats[2], 1);
+  CHECK_EQ_F(core.getSize(3), 300);
+  const uint16_t changed[] = {2};
+  core.setItemTypesRange(3, changed, 1);
+  CHECK(core.fillTypeStats(stats, 12, 1) == 1);
+  CHECK_EQ_F(stats[0], 2);
+  CHECK_EQ_F(stats[2], 1);
+}
+
+static void testAllocatedGeometryMemory() {
+  LayoutCore core;
+  core.setEstimate(100);
+  core.setItemCount(100000);
+  const size_t linear = core.getMemoryFootprint();
+  CHECK(linear >= 100000 * (sizeof(float) + sizeof(double) + sizeof(uint8_t) + 2 * sizeof(uint16_t)));
+  core.setColumnCount(2);
+  core.getTotalSize();
+  const size_t grid = core.getMemoryFootprint();
+  CHECK(grid >= linear + 100000 * sizeof(int32_t));
+  core.setItemCount(100);
+  CHECK(core.getMemoryFootprint() == grid); // retained capacity is still allocated
+  core.resetAll();
+  CHECK(core.getMemoryFootprint() == 0);
+}
+
+static void testIncrementalGridAgainstPacking() {
+  for (int columns : {1, 2, 3, 5}) {
+    LayoutCore core;
+    core.setEstimate(80);
+    core.setColumnCount(columns);
+    std::vector<uint16_t> spans;
+    std::vector<double> sizes;
+    for (int stage = 0; stage < 12; ++stage) {
+      const int count = stage == 9 ? 5 : 10 + stage * 3;
+      spans.resize(count, 1);
+      sizes.resize(count, 80);
+      // Leave a size dirty across the count change.
+      if (stage > 0 && !sizes.empty()) { core.setItemSize(0, 120 + stage); sizes[0] = 120 + stage; }
+      core.setItemCount(count);
+      for (int i = 1; i < count; ++i) { spans[i] = i % 4 == 0 ? columns : 1; }
+      core.setItemSpans(spans.data(), count);
+      double offset = 0;
+      for (int i = 0; i < count;) {
+        int used = 0;
+        double height = 0;
+        do {
+          const int span = std::min<int>(columns, spans[i]);
+          if (used > 0 && used + span > columns) break;
+          CHECK_EQ_F(core.getOffset(i), offset);
+          height = std::max(height, sizes[i]);
+          used += span;
+          ++i;
+        } while (i < count && used < columns);
+        offset += height;
+      }
+      CHECK_EQ_F(core.getTotalSize(), offset);
+    }
+  }
+  LayoutCore boundary;
+  boundary.setEstimate(100); boundary.setColumnCount(3); boundary.setItemCount(3);
+  const uint16_t spans[] = {2, 2, 1}; boundary.setItemSpans(spans, 3);
+  CHECK_EQ_F(boundary.getOffset(1), 100);
+  const uint16_t one[] = {1}; boundary.setItemSpansRange(1, one, 1);
+  CHECK_EQ_F(boundary.getOffset(1), 0); // changed span can move into the preceding row
+  CHECK_EQ_F(boundary.getOffset(2), 100);
+  const int version = boundary.getLayoutVersion();
+  boundary.setItemSize(1, 80);
+  CHECK_EQ_F(boundary.getTotalSize(), 200);
+  CHECK(boundary.getLayoutVersion() > version); // non-max item size is geometry too
+}
+
 int main(int argc, char** argv) {
   if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
     return runReplay(argv[2]);
   }
+  testIncrementalGridAgainstPacking();
   testOctaveRounding();
   testEstimateFillAndTotal();
   testEpsilonGate();
@@ -1079,6 +1270,11 @@ int main(int argc, char** argv) {
   testAnchoredBatch();
   testTypeAverages();
   testSmallMeanDriftDoesNotSweep();
+  testDataChangesKeepPublishedTypeEstimate();
+  testIndependentTypeDrift();
+  testPartialTypesAtZero();
+  testCurrentTypeObservations();
+  testAllocatedGeometryMemory();
   testSeedTypeMeans();
   testFillLayoutSlab();
   testDirectionalBuffers();

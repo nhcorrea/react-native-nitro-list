@@ -24,7 +24,15 @@ public:
   void configure(double itemCount, double estimatedItemSize, double drawDistance, bool horizontal,
                  double numColumns, double measurementEpsilon) override;
   void setScrollOffset(double offset) override;
+  void updateData(const std::shared_ptr<ArrayBuffer>& config,
+                  const std::shared_ptr<ArrayBuffer>& types,
+                  const std::shared_ptr<ArrayBuffer>& spans,
+                  const std::shared_ptr<ArrayBuffer>& fixedSizes,
+                  const std::shared_ptr<ArrayBuffer>& remap) override;
   double setScrollOffsetAndFill(double offset, const std::shared_ptr<ArrayBuffer>& slab) override;
+  double setItemSizesAndFill(const std::shared_ptr<ArrayBuffer>& pairs, double pairCount,
+    double anchorIndex, double dataRevision, const std::shared_ptr<ArrayBuffer>& slab) override;
+  double readSnapshot(double sequence, const std::shared_ptr<ArrayBuffer>& slab) override;
   void resetScrollVelocity() override;
   void setEstimatesFrozen(bool frozen) override;
   void setViewport(double width, double height) override;
@@ -50,8 +58,13 @@ public:
 private:
   double mainViewportLocked() const;
   void maybeEmitRange();
+  double fillSnapshotLocked(double* out, int32_t capacity, double anchorDelta = 0.0);
+  double sequence_ = 0;
+  std::vector<double> pendingSnapshot_;
 
   LayoutCore core_;
+  int32_t itemCount_ = 0;
+  double dataRevision_ = 0;
   std::mutex stateMutex_;
   double scrollOffset_ = 0.0;
   double viewportWidth_ = 0.0;

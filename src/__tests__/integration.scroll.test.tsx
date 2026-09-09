@@ -113,56 +113,48 @@ describe('imperative scroll integration', () => {
     return {mounts, unmounts, renderItem};
   }
 
-  it('a long animated scrollToOffset keeps only origin and destination mounted while flying over content', async () => {
-    const {mounts, unmounts, renderItem} = trackCellLifecycle();
+  function expectViewportCovered(): void {
+    const offset = harness.lastScrollTop();
+    // Rectangles come from committed cell props in the test renderer. This is
+    // a React geometry oracle, not native presentation timing.
+    const rectangles = [...harness.cellInstances().values()]
+      .filter(cell => !cell.props.hidden)
+      .map(cell => ({x: 0, y: cell.props.top, width: VIEWPORT_W, height: 100}));
+    let coveredThrough = offset;
+    for (const rect of rectangles.sort((a, b) => a.y - b.y)) {
+      if (rect.y + rect.height <= coveredThrough) continue;
+      if (rect.y > coveredThrough) break;
+      coveredThrough = rect.y + rect.height;
+    }
+    expect(coveredThrough).toBeGreaterThanOrEqual(offset + VIEWPORT_H);
+    expect(rectangles.length).toBeLessThanOrEqual(40);
+  }
+
+  it('covers every intermediate viewport on long animated scrolls in both directions', async () => {
     harness = renderNitroList({
       data: makeItems(400),
-      renderItem,
+      renderItem: () => null,
       estimatedItemSize: 100,
       keyExtractor: itemKey,
+      getFixedItemSize: () => 100,
     });
     harness.layout(VIEWPORT_W, VIEWPORT_H);
     harness.measureAllCells(() => 100);
     await harness.settle(50);
 
-    const origin = harness.renderedIndices();
-    const mountsBefore = new Map(mounts);
     harness.animatedScrollFrames = 6;
     const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
-    act(() => {
-      harness.handle.scrollToOffset({offset: 20000, animated: true});
-    });
-    const destination = harness.renderedIndices().filter((index) => !origin.includes(index));
-    expect(destination).toContain(200);
-    expect(destination).toContain(205);
-    const allowed = new Set([...origin, ...destination]);
-
-    for (let k = 0; k < harness.animatedScrollFrames; k++) {
-      await harness.settle(harness.animatedScrollFrameMs);
-      const inFlight = harness.renderedIndices();
-      expect(inFlight.every((index) => allowed.has(index))).toBe(true);
-      expect(inFlight).toEqual(expect.arrayContaining(origin));
-      expect(inFlight).toEqual(expect.arrayContaining(destination));
-    }
-    expect(harness.lastScrollTop()).toBe(20000);
-    await harness.settle(harness.animatedScrollFrameMs);
-
-    const final = harness.renderedIndices();
-    expect(final).toEqual(destination);
-    for (let index = Math.max(...origin) + 1; index < Math.min(...destination); index++) {
-      expect(mounts.has(index)).toBe(false);
-    }
-    for (const index of origin) {
-      expect(mounts.get(index)).toBe(mountsBefore.get(index));
-      expect(unmounts.get(index)).toBe(1);
-    }
-    for (const index of destination) {
-      expect(mounts.get(index)).toBe(1);
-      expect(unmounts.has(index)).toBe(false);
+    for (const offset of [20000, 0]) {
+      act(() => { harness.handle.scrollToOffset({offset, animated: true}); });
+      for (let k = 0; k <= harness.animatedScrollFrames; k++) {
+        await harness.settle(harness.animatedScrollFrameMs);
+        expectViewportCovered();
+      }
+      expect(harness.lastScrollTop()).toBe(offset);
     }
   });
 
-  it('animated scrollToIndex to a far row does not mount the rows it flies over', async () => {
+  it('animated scrollToIndex mounts intermediate windows without retaining the whole path', async () => {
     const {mounts, renderItem} = trackCellLifecycle();
     harness = renderNitroList({
       data: makeItems(400),
@@ -174,7 +166,6 @@ describe('imperative scroll integration', () => {
     harness.measureAllCells(() => 100);
     await harness.settle(50);
 
-    const origin = harness.renderedIndices();
     harness.animatedScrollFrames = 6;
     let promise!: Promise<void>;
     const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
@@ -189,9 +180,9 @@ describe('imperative scroll integration', () => {
     const final = harness.renderedIndices();
     expect(final).toContain(250);
     expect(final).not.toContain(0);
-    for (let index = Math.max(...origin) + 1; index < 240; index++) {
-      expect(mounts.has(index)).toBe(false);
-    }
+    expect([...mounts.keys()].some(index => index > 50 && index < 240)).toBe(true);
+    expect(final.length).toBeLessThanOrEqual(40);
+    expectViewportCovered();
   });
 
   it('a drag that interrupts an animated scrollToOffset commits the range under the finger', async () => {
@@ -214,7 +205,8 @@ describe('imperative scroll integration', () => {
       await harness.settle(harness.animatedScrollFrameMs);
     }
     expect(harness.lastScrollTop()).toBe(10000);
-    expect(harness.renderedIndices()).not.toContain(100);
+    expectViewportCovered();
+    expect(harness.renderedIndices()).toContain(100);
 
     harness.beginDrag(10000);
     expect(harness.renderedIndices()).toContain(100);
@@ -249,6 +241,29 @@ describe('imperative scroll integration', () => {
     expect(harness.renderedIndices()).toContain(90);
     expect(harness.renderedIndices()).not.toContain(60);
     expect(harness.lastScrollTop()).toBe(9000);
+  });
+
+  it('replacing an animated command preserves the live viewport and releases the old destination', async () => {
+    harness = renderNitroList({
+      data: makeItems(400), renderItem: () => null, estimatedItemSize: 100,
+      keyExtractor: itemKey, getFixedItemSize: () => 100,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    await harness.settle(50);
+    // Feed the native trajectory explicitly; the next native command cancels
+    // the previous animation, so old scheduled echoes must not drive this test.
+    harness.echoProgrammaticScrolls = false;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    act(() => { harness.handle.scrollToOffset({offset: 20000, animated: true}); });
+    harness.scroll(5000);
+    expectViewportCovered();
+    act(() => { harness.handle.scrollToOffset({offset: 1500, animated: true}); });
+    harness.scroll(3000);
+    expectViewportCovered();
+    expect(harness.renderedIndices()).not.toContain(200);
+    harness.scroll(1500);
+    harness.momentumEnd(1500);
+    expectViewportCovered();
   });
 
   it('scrollToIndex converges onto under-estimated items and freezes estimates meanwhile', async () => {

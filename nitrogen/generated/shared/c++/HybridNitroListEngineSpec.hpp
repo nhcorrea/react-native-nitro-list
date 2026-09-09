@@ -53,7 +53,10 @@ namespace margelo::nitro::nitrolist {
       // Methods
       virtual void configure(double itemCount, double estimatedItemSize, double drawDistance, bool horizontal, double numColumns, double measurementEpsilon) = 0;
       virtual void setScrollOffset(double offset) = 0;
+      virtual void updateData(const std::shared_ptr<ArrayBuffer>& config, const std::shared_ptr<ArrayBuffer>& types, const std::shared_ptr<ArrayBuffer>& spans, const std::shared_ptr<ArrayBuffer>& fixedSizes, const std::shared_ptr<ArrayBuffer>& remap) = 0;
       virtual double setScrollOffsetAndFill(double offset, const std::shared_ptr<ArrayBuffer>& slab) = 0;
+      virtual double setItemSizesAndFill(const std::shared_ptr<ArrayBuffer>& pairs, double pairCount, double anchorIndex, double dataRevision, const std::shared_ptr<ArrayBuffer>& slab) = 0;
+      virtual double readSnapshot(double sequence, const std::shared_ptr<ArrayBuffer>& slab) = 0;
       virtual void resetScrollVelocity() = 0;
       virtual void setEstimatesFrozen(bool frozen) = 0;
       virtual void setViewport(double width, double height) = 0;

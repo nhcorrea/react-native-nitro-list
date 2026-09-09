@@ -48,6 +48,20 @@ describe('flattenSections', () => {
     expect(flattened.itemFlatIndex[1]).toEqual([8, 10]);
   });
 
+  it('reuses wrappers only while their complete section context is unchanged', () => {
+    const options = {withHeaders: true, withFooters: true, withSeparators: true};
+    const before = flattenSections<string, Section>(SECTIONS, options);
+    const changed = {...SECTIONS[1], title: 'New B', data: [...SECTIONS[1].data, 'b2']};
+    const after = flattenSections<string, Section>([SECTIONS[0], changed, SECTIONS[2]], options, before);
+    expect(after.rows[0]).toBe(before.rows[0]);
+    expect(after.rows[1]).toBe(before.rows[1]);
+    expect(after.rows[after.headerFlatIndex[1]]).not.toBe(before.rows[before.headerFlatIndex[1]]);
+    expect(after.rows[after.headerFlatIndex[1]].section.title).toBe('New B');
+    const moved = flattenSections<string, Section>([SECTIONS[1], SECTIONS[0]], options, before);
+    expect(moved.rows[moved.headerFlatIndex[1]]).not.toBe(before.rows[0]);
+    expect(moved.rows[moved.headerFlatIndex[1]].sectionIndex).toBe(1);
+  });
+
   it('maps scrollToLocation coordinates onto flat indices (0 = section header)', () => {
     const flattened = flattenSections<string, Section>(SECTIONS, {
       withHeaders: true,

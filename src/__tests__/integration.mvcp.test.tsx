@@ -37,7 +37,7 @@ describe('maintainVisibleContentPosition integration', () => {
 
   function mvcpAnchorTop(): number {
     const anchors = harness.renderer.root.findAll(
-      (node) => typeof node.props?.top === 'number' && node.props.top >= MVCP_ANCHOR_BASE,
+      (node) => typeof node.props?.top === 'number' && node.props.top >= MVCP_ANCHOR_BASE / 2,
     );
     if (anchors.length === 0) throw new Error('MVCP anchor is not rendered');
     return anchors[0].props.top as number;
@@ -68,7 +68,7 @@ describe('maintainVisibleContentPosition integration', () => {
     harness.update({data: prepended});
     await harness.settle(50);
 
-    expect(harness.mirror.callLog).toContain('remapItemSizes');
+    expect(harness.mirror.dataCommits.some(c => c[13] > 0 && c[7] === 0)).toBe(true);
     expect(harness.mirror.callLog).not.toContain('resetItemSizes');
     expect(harness.handle.getItemSize(10)).toBe(sizeOfOldFirst);
 
@@ -76,6 +76,54 @@ describe('maintainVisibleContentPosition integration', () => {
     expect(prependedExtent).toBeGreaterThan(0);
     expect(harness.lastScrollTop()).toBeCloseTo(scrollBefore + prependedExtent, 3);
     expect(mvcpAnchorTop()).toBeCloseTo(anchorBefore + prependedExtent, 3);
+  });
+
+  it('prepend near the end keeps its anchor when Android clamps content before MVCP', async () => {
+    let items = makeItems(10_000);
+    harness = renderNitroList({
+      data: items,
+      renderItem: () => null,
+      estimatedItemSize: 64,
+      keyExtractor: itemKey,
+      maintainVisibleContentPosition: true,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    const measure = () => {
+      for (const index of harness.renderedIndices()) {
+        harness.measureCell(index, 80);
+      }
+    };
+    measure();
+    await harness.settle(50);
+    harness.scroll(harness.handle.getTotalSize() - VIEWPORT_H);
+    measure();
+    await harness.settle(50);
+    harness.scroll(harness.handle.getTotalSize() - VIEWPORT_H);
+    measure();
+    await harness.settle(50);
+
+    harness.measureCell(harness.renderedIndices()[0], 78);
+    await harness.settle(50);
+
+    for (let round = 0; round < 10; round++) {
+      const before = harness.lastScrollTop();
+      const index = harness.renderedIndices().find(i => harness.handle.getItemOffset(i) >= before)!;
+      const key = items[index];
+      const screenBefore = harness.handle.getItemOffset(index) - before;
+      const nativeAnchorBefore = mvcpAnchorTop();
+      items = [...makeItems(5, 20_000 + round * 5), ...items];
+      harness.update({data: items});
+      await harness.settle(50);
+      // Android ReactScrollView.onLayoutChange clamps to the new content extent
+      // before MaintainVisibleScrollPositionHelper applies the anchor delta.
+      const nativeDelta = mvcpAnchorTop() - nativeAnchorBefore;
+      const maxAfter = harness.handle.getTotalSize() - VIEWPORT_H;
+      harness.scroll(Math.min(Math.min(before, maxAfter) + nativeDelta, maxAfter));
+      measure();
+      await harness.settle(50);
+      const newIndex = items.indexOf(key);
+      expect(harness.handle.getItemOffset(newIndex) - harness.lastScrollTop()).toBeCloseTo(screenBefore, 2);
+    }
   });
 
   it('re-measure above the anchor shifts scroll by the exact diff', async () => {

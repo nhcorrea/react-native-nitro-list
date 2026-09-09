@@ -1,4 +1,11 @@
-import React, {forwardRef, useCallback, useImperativeHandle, useMemo, useRef} from 'react';
+import React, {
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useInsertionEffect,
+} from 'react';
 
 import {NitroList} from '../NitroList';
 import type {
@@ -60,11 +67,7 @@ export type NitroSectionListProps<
   SectionT extends NitroSectionBase<ItemT> = NitroSectionBase<ItemT>,
 > = Omit<NitroListProps<NitroSectionRow<ItemT, SectionT>>, OmittedListProps> & {
   sections: ReadonlyArray<SectionT>;
-  renderItem: (info: {
-    item: ItemT;
-    index: number;
-    section: SectionT;
-  }) => React.ReactElement | null;
+  renderItem: (info: {item: ItemT; index: number; section: SectionT}) => React.ReactElement | null;
   renderSectionHeader?: (info: {section: SectionT}) => React.ReactElement | null;
   renderSectionFooter?: (info: {section: SectionT}) => React.ReactElement | null;
   ItemSeparatorComponent?: React.ComponentType<{leadingItem: ItemT}> | null;
@@ -94,23 +97,26 @@ function NitroSectionListInner<
 
   const listRef = useRef<NitroListHandle | null>(null);
 
+  const flattenedRef = useRef<FlattenedSections<ItemT, SectionT> | undefined>(undefined);
   const flattened = useMemo<FlattenedSections<ItemT, SectionT>>(
     () =>
-      flattenSections<ItemT, SectionT>(sections, {
-        keyExtractor,
-        withHeaders: renderSectionHeader != null,
-        withFooters: renderSectionFooter != null,
-        withSeparators: ItemSeparatorComponent != null,
-      }),
+      flattenSections<ItemT, SectionT>(
+        sections,
+        {
+          keyExtractor,
+          withHeaders: renderSectionHeader != null,
+          withFooters: renderSectionFooter != null,
+          withSeparators: ItemSeparatorComponent != null,
+        },
+        flattenedRef.current,
+      ),
     [sections, keyExtractor, renderSectionHeader, renderSectionFooter, ItemSeparatorComponent],
   );
-  const flattenedRef = useRef(flattened);
-  flattenedRef.current = flattened;
+  useInsertionEffect(() => {
+    flattenedRef.current = flattened;
+  });
 
-  const rowKeyExtractor = useCallback(
-    (row: NitroSectionRow<ItemT, SectionT>) => row.key,
-    [],
-  );
+  const rowKeyExtractor = useCallback((row: NitroSectionRow<ItemT, SectionT>) => row.key, []);
 
   const rowType = useCallback(
     (row: NitroSectionRow<ItemT, SectionT>) => {
@@ -174,51 +180,47 @@ function NitroSectionListInner<
     };
   }, [onViewableItemsChanged]);
 
-  useImperativeHandle(
-    ref,
-    () => {
-      const base = (): NitroListHandle => {
-        const current = listRef.current;
-        if (current == null) throw new Error('NitroSectionList handle is not attached');
-        return current;
-      };
-      return {
-        scrollToOffset: (params) => base().scrollToOffset(params),
-        scrollToIndex: (params) => base().scrollToIndex(params),
-        scrollToEnd: (animated) => base().scrollToEnd(animated),
-        getAbsoluteLastScrollOffset: () => base().getAbsoluteLastScrollOffset(),
-        getItemOffset: (index) => base().getItemOffset(index),
-        getItemSize: (index) => base().getItemSize(index),
-        getTotalSize: () => base().getTotalSize(),
-        getLayout: (index) => base().getLayout(index),
-        getWindowSize: () => base().getWindowSize(),
-        getFirstItemOffset: () => base().getFirstItemOffset(),
-        getScrollableNode: () => base().getScrollableNode(),
-        getNativeScrollRef: () => base().getNativeScrollRef(),
-        getAverageItemSizes: () => base().getAverageItemSizes(),
-        reportContentInset: (insets) => base().reportContentInset(insets),
-        scrollIndexIntoView: (params) => base().scrollIndexIntoView(params),
-        scrollItemIntoView: (params) => base().scrollItemIntoView(params),
-        scrollToLocation({
-          sectionIndex,
-          itemIndex,
-          animated = false,
-          viewOffset = 0,
-          viewPosition = 0,
-        }: NitroSectionListScrollToLocationParams) {
-          const flatIndex = flatIndexForLocation(flattenedRef.current, sectionIndex, itemIndex);
-          if (flatIndex == null || listRef.current == null) return Promise.resolve();
-          return listRef.current.scrollToIndex({
-            index: flatIndex,
-            animated,
-            viewOffset,
-            viewPosition,
-          });
-        },
-      };
-    },
-    [],
-  );
+  useImperativeHandle(ref, () => {
+    const base = (): NitroListHandle => {
+      const current = listRef.current;
+      if (current == null) throw new Error('NitroSectionList handle is not attached');
+      return current;
+    };
+    return {
+      scrollToOffset: (params) => base().scrollToOffset(params),
+      scrollToIndex: (params) => base().scrollToIndex(params),
+      scrollToEnd: (animated) => base().scrollToEnd(animated),
+      getAbsoluteLastScrollOffset: () => base().getAbsoluteLastScrollOffset(),
+      getItemOffset: (index) => base().getItemOffset(index),
+      getItemSize: (index) => base().getItemSize(index),
+      getTotalSize: () => base().getTotalSize(),
+      getLayout: (index) => base().getLayout(index),
+      getWindowSize: () => base().getWindowSize(),
+      getFirstItemOffset: () => base().getFirstItemOffset(),
+      getScrollableNode: () => base().getScrollableNode(),
+      getNativeScrollRef: () => base().getNativeScrollRef(),
+      getAverageItemSizes: () => base().getAverageItemSizes(),
+      reportContentInset: (insets) => base().reportContentInset(insets),
+      scrollIndexIntoView: (params) => base().scrollIndexIntoView(params),
+      scrollItemIntoView: (params) => base().scrollItemIntoView(params),
+      scrollToLocation({
+        sectionIndex,
+        itemIndex,
+        animated = false,
+        viewOffset = 0,
+        viewPosition = 0,
+      }: NitroSectionListScrollToLocationParams) {
+        const flatIndex = flatIndexForLocation(flattenedRef.current!, sectionIndex, itemIndex);
+        if (flatIndex == null || listRef.current == null) return Promise.resolve();
+        return listRef.current.scrollToIndex({
+          index: flatIndex,
+          animated,
+          viewOffset,
+          viewPosition,
+        });
+      },
+    };
+  }, []);
 
   return (
     <NitroList<NitroSectionRow<ItemT, SectionT>>

@@ -119,11 +119,10 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       expect(harness!.handle.getItemSize(2)).toBe(150);
     });
 
-    it('reverts to the stale range when the reconcile is disabled (baseline behaviour)', async () => {
+    it('snapshot coherence remains mandatory with the former reconciliation flag disabled', async () => {
       NitroListDevFlags.staleRangeReconcile = false;
       const {atB, afterEvent} = await deliverStaleEvent();
-      expect(afterEvent).toContain(0);
-      expect(afterEvent).not.toEqual(atB);
+      expect(afterEvent).toEqual(atB);
     });
   });
 
@@ -279,10 +278,10 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       });
       await flushMicrotasks();
       expect(harness.renderedIndices()).toContain(100);
-      const batchesBefore = countCalls(harness.mirror.callLog, 'setItemSizesBatch');
+      const batchesBefore = countCalls(harness.mirror.callLog, 'setItemSizesAndFill');
       harness.measureAllCells(() => 130);
       await flushMicrotasks();
-      return countCalls(harness.mirror.callLog, 'setItemSizesBatch') - batchesBefore;
+      return countCalls(harness.mirror.callLog, 'setItemSizesAndFill') - batchesBefore;
     }
 
     it('flushes freshly reported sizes as soon as the last cell lays out, without waiting for the rAF', async () => {
@@ -314,7 +313,7 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       await harness.settle(50);
       NitroListPerfMonitor.enable();
       NitroListPerfMonitor.reset();
-      const batchesBefore = countCalls(harness.mirror.callLog, 'setItemSizesBatch');
+      const batchesBefore = countCalls(harness.mirror.callLog, 'setItemSizesAndFill');
 
       let done = false;
       act(() => {
@@ -337,7 +336,7 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       const stats = NitroListPerfMonitor.getSnapshot().lastScrollToIndex;
       return {
         steps,
-        batches: countCalls(harness.mirror.callLog, 'setItemSizesBatch') - batchesBefore,
+        batches: countCalls(harness.mirror.callLog, 'setItemSizesAndFill') - batchesBefore,
         passes: stats?.correctionPasses ?? -1,
       };
     }
@@ -398,10 +397,10 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       expect(harness.handle.getItemSize(250)).toBe(64);
       expect(harness.handle.getAverageItemSizes().row.count).toBe(300);
 
-      const batchesBefore = countCalls(harness.mirror.callLog, 'setItemSizesBatch');
+      const batchesBefore = countCalls(harness.mirror.callLog, 'setItemSizesAndFill');
       harness.measureCell(anyIndex, 64);
       harness.frame();
-      expect(countCalls(harness.mirror.callLog, 'setItemSizesBatch')).toBe(batchesBefore);
+      expect(countCalls(harness.mirror.callLog, 'setItemSizesAndFill')).toBe(batchesBefore);
     });
 
     it('unfreezes on a mismatching layout and reports the real size', async () => {
@@ -429,7 +428,7 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       }
     });
 
-    it('seeds a fresh mount from the cross-mount cache and pushes every size up front', async () => {
+    it('does not promote another list instance measurements into fixed sizes', async () => {
       harness = renderNitroList<string>({
         data: makeItems(300),
         renderItem: () => null,
@@ -454,12 +453,12 @@ describe('optimization cycle 2026-08 (O1–O3)', () => {
       harness.layout(VIEWPORT_W, VIEWPORT_H);
       await harness.settle(50);
 
-      expect(harness.handle.getItemSize(299)).toBe(64);
-      expect(harness.handle.getTotalSize()).toBe(300 * 64);
-      expect(harness.handle.getAverageItemSizes().row.count).toBe(300);
+      expect(harness.handle.getItemSize(299)).toBe(60);
+      expect(harness.handle.getTotalSize()).toBe(300 * 60);
+      expect(harness.handle.getAverageItemSizes().row).toBeUndefined();
       const cells = harness.cellInstances();
       for (const cell of cells.values()) {
-        expect(cell.props.autoFixedSize).toBe(64);
+        expect(cell.props.autoFixedSize).toBeUndefined();
       }
     });
 

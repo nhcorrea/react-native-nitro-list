@@ -13,7 +13,13 @@ export interface NitroListEngine extends HybridObject<{ios: 'c++'; android: 'c++
   ): void;
 
   setScrollOffset(offset: number): void;
+  /** Atomic data commit. Configuration schema lives in dataTransaction.ts. */
+  updateData(config: ArrayBuffer, types: ArrayBuffer, spans: ArrayBuffer,
+    fixedSizes: ArrayBuffer, remap: ArrayBuffer): void;
   setScrollOffsetAndFill(offset: number, slab: ArrayBuffer): number;
+  setItemSizesAndFill(pairs: ArrayBuffer, pairCount: number, anchorIndex: number,
+    dataRevision: number, slab: ArrayBuffer): number;
+  readSnapshot(sequence: number, slab: ArrayBuffer): number;
   resetScrollVelocity(): void;
   setEstimatesFrozen(frozen: boolean): void;
   setViewport(width: number, height: number): void;

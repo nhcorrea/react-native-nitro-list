@@ -32,6 +32,59 @@ describe('viewability integration', () => {
     return call.viewableItems.map((token) => token.index as number).sort((a, b) => a - b);
   }
 
+  it('reevaluates thresholds and viewport size without scrolling', async () => {
+    const spy = jest.fn<(info: ViewabilityCall) => void>();
+    harness = renderNitroList({
+      data: makeItems(10), renderItem: () => null, estimatedItemSize: 100, keyExtractor: itemKey,
+      getFixedItemSize: () => 100, viewabilityConfig: {itemVisiblePercentThreshold: 50},
+      onViewableItemsChanged: spy,
+    });
+    harness.layout(400, 60);
+    await harness.settle(50);
+    expect(viewableIndices(spy.mock.calls.at(-1)![0])).toEqual([0]);
+    harness.update({viewabilityConfig: {itemVisiblePercentThreshold: 90}});
+    await harness.settle(50);
+    expect(viewableIndices(spy.mock.calls.at(-1)![0])).toEqual([]);
+    harness.layout(400, 100);
+    await harness.settle(50);
+    expect(viewableIndices(spy.mock.calls.at(-1)![0])).toEqual([0]);
+  });
+
+  it('delivers current items to a replacement subscriber and cancels disabled timers', async () => {
+    const first = jest.fn<(info: ViewabilityCall) => void>();
+    const second = jest.fn<(info: ViewabilityCall) => void>();
+    harness = renderNitroList({
+      data: makeItems(10), renderItem: () => null, estimatedItemSize: 100, keyExtractor: itemKey,
+      viewabilityConfig: {itemVisiblePercentThreshold: 50}, onViewableItemsChanged: first,
+    });
+    harness.layout(400, 100);
+    await harness.settle(50);
+    harness.update({onViewableItemsChanged: second});
+    await harness.settle(50);
+    expect(viewableIndices(second.mock.calls.at(-1)![0])).toEqual([0]);
+    harness.update({viewabilityConfig: {minimumViewTime: 500}, onViewableItemsChanged: first});
+    first.mockClear();
+    harness.update({onViewableItemsChanged: undefined});
+    await harness.settle(600);
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it('restarts pending qualification when the threshold changes', async () => {
+    const spy = jest.fn<(info: ViewabilityCall) => void>();
+    harness = renderNitroList({
+      data: makeItems(10), renderItem: () => null, estimatedItemSize: 100, keyExtractor: itemKey,
+      viewabilityConfig: {minimumViewTime: 500, itemVisiblePercentThreshold: 50},
+      onViewableItemsChanged: spy,
+    });
+    harness.layout(400, 60);
+    await harness.settle(300);
+    harness.update({viewabilityConfig: {minimumViewTime: 500, itemVisiblePercentThreshold: 55}});
+    await harness.settle(250);
+    expect(spy).not.toHaveBeenCalled();
+    await harness.settle(300);
+    expect(viewableIndices(spy.mock.calls.at(-1)![0])).toEqual([0]);
+  });
+
   it('reports fully and partially visible items by itemVisiblePercentThreshold', async () => {
     const spy = jest.fn();
     harness = renderNitroList({

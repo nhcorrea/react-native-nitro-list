@@ -61,6 +61,9 @@ export type NitroListHandle = {
   getItemOffset: (index: number) => number;
   getItemSize: (index: number) => number;
   getTotalSize: () => number;
+  /** Cell slot relative to the item container (excludes outer padding/header).
+   * Grid width includes its internal column-gap padding; height excludes rowGap.
+   * Unmeasured dimensions are estimates, not an observation of native pixels. */
   getLayout: (index: number) => NitroListItemLayout | undefined;
   getWindowSize: () => NitroListWindowSize;
   getFirstItemOffset: () => number;
@@ -119,6 +122,8 @@ export interface NitroListAlwaysRenderConfig {
 }
 
 export interface NitroListAnchoredEndSpaceConfig {
+  /** The entire tail from this anchor is mounted to measure its size. Keep the
+   * anchor near the end; an old anchor retains O(data.length - anchorIndex) cells. */
   anchorIndex: number;
   anchorOffset?: number;
   anchorMaxSize?: number;

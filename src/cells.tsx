@@ -1,10 +1,18 @@
-import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef} from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useInsertionEffect,
+} from 'react';
 import {PixelRatio, StyleSheet, View, type LayoutChangeEvent} from 'react-native';
 import Animated, {useAnimatedStyle, type SharedValue} from 'react-native-reanimated';
 
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, type RangeState} from './listStore';
 import {MVCP_ANCHOR_BASE} from './mvcp';
+import type {MeasurementIdentity, MeasurementRevision} from './measurementIdentity';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import type {
   NitroListAlwaysRenderConfig,
@@ -22,7 +30,7 @@ export type RenderRange = {
 export type CellBridge = {
   awaitingLayout: number;
   onLayoutSettled: () => void;
-  onAutoFixedMismatch: (index: number, sizeDp: number) => void;
+  onAutoFixedMismatch: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
 };
 
 export function pushRenderRange(
@@ -55,12 +63,18 @@ export function mergeRenderRanges(ranges: RenderRange[]): RenderRange[] {
 export type ItemsAreEqualFn = (prev: unknown, next: unknown, index: number) => boolean;
 
 export interface NitroListCellsProps {
+  measurementRevision: MeasurementRevision;
+  measurementGeometry: number;
   store: ListStore;
   items: ReadonlyArray<unknown>;
   itemCount: number;
   keyExtractor?: (item: unknown, index: number) => string;
   getItemType?: (item: unknown, index: number) => ItemTypeKey;
-  getFixedItemSize?: (item: unknown, index: number, type: ItemTypeKey | undefined) => number | undefined;
+  getFixedItemSize?: (
+    item: unknown,
+    index: number,
+    type: ItemTypeKey | undefined,
+  ) => number | undefined;
   alwaysRender?: NitroListAlwaysRenderConfig;
   alwaysRenderKeyIndices: number[] | null;
   anchoredEndSpaceAnchor: number | null;
@@ -73,14 +87,20 @@ export interface NitroListCellsProps {
   crossAxisGap: number;
   renderItem: NitroListRenderItem<unknown>;
   ItemSeparatorComponent?: React.ComponentType<{leadingItem: unknown}>;
-  enqueueItemSize: (index: number, sizeDp: number) => void;
+  enqueueItemSize: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
   cellBridge: CellBridge;
   itemsAreEqual?: ItemsAreEqualFn;
   readItemOffset: (index: number) => number;
-  onCommit: (range: RangeState, prewarmRange: RangeState | null, phase: 'layout' | 'passive') => void;
+  onCommit: (
+    range: RangeState,
+    prewarmRange: RangeState | null,
+    phase: 'layout' | 'passive',
+  ) => void;
 }
 
 export const NitroListCells = React.memo(function NitroListCells({
+  measurementRevision,
+  measurementGeometry,
   store,
   items,
   itemCount,
@@ -155,24 +175,55 @@ export const NitroListCells = React.memo(function NitroListCells({
     );
   }
 
-  const effectiveRenderMode: NitroListRenderMode =
-    adaptiveRenderMode ? renderMode : 'normal';
+  const effectiveRenderMode: NitroListRenderMode = adaptiveRenderMode ? renderMode : 'normal';
+  type CellMetadata = {
+    item: unknown;
+    revision: MeasurementRevision;
+    geometry: number;
+    itemKey: string;
+    itemType: ItemTypeKey | undefined;
+    reactKey: string;
+    explicitFixedSize: number | undefined;
+  };
+  const metadataRef = useRef(new Map<number, CellMetadata>());
+  const nextMetadata = new Map<number, CellMetadata>();
+  useInsertionEffect(() => {
+    metadataRef.current = nextMetadata;
+  });
   const seenRenderKeys = IS_DEV ? new Set<string>() : null;
   for (const {start, end} of mergeRenderRanges(renderRanges)) {
     for (let i = start; i <= end; i++) {
       const item = items[i];
-      const itemKey = keyExtractor ? keyExtractor(item, i) : String(i);
-      if (seenRenderKeys != null) checkDuplicateKeyDev(seenRenderKeys, itemKey);
-      const itemType = getItemType ? getItemType(item, i) : undefined;
-      const reactKey = itemType !== undefined ? `${itemType}:${itemKey}` : itemKey;
-      const explicitFixedSize = getFixedItemSize?.(item, i, itemType);
-      if (NITRO_LIST_PERF_COMPILED) {
-        NitroListPerfMonitor.recordUserCallbacks(
-          (keyExtractor != null ? 1 : 0) +
-            (getItemType != null ? 1 : 0) +
-            (getFixedItemSize != null ? 1 : 0),
-        );
+      let metadata = metadataRef.current.get(i);
+      if (
+        metadata == null ||
+        metadata.item !== item ||
+        metadata.revision !== measurementRevision ||
+        metadata.geometry !== measurementGeometry
+      ) {
+        const itemKey = keyExtractor ? keyExtractor(item, i) : String(i);
+        const itemType = getItemType?.(item, i);
+        const explicitFixedSize = getFixedItemSize?.(item, i, itemType);
+        metadata = {
+          item,
+          revision: measurementRevision,
+          geometry: measurementGeometry,
+          itemKey,
+          itemType,
+          explicitFixedSize,
+          reactKey: JSON.stringify([typeof itemType, itemType, itemKey]),
+        };
+        if (NITRO_LIST_PERF_COMPILED)
+          NitroListPerfMonitor.recordUserCallbacks(
+            Number(keyExtractor != null) +
+              Number(getItemType != null) +
+              Number(getFixedItemSize != null),
+          );
       }
+      // Retain only metadata from this committed window, with a fixed cap for alwaysRender.
+      if (nextMetadata.size < 512) nextMetadata.set(i, metadata);
+      const {itemKey, itemType, explicitFixedSize, reactKey} = metadata;
+      if (seenRenderKeys != null) checkDuplicateKeyDev(seenRenderKeys, itemKey);
       const autoFixedSize =
         explicitFixedSize == null && autoFixedTypes != null && itemType !== undefined
           ? autoFixedTypes.get(itemType)
@@ -180,20 +231,18 @@ export const NitroListCells = React.memo(function NitroListCells({
       const top = readItemOffset(i);
       renderedChildren.push(
         <NitroListItemContainer
-          key={reactKey}
+          key={`${measurementRevision.id}:${measurementGeometry}:${reactKey}`}
+          measurementRevision={measurementRevision}
+          measurementGeometry={measurementGeometry}
           index={i}
           top={top}
           horizontal={horizontal}
           hidden={hideRelatedCell && i === stickyIndex}
           columnLeft={
-            columnLayout != null
-              ? `${(columnLayout.colOf[i] / resolvedColumns) * 100}%`
-              : undefined
+            columnLayout != null ? `${(columnLayout.colOf[i] / resolvedColumns) * 100}%` : undefined
           }
           columnWidth={
-            columnLayout != null
-              ? `${(columnLayout.spans[i] / resolvedColumns) * 100}%`
-              : undefined
+            columnLayout != null ? `${(columnLayout.spans[i] / resolvedColumns) * 100}%` : undefined
           }
           mainAxisGap={mainAxisGap}
           crossAxisGap={crossAxisGap}
@@ -208,7 +257,9 @@ export const NitroListCells = React.memo(function NitroListCells({
           fixedSize={explicitFixedSize}
           autoFixedSize={autoFixedSize}
           cellBridge={cellBridge}
-          itemsAreEqual={itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined}
+          itemsAreEqual={
+            itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined
+          }
         />,
       );
     }
@@ -276,6 +327,8 @@ export function StickyHeaderSlot({
 }
 
 export interface NitroListItemContainerProps {
+  measurementRevision: MeasurementRevision;
+  measurementGeometry: number;
   index: number;
   top: number;
   horizontal: boolean;
@@ -289,7 +342,7 @@ export interface NitroListItemContainerProps {
   renderItem: NitroListRenderItem<unknown>;
   SeparatorComponent?: React.ComponentType<{leadingItem: unknown}>;
   isLastItem: boolean;
-  enqueueItemSize: (index: number, sizeDp: number) => void;
+  enqueueItemSize: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
   fixedSize?: number;
   autoFixedSize?: number;
   cellBridge: CellBridge;
@@ -312,6 +365,8 @@ export function areItemContainerPropsEqual(
   next: NitroListItemContainerProps,
 ): boolean {
   return (
+    prev.measurementRevision === next.measurementRevision &&
+    prev.measurementGeometry === next.measurementGeometry &&
     prev.top === next.top &&
     prev.horizontal === next.horizontal &&
     prev.hidden === next.hidden &&
@@ -379,6 +434,8 @@ export const NitroListCellContent = React.memo(function NitroListCellContent({
 }, areCellContentPropsEqual);
 
 export const NitroListItemContainer = React.memo(function NitroListItemContainer({
+  measurementRevision,
+  measurementGeometry,
   index,
   top,
   horizontal,
@@ -409,7 +466,27 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
     };
   }, []);
   const effectiveFixedSize = fixedSize ?? autoFixedSize;
-  const layoutTrackRef = useRef({registered: false, laidOut: false});
+  const identity = useMemo<MeasurementIdentity>(
+    () => ({
+      index,
+      item,
+      revision: measurementRevision,
+      geometry: measurementGeometry,
+      active: false,
+      itemsAreEqual,
+    }),
+    [index, item, measurementRevision, measurementGeometry, itemsAreEqual],
+  );
+  useLayoutEffect(() => {
+    identity.active = true;
+    return () => {
+      identity.active = false;
+    };
+  }, [identity]);
+  const layoutTrackRef = useMemo(
+    () => ({current: {registered: false, laidOut: false}}),
+    [identity],
+  );
   useEffect(() => {
     if (effectiveFixedSize != null) return;
     const track = layoutTrackRef.current;
@@ -423,10 +500,11 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
         if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
       }
     };
-  }, []);
-  const lastReportedRef = useRef<number>(-1);
+  }, [identity, effectiveFixedSize, cellBridge, layoutTrackRef]);
+  const lastReportedRef = useMemo(() => ({current: -1}), [identity]);
   const handleLayout = useCallback(
     (e: LayoutChangeEvent) => {
+      if (!identity.active || identity.geometry !== identity.revision.geometry) return;
       const track = layoutTrackRef.current;
       if (!track.laidOut) {
         track.laidOut = true;
@@ -445,20 +523,30 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
         return;
       }
       lastReportedRef.current = size;
-      enqueueItemSize(index, size);
+      enqueueItemSize(index, size, identity);
       if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
     },
-    [index, horizontal, mainAxisGap, enqueueItemSize, cellBridge],
+    [
+      index,
+      horizontal,
+      mainAxisGap,
+      enqueueItemSize,
+      cellBridge,
+      identity,
+      layoutTrackRef,
+      lastReportedRef,
+    ],
   );
   const verifyAutoFixedLayout = useCallback(
     (e: LayoutChangeEvent) => {
+      if (!identity.active || identity.geometry !== identity.revision.geometry) return;
       const layout = e.nativeEvent.layout;
       const size = (horizontal ? layout.width : layout.height) + mainAxisGap;
       if (autoFixedSize != null && Math.abs(size - autoFixedSize) > MEASUREMENT_NOISE_EPSILON_DP) {
-        cellBridge.onAutoFixedMismatch(index, size);
+        cellBridge.onAutoFixedMismatch(index, size, identity);
       }
     },
-    [autoFixedSize, index, horizontal, mainAxisGap, cellBridge],
+    [autoFixedSize, index, horizontal, mainAxisGap, cellBridge, identity],
   );
   const verifyFixedSizeLayout = useCallback(
     (e: LayoutChangeEvent) => {
@@ -507,7 +595,8 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
               : undefined
             : verifyAutoFixedLayout
       }
-      style={containerStyle}>
+      style={containerStyle}
+    >
       <NitroListCellContent
         index={index}
         item={item}
@@ -534,10 +623,7 @@ export const MvcpAdjustAnchor = React.memo(function MvcpAdjustAnchor({
   horizontal: boolean;
 }) {
   const style = useMemo(
-    () =>
-      horizontal
-        ? [styles.mvcpAnchorHorizontal, {left: top}]
-        : [styles.mvcpAnchor, {top}],
+    () => (horizontal ? [styles.mvcpAnchorHorizontal, {left: top}] : [styles.mvcpAnchor, {top}]),
     [horizontal, top],
   );
   return <View collapsable={false} style={style} />;
@@ -557,16 +643,15 @@ export const StickyOverlay = React.memo(function StickyOverlay({
   children,
 }: StickyOverlayProps) {
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: horizontal
-      ? [{translateX: translateY.value}]
-      : [{translateY: translateY.value}],
+    transform: horizontal ? [{translateX: translateY.value}] : [{translateY: translateY.value}],
   }));
   return (
     <Animated.View
       pointerEvents="box-none"
       collapsable={false}
       onLayout={onLayout}
-      style={[horizontal ? styles.stickyOverlayHorizontal : styles.stickyOverlay, animatedStyle]}>
+      style={[horizontal ? styles.stickyOverlayHorizontal : styles.stickyOverlay, animatedStyle]}
+    >
       {children}
     </Animated.View>
   );
@@ -614,4 +699,3 @@ export const styles = StyleSheet.create({
     height: 1,
   },
 });
-

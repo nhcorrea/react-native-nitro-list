@@ -26,7 +26,7 @@ The layout engine is shared C++ compiled into both platforms and exposed to Java
 
 **Cells that don't need to change don't re-render.** Cell content is memoized per key, so scrolling reuses mounted cells instead of re-rendering them. With `itemsAreEqual`, a brand-new data array whose items are recreated-but-equal re-renders zero rows.
 
-**Measurement can be skipped entirely.** `getFixedItemSize` (explicit) and `autoFixedItemSizes` (learned) let known-height cells skip the `onLayout` round trip completely — their offsets are exact from the first frame, so there is no measure → correct → re-render cycle at all.
+**Known sizes avoid the initial measurement correction.** `getFixedItemSize` supplies explicit cell sizes. Opt-in `autoFixedItemSizes` learns stable sizes within a list/template and keeps `onLayout` verification so later changes can correct the estimate.
 
 **Scrolling doesn't have to wake JS.** With `experimentalUiThreadScroll`, a Reanimated worklet feeds the engine and positions sticky headers on the UI thread, and the JS thread is woken **only when the rendered range actually changes** — not once per scroll frame.
 
@@ -101,7 +101,7 @@ The differences worth knowing:
 | `keyExtractor` | `(item, index) => string` | Stable identity per item. Required in practice for prepend/insert tracking and `maintainVisibleContentPosition`; without it a data change invalidates every measurement. |
 | `getItemType` | `(item, index) => string \| number` | Segments React keys by cell type, so a header cell is never recycled into a row cell. Also gives each type its own size statistics. |
 | `getFixedItemSize` | `(item, index, type) => number \| undefined` | Return the exact size in dp when it's known. Fixed-size cells skip measurement entirely (no `onLayout`), so offsets are exact from the first batch. The value must match the real layout — dev builds warn on divergence. |
-| `autoFixedItemSizes` | `boolean` | Opt-in; needs `getItemType`. Once a type has measured at least 32 cells with near-zero variance (cache keyed by width bucket and font scale, shared across mounts), its cells are treated as fixed-size automatically — same effect as `getFixedItemSize`, with no measurement round trip. A cell that later lays out differently unfreezes the type and reports its real size. |
+| `autoFixedItemSizes` | `boolean` | Opt-in; needs `getItemType`. After at least 32 near-identical samples, a type can use a learned fixed size. The cache distinguishes tagged types, exact cross-axis constraints, font scale and the list/template. It does not share trust across list instances. `onLayout` verifies subsequent sizes and unfreezes a mismatch. Disabled with `overrideItemLayout`, where one type can span different widths. |
 | `itemsAreEqual` | `(prev, next, index) => boolean` | With a stable function reference, a new data array whose items are recreated-but-equal re-renders zero rows. Compare visual content only — the key is already equal by construction. |
 | `dataVersion` | `unknown` | Escape hatch for in-place mutation: change this value to force the list to treat `data` as changed even when the array identity did not. |
 
@@ -139,7 +139,7 @@ The differences worth knowing:
 | `maintainVisibleContentPosition` | `boolean \| { data?, size?, shouldRestorePosition? }` | Keeps what you're looking at where it is. **`size` defaults to on**: the position stays stable while content *above* the viewport re-measures, for every list. `data` (prepend anchoring, needs `keyExtractor`) is opt-in. `true` enables both, `false` disables both. `shouldRestorePosition(item, index)` vetoes anchor candidates — e.g. an optimistic message about to be replaced. |
 | `alignItemsAtEnd` | `boolean` | Chat-style: content shorter than the viewport sticks to the bottom. |
 | `maintainScrollAtEnd` | `boolean \| { threshold?, animated? }` | Auto-stick to new content while the user is at the end. Footer growth re-sticks, a user drag cancels, and growth during a stick coalesces. |
-| `anchoredEndSpace` | `{ anchorIndex, anchorOffset?, anchorMaxSize?, onSizeChanged?, onReady? }` | AI-chat pattern: pads the tail so the anchor message pins to the top of the viewport while the response streams into the pad. Content height stays constant, so nothing jumps. Takes precedence over `maintainScrollAtEnd` while active. |
+| `anchoredEndSpace` | `{ anchorIndex, anchorOffset?, anchorMaxSize?, onSizeChanged?, onReady? }` | Pads the tail so the anchor message can pin to the top while a response streams. Takes precedence over `maintainScrollAtEnd`. The entire tail from the anchor is mounted for measurement; use a recent anchor to keep that cost bounded. |
 | `alwaysRender` | `{ top?, bottom?, indices?, keys? }` | Keep specific cells mounted outside the visible window (chat anchors, accessibility targets). Viewability stays geometric, so a pinned cell that is off-screen is not reported as viewable. |
 
 ### Sticky headers
@@ -208,7 +208,7 @@ All of them return a `Promise<void>` that settles when the scroll lands. A super
 | --- | --- | --- |
 | `getItemOffset(index)` | `number` | Offset of an item in dp, from the engine. |
 | `getItemSize(index)` | `number` | Size of an item in dp (measured, or the current estimate). |
-| `getLayout(index)` | `{ x, y, width, height } \| undefined` | Full rect of an item, including its cross-axis placement in grids. |
+| `getLayout(index)` | `{ x, y, width, height } \| undefined` | Cell slot relative to the item container, including grid spans/placement. Excludes outer padding/header and rowGap; grid width includes its internal column-gap padding. Unmeasured dimensions are estimates. |
 | `getTotalSize()` | `number` | Total content size in dp. |
 | `getFirstItemOffset()` | `number` | Offset where the first item starts — i.e. the measured header size. |
 | `getWindowSize()` | `{ width, height }` | Current viewport size. |
@@ -447,10 +447,10 @@ npm run ios   # or: npm run android
 
 - `npm run codegen` — regenerate Nitro bindings (`nitrogen/generated`) after touching `src/NitroListEngine.nitro.ts`, then build.
 - `npm test` — Jest suite for the TS layer.
+- `npm run test:engine` — tests the production engine and generated Nitro interface with ASan/UBSan; only the host transport is stubbed.
 - `npm run test:cpp` — compiles and runs the C++ `LayoutCore` host tests with ASan/UBSan (no device needed).
 - `npm run typecheck` / `npm run build` — TS validation and library output (`lib/`).
 - `npm run verify:package` — checks the tarball npm would publish (entry points and every relative import resolve inside it).
-- `npm run hooks:install` — enables the local `commit-msg` hook that validates conventional-commit prefixes.
 
 Releases are automated from commit messages (conventional commits + semantic-release).
 

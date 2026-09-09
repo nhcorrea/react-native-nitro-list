@@ -18,7 +18,10 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridSetter("onRangeChange", &HybridNitroListEngineSpec::setOnRangeChange);
       prototype.registerHybridMethod("configure", &HybridNitroListEngineSpec::configure);
       prototype.registerHybridMethod("setScrollOffset", &HybridNitroListEngineSpec::setScrollOffset);
+      prototype.registerHybridMethod("updateData", &HybridNitroListEngineSpec::updateData);
       prototype.registerHybridMethod("setScrollOffsetAndFill", &HybridNitroListEngineSpec::setScrollOffsetAndFill);
+      prototype.registerHybridMethod("setItemSizesAndFill", &HybridNitroListEngineSpec::setItemSizesAndFill);
+      prototype.registerHybridMethod("readSnapshot", &HybridNitroListEngineSpec::readSnapshot);
       prototype.registerHybridMethod("resetScrollVelocity", &HybridNitroListEngineSpec::resetScrollVelocity);
       prototype.registerHybridMethod("setEstimatesFrozen", &HybridNitroListEngineSpec::setEstimatesFrozen);
       prototype.registerHybridMethod("setViewport", &HybridNitroListEngineSpec::setViewport);
