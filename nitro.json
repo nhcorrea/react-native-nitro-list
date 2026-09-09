@@ -13,6 +13,12 @@
     "androidCxxLibName": "NitroList"
   },
   "autolinking": {
+    "NitroListScrollView": {
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridNitroListScrollView"
+      }
+    },
     "NitroListEngine": {
       "all": {
         "language": "c++",

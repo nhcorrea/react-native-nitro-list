@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import React, {useEffect} from 'react';
+import {Platform} from 'react-native';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
 import type {NitroListRenderItem} from '../NitroList';
@@ -11,6 +12,7 @@ const VIEWPORT_H = 600;
 describe('imperative scroll integration', () => {
   let harness: NitroListHarness;
   let warnSpy: ReturnType<typeof jest.spyOn>;
+  const originalPlatform = Platform.OS;
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -19,6 +21,7 @@ describe('imperative scroll integration', () => {
 
   afterEach(() => {
     harness?.unmount();
+    Platform.OS = originalPlatform;
     jest.useRealTimers();
     clearWarnDevOnceForTests();
     warnSpy.mockRestore();
@@ -263,6 +266,56 @@ describe('imperative scroll integration', () => {
     expect(harness.renderedIndices()).not.toContain(200);
     harness.scroll(1500);
     harness.momentumEnd(1500);
+    expectViewportCovered();
+  });
+
+  it.each([false, true])('an immediate command cancels the Android animator (horizontal=%s)', async horizontal => {
+    Platform.OS = 'android';
+    harness = renderNitroList({
+      data: makeItems(400), renderItem: () => null, estimatedItemSize: 100,
+      keyExtractor: itemKey, getFixedItemSize: () => 100, horizontal,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    await harness.settle(50);
+    harness.animatedScrollFrames = 20;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    let interrupted!: Promise<void>;
+    let replacement!: Promise<void>;
+    act(() => { interrupted = harness.handle.scrollToOffset({offset: 20000, animated: true}); });
+    await harness.settle(100);
+    expect(harness.observedNativeOffset).toBeGreaterThan(0);
+    expect(harness.observedNativeOffset).toBeLessThan(20000);
+    act(() => { replacement = harness.handle.scrollToOffset({offset: 1000, animated: false}); });
+    // Wait beyond every frame of the old animation. The observed event offset
+    // must stay at the replacement, independently of optimistic JS bookkeeping.
+    await harness.settle(1000);
+    await Promise.all([interrupted, replacement]);
+    expect(harness.observedNativeOffset).toBe(1000);
+    expect(harness.lastScrollTop()).toBe(1000);
+    expect(harness.renderedIndices()).toContain(10);
+    expect(harness.renderedIndices()).not.toContain(200);
+  });
+
+  it('keeps rapid Android replacements in order before the first animation frame', async () => {
+    Platform.OS = 'android';
+    harness = renderNitroList({
+      data: makeItems(400), renderItem: () => null, estimatedItemSize: 100,
+      keyExtractor: itemKey, getFixedItemSize: () => 100,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    await harness.settle(50);
+    harness.animatedScrollFrames = 20;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    const commands: Promise<void>[] = [];
+    act(() => {
+      commands.push(harness.handle.scrollToOffset({offset: 20000, animated: true}));
+      commands.push(harness.handle.scrollToOffset({offset: 1000, animated: false}));
+      commands.push(harness.handle.scrollToOffset({offset: 3000, animated: true}));
+    });
+    await harness.settle(1000);
+    await Promise.all(commands);
+    expect(harness.observedNativeOffset).toBe(3000);
+    expect(harness.lastScrollTop()).toBe(3000);
     expectViewportCovered();
   });
 

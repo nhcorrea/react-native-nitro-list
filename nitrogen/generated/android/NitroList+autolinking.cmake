@@ -34,8 +34,9 @@ target_sources(
   ../nitrogen/generated/android/NitroListOnLoad.cpp
   # Shared Nitrogen C++ sources
   ../nitrogen/generated/shared/c++/HybridNitroListEngineSpec.cpp
+  ../nitrogen/generated/shared/c++/HybridNitroListScrollViewSpec.cpp
   # Android-specific Nitrogen C++ sources
-  
+  ../nitrogen/generated/android/c++/JHybridNitroListScrollViewSpec.cpp
 )
 
 # From node_modules/react-native/ReactAndroid/cmake-utils/folly-flags.cmake

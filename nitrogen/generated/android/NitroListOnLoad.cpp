@@ -15,6 +15,8 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
+#include "JHybridNitroListScrollViewSpec.hpp"
+#include <NitroModules/DefaultConstructableObject.hpp>
 #include "HybridNitroListEngine.hpp"
 
 namespace margelo::nitro::nitrolist {
@@ -25,16 +27,29 @@ int initialize(JavaVM* vm) {
   });
 }
 
-
+struct JHybridNitroListScrollViewSpecImpl: public jni::JavaClass<JHybridNitroListScrollViewSpecImpl, JHybridNitroListScrollViewSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/nitrolist/HybridNitroListScrollView;";
+  static std::shared_ptr<JHybridNitroListScrollViewSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridNitroListScrollViewSpecImpl::javaobject()>();
+    jni::local_ref<JHybridNitroListScrollViewSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridNitroListScrollViewSpec();
+  }
+};
 
 void registerAllNatives() {
   using namespace margelo::nitro;
   using namespace margelo::nitro::nitrolist;
 
   // Register native JNI methods
-  
+  margelo::nitro::nitrolist::JHybridNitroListScrollViewSpec::CxxPart::registerNatives();
 
   // Register Nitro Hybrid Objects
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "NitroListScrollView",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridNitroListScrollViewSpecImpl::create();
+    }
+  );
   HybridObjectRegistry::registerHybridObjectConstructor(
     "NitroListEngine",
     []() -> std::shared_ptr<HybridObject> {

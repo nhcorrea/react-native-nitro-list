@@ -24,6 +24,7 @@ import Animated, {useAnimatedScrollHandler, useSharedValue} from 'react-native-r
 import {scheduleOnRN, scheduleOnUI} from 'react-native-worklets';
 
 import {createNitroListEngine, type NitroListEngine} from './NitroListHost';
+import {scrollToNativeOffset} from './nativeScroll';
 import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {
@@ -1993,11 +1994,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           SCROLL_COMMAND_ECHO_MAX_AGE_MS,
         );
       }
-      if (isHorizontalRef.current) {
-        scrollRef.current?.scrollTo({x: target, y: 0, animated});
-      } else {
-        scrollRef.current?.scrollTo({y: target, animated});
-      }
+      scrollToNativeOffset(scrollRef.current, target, isHorizontalRef.current, animated);
       return target;
     },
     [

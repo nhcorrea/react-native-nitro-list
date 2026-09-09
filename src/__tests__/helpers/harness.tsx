@@ -1,6 +1,6 @@
 import {jest} from '@jest/globals';
 import React, {createRef} from 'react';
-import {StyleSheet, View} from 'react-native';
+import {Platform, StyleSheet, View} from 'react-native';
 import type {LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent} from 'react-native';
 import {act, create, type ReactTestInstance, type ReactTestRenderer} from 'react-test-renderer';
 
@@ -11,6 +11,7 @@ import type {
   NitroListRenderScrollComponentProps,
 } from '../../NitroList';
 import {clearMirrorsForTests, getLastMirror, setMirrorConfigForTests} from './mockNitroListHost';
+import {registerNativeScrollViewForTests} from './mockNitroModules';
 import {
   clearCreatedSharedValuesForTests,
   clearWebOnlyDependencyUsagesForTests,
@@ -63,23 +64,37 @@ export class NitroListHarness<T = string> {
 
   private props: NitroListProps<T>;
   private nativeOffset = 0;
+  private readonly animationTimers = new Set<ReturnType<typeof setTimeout>>();
+  private unregisterNativeScrollView?: () => void;
+
+  private cancelNativeAnimation = () => {
+    for (const timer of this.animationTimers) clearTimeout(timer);
+    this.animationTimers.clear();
+  };
+
+  get observedNativeOffset(): number {
+    return this.nativeOffset;
+  }
   private readonly measuredCells = new WeakSet<ReactTestInstance>();
   private readonly fakeScrollRef = {
     scrollTo: ({x, y, animated}: {x?: number; y?: number; animated?: boolean}) => {
       const target = (this.horizontal ? x : y) ?? 0;
       this.scrollCommands.push({y: target, animated: animated === true});
       if (!this.echoProgrammaticScrolls) return;
+      // RN Android's immediate scrollTo leaves its ValueAnimator running.
+      // Another smooth scroll (or the Nitro command) cancels it explicitly.
+      if (animated === true || Platform.OS !== 'android') this.cancelNativeAnimation();
       if (animated === true && this.animatedScrollFrames > 0) {
         const from = this.nativeOffset;
         const frames = this.animatedScrollFrames;
         for (let k = 1; k <= frames; k++) {
-          setTimeout(() => {
+          this.animationTimers.add(setTimeout(() => {
             this.dispatchScroll(from + ((target - from) * k) / frames);
-          }, k * this.animatedScrollFrameMs);
+          }, k * this.animatedScrollFrameMs));
         }
-        setTimeout(() => {
+        this.animationTimers.add(setTimeout(() => {
           this.dispatchMomentumEnd(target);
-        }, (frames + 1) * this.animatedScrollFrameMs);
+        }, (frames + 1) * this.animatedScrollFrameMs));
         return;
       }
       setTimeout(() => {
@@ -118,6 +133,10 @@ export class NitroListHarness<T = string> {
   }
 
   mount(): this {
+    this.unregisterNativeScrollView = registerNativeScrollViewForTests(42, (x, y, animated) => {
+      this.cancelNativeAnimation();
+      this.fakeScrollRef.scrollTo({x, y, animated});
+    });
     act(() => {
       this.renderer = create(this.element(this.props));
     });
@@ -132,6 +151,8 @@ export class NitroListHarness<T = string> {
   }
 
   unmount(): void {
+    this.unregisterNativeScrollView?.();
+    this.cancelNativeAnimation();
     act(() => {
       this.renderer.unmount();
     });
@@ -172,6 +193,7 @@ export class NitroListHarness<T = string> {
 
   beginDrag(y?: number): void {
     act(() => {
+      this.cancelNativeAnimation();
       this.scrollProps.onScrollBeginDrag(makeScrollEvent(y ?? this.lastScrollTop(), this.horizontal));
     });
   }
