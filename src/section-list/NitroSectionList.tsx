@@ -110,7 +110,7 @@ function NitroSectionListInner<
         },
         flattenedRef.current,
       ),
-    [sections, keyExtractor, renderSectionHeader, renderSectionFooter, ItemSeparatorComponent],
+    [sections, keyExtractor, renderSectionHeader, renderSectionFooter, ItemSeparatorComponent, listProps.dataVersion],
   );
   useInsertionEffect(() => {
     flattenedRef.current = flattened;

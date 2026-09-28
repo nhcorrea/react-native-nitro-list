@@ -288,6 +288,69 @@ static void testRemapItemSizes() {
   CHECK_EQ_F(shrunk.getSize(0), 100.0f);
 }
 
+static void testContiguousRemapMatchesGeneralPath() {
+  // Exhaust overlapping moves in both directions, partial survivor runs, and
+  // identity moves. The reference is forced through the existing general remap
+  // by an ignored invalid pair, independently of the in-place traversal.
+  for (const int columns : {1, 3}) {
+    for (const bool frozen : {false, true}) {
+      for (int32_t oldStart = 0; oldStart < 8; ++oldStart) {
+        for (int32_t newStart = 0; newStart < 8; ++newStart) {
+          for (int32_t count = 1; count <= 8; ++count) {
+            LayoutCore actual, reference;
+            for (auto* core : {&actual, &reference}) {
+              core->setEstimate(80.0);
+              core->setTypeAverages(true);
+              core->setItemCount(12);
+              core->setColumnCount(columns);
+              const uint16_t types[] = {0, 1, 2, 1, 0, 2, 2, 1, 0, 1, 2, 0};
+              core->setItemTypes(types, 12);
+              for (int32_t i = 0; i < 12; ++i) {
+                if (i % 3 != 1) core->setItemSize(i, 50.125 + i * 7.25);
+              }
+              core->setEstimatesFrozen(frozen);
+              core->getTotalSize();
+              core->setItemCount(16);
+              // Leave dirty geometry preceding some source/destination runs.
+              core->setItemSize(0, 67.5);
+            }
+            std::vector<double> pairs;
+            for (int32_t i = 0; i < count; ++i) {
+              pairs.push_back(oldStart + i);
+              pairs.push_back(newStart + i);
+            }
+            auto general = pairs;
+            general.push_back(-1);
+            general.push_back(-1);
+            CHECK(actual.remapItemSizes(pairs.data(), count) ==
+                  reference.remapItemSizes(general.data(), count + 1));
+            const auto compare = [&]() {
+              CHECK_EQ_F(actual.getTotalSize(), reference.getTotalSize());
+              CHECK(actual.getLayoutVersion() == reference.getLayoutVersion());
+              for (int32_t i = 0; i < 16; ++i) {
+                CHECK_EQ_F(actual.getSize(i), reference.getSize(i));
+                CHECK_EQ_F(actual.getOffset(i), reference.getOffset(i));
+                CHECK(actual.countUnmeasured(i, i) == reference.countUnmeasured(i, i));
+              }
+              const auto a = actual.getEngagedRange(170.0, 200.0, 80.0);
+              const auto b = reference.getEngagedRange(170.0, 200.0, 80.0);
+              CHECK(a.start == b.start && a.end == b.end && a.version == b.version);
+            };
+            compare();
+            // Subsequent observations and shrink must also preserve type means.
+            for (auto* core : {&actual, &reference}) {
+              core->setItemSize(3, 112.75);
+              core->setItemCount(10);
+              core->setEstimatesFrozen(false);
+            }
+            compare();
+          }
+        }
+      }
+    }
+  }
+}
+
 static void testResetAllForRecycle() {
   LayoutCore core;
   core.setTypeAverages(true);
@@ -1264,6 +1327,7 @@ int main(int argc, char** argv) {
   testBoundaryWindowStaysCorrect();
   testResetItemSizes();
   testRemapItemSizes();
+  testContiguousRemapMatchesGeneralPath();
   testResetAllForRecycle();
   testShrinkThenRegrow();
   testBatchWithScale();

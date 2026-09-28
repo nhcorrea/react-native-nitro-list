@@ -47,10 +47,21 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
   for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
     const section = sections[sectionIndex];
     const sectionKey = section.key ?? String(sectionIndex);
+    // Locations belong to the previous immutable snapshot. Look up candidates
+    // before allocating wrappers; changes in earlier sections can shift flat indices.
+    const oldStart = previous?.headerFlatIndex[sectionIndex];
+    const oldItems = previous?.itemFlatIndex[sectionIndex];
     headerFlatIndex.push(rows.length);
     if (options.withHeaders) {
       stickyHeaderIndices.push(rows.length);
-      rows.push({kind: 'header', section, sectionIndex, key: `s${sectionKey}:h`});
+      const key = `s${sectionKey}:h`;
+      const old = oldStart == null ? undefined : previous!.rows[oldStart];
+      rows.push(
+        old?.kind === 'header' && old.section === section &&
+        old.sectionIndex === sectionIndex && old.key === key
+          ? old
+          : {kind: 'header', section, sectionIndex, key},
+      );
     }
     const flatIndices: number[] = [];
     const data = section.data;
@@ -59,54 +70,40 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
       const itemKey = options.keyExtractor
         ? options.keyExtractor(item, itemIndex)
         : String(itemIndex);
+      const key = `s${sectionKey}:i:${itemKey}`;
+      const oldItemIndex = oldItems?.[itemIndex];
+      const old = oldItemIndex == null ? undefined : previous!.rows[oldItemIndex];
       flatIndices.push(rows.length);
-      rows.push({
-        kind: 'item',
-        item,
-        section,
-        sectionIndex,
-        itemIndex,
-        key: `s${sectionKey}:i:${itemKey}`,
-      });
+      rows.push(
+        old?.kind === 'item' && old.section === section &&
+        old.sectionIndex === sectionIndex && old.item === item &&
+        old.itemIndex === itemIndex && old.key === key
+          ? old
+          : {kind: 'item', item, section, sectionIndex, itemIndex, key},
+      );
       if (options.withSeparators && itemIndex < data.length - 1) {
-        rows.push({
-          kind: 'separator',
-          leadingItem: item,
-          section,
-          sectionIndex,
-          key: `s${sectionKey}:sep:${itemKey}`,
-        });
+        const separatorKey = `s${sectionKey}:sep:${itemKey}`;
+        const oldSeparator = oldItemIndex == null ? undefined : previous!.rows[oldItemIndex + 1];
+        rows.push(
+          oldSeparator?.kind === 'separator' && oldSeparator.section === section &&
+          oldSeparator.sectionIndex === sectionIndex && oldSeparator.leadingItem === item &&
+          oldSeparator.key === separatorKey
+            ? oldSeparator
+            : {kind: 'separator', leadingItem: item, section, sectionIndex, key: separatorKey},
+        );
       }
     }
     itemFlatIndex.push(flatIndices);
     if (options.withFooters) {
-      rows.push({kind: 'footer', section, sectionIndex, key: `s${sectionKey}:f`});
-    }
-  }
-
-  if (previous != null) {
-    const oldByKey = new Map(previous.rows.map((row) => [row.key, row]));
-    for (let i = 0; i < rows.length; ++i) {
-      const row = rows[i],
-        old = oldByKey.get(row.key);
-      if (
-        old == null ||
-        old.kind !== row.kind ||
-        old.section !== row.section ||
-        old.sectionIndex !== row.sectionIndex
-      )
-        continue;
-      if (
-        row.kind === 'item' &&
-        (old.kind !== 'item' || old.item !== row.item || old.itemIndex !== row.itemIndex)
-      )
-        continue;
-      if (
-        row.kind === 'separator' &&
-        (old.kind !== 'separator' || old.leadingItem !== row.leadingItem)
-      )
-        continue;
-      rows[i] = old;
+      const key = `s${sectionKey}:f`;
+      const oldEnd = previous?.headerFlatIndex[sectionIndex + 1] ?? previous?.rows.length;
+      const old = oldEnd == null ? undefined : previous!.rows[oldEnd - 1];
+      rows.push(
+        old?.kind === 'footer' && old.section === section &&
+        old.sectionIndex === sectionIndex && old.key === key
+          ? old
+          : {kind: 'footer', section, sectionIndex, key},
+      );
     }
   }
   return {rows, stickyHeaderIndices, headerFlatIndex, itemFlatIndex};

@@ -74,6 +74,51 @@ describe('flattenSections', () => {
     expect(flatIndexForLocation(flattened, 2, 99)).toBe(17);
     expect(flatIndexForLocation(flattened, 9, 0)).toBeNull();
   });
+
+  it('keeps locations and row context correct when row decorations change', () => {
+    const sections = [SECTIONS[0], {key: 'empty', title: 'Empty', data: []}, SECTIONS[1]];
+    const optionsFor = (mask: number) => ({
+      keyExtractor: (item: string, index: number) => `${index}:${item}`,
+      withHeaders: (mask & 1) !== 0,
+      withFooters: (mask & 2) !== 0,
+      withSeparators: (mask & 4) !== 0,
+    });
+    for (let beforeMask = 0; beforeMask < 8; ++beforeMask) {
+      const before = flattenSections(sections, optionsFor(beforeMask));
+      const savedRows = before.rows.slice();
+      for (let afterMask = 0; afterMask < 8; ++afterMask) {
+        const options = optionsFor(afterMask);
+        const after = flattenSections(sections, options, before);
+        expect(after).toEqual(flattenSections(sections, options));
+        for (const row of after.rows) {
+          const old = savedRows.find((candidate) => candidate.key === row.key);
+          if (old != null) expect(row).toBe(old);
+        }
+      }
+      expect(before.rows).toEqual(savedRows);
+      before.rows.forEach((row, index) => expect(row).toBe(savedRows[index]));
+    }
+  });
+
+  it('invalidates changed keys and item positions even within the same section object', () => {
+    const section = {key: 'mutable', title: 'Mutable', data: ['a', 'b', 'c']};
+    const options = {
+      keyExtractor: (item: string, index: number) => `${index}:${item}`,
+      withHeaders: true,
+      withFooters: true,
+      withSeparators: true,
+    };
+    const before = flattenSections([section], options);
+    section.data.splice(0, 1);
+    const after = flattenSections([section], options, before);
+    expect(after).toEqual(flattenSections([section], options));
+    expect(after.rows[1]).not.toBe(before.rows[1]);
+    expect(before.rows[1]).toMatchObject({kind: 'item', item: 'a', itemIndex: 0});
+    const nextOptions = {...options, keyExtractor: (item: string) => `new:${item}`};
+    expect(flattenSections([section], nextOptions, after)).toEqual(
+      flattenSections([section], nextOptions),
+    );
+  });
 });
 
 describe('NitroSectionList (T31)', () => {
@@ -115,6 +160,44 @@ describe('NitroSectionList (T31)', () => {
       } as LayoutChangeEvent);
     });
   }
+
+  it('refreshes flattened content and locations on dataVersion with stable section references', async () => {
+    const ref = createRef<NitroSectionListHandle>();
+    const sections = [{key: 'mutable', title: 'Mutable', data: ['a', 'b']}];
+    const renderItem = ({item}: {item: string}) => <Text testID={`row-${item}`}>{item}</Text>;
+    const keyExtractor = (item: string) => item;
+    const renderList = (dataVersion: number) => (
+      <NitroSectionList<string, Section>
+        ref={ref}
+        sections={sections}
+        dataVersion={dataVersion}
+        estimatedItemSize={100}
+        renderScrollComponent={renderScrollComponent}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+      />
+    );
+    act(() => { renderer = create(renderList(0)); });
+    layout(400, 600);
+    await act(async () => { await jest.advanceTimersByTimeAsync(60); });
+    expect(renderer.root.findAllByProps({testID: 'row-a'}).length).toBeGreaterThan(0);
+
+    sections[0].data.splice(0, 1, 'updated');
+    sections[0].data.push('appended');
+    act(() => { renderer.update(renderList(1)); });
+    await act(async () => { await jest.advanceTimersByTimeAsync(60); });
+    expect(renderer.root.findAllByProps({testID: 'row-a'})).toHaveLength(0);
+    expect(renderer.root.findAllByProps({testID: 'row-updated'}).length).toBeGreaterThan(0);
+    expect(renderer.root.findAllByProps({testID: 'row-appended'}).length).toBeGreaterThan(0);
+    expect(ref.current!.getLayout(2)).toBeDefined();
+
+    sections[0].data.splice(1);
+    act(() => { renderer.update(renderList(2)); });
+    await act(async () => { await jest.advanceTimersByTimeAsync(60); });
+    expect(renderer.root.findAllByProps({testID: 'row-b'})).toHaveLength(0);
+    expect(renderer.root.findAllByProps({testID: 'row-appended'})).toHaveLength(0);
+    expect(ref.current!.getLayout(1)).toBeUndefined();
+  });
 
   it('renders rows by kind, wires sticky headers and translates scrollToLocation', async () => {
     const ref = createRef<NitroSectionListHandle>();

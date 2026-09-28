@@ -260,40 +260,73 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   if (pairs == nullptr || pairCount <= 0 || itemCount_ == 0) {
     return false;
   }
-  std::vector<float> newSizes(itemCount_);
-  std::vector<uint8_t> newMeasured(itemCount_, 0);
-  for (int32_t i = 0; i < itemCount_; i++) {
-    newSizes[i] = estimateForTypeLocked(types_[i]);
-  }
   const auto sourceLimit = static_cast<int32_t>(sizes_.size());
-  for (int32_t p = 0; p < pairCount; p++) {
-    const double oldRaw = pairs[p * 2];
-    const double newRaw = pairs[p * 2 + 1];
-    if (!(oldRaw >= 0.0) || !(newRaw >= 0.0) || oldRaw > 2000000000.0 || newRaw > 2000000000.0) {
-      continue;
+  // JS has already validated keys/content. Specialize only a complete run of
+  // index pairs; no assumptions about index-dependent user callbacks are needed.
+  int32_t oldStart = 0, newStart = 0;
+  bool contiguous = pairCount <= sourceLimit && pairCount <= itemCount_ &&
+      pairs[0] >= 0.0 && pairs[0] <= sourceLimit - pairCount &&
+      pairs[1] >= 0.0 && pairs[1] <= itemCount_ - pairCount &&
+      pairs[0] == std::floor(pairs[0]) && pairs[1] == std::floor(pairs[1]);
+  if (contiguous) {
+    oldStart = static_cast<int32_t>(pairs[0]);
+    newStart = static_cast<int32_t>(pairs[1]);
+    for (int32_t p = 0; p < pairCount; ++p) {
+      if (pairs[p * 2] != oldStart + p || pairs[p * 2 + 1] != newStart + p) {
+        contiguous = false;
+        break;
+      }
     }
-    const auto oldIdx = static_cast<int32_t>(oldRaw);
-    const auto newIdx = static_cast<int32_t>(newRaw);
-    if (oldIdx >= sourceLimit || newIdx >= itemCount_) {
-      continue;
-    }
-    if (measured_[oldIdx] == 0) {
-      continue;
-    }
-    newSizes[newIdx] = sizes_[oldIdx];
-    newMeasured[newIdx] = 1;
   }
   bool anyChanged = false;
-  for (int32_t i = 0; i < itemCount_; i++) {
-    if (measured_[i] != newMeasured[i]) {
-      measured_[i] = newMeasured[i];
+  const auto assign = [&](int32_t i, float size, uint8_t measured) {
+    if (measured_[i] != measured) {
+      measured_[i] = measured;
       anyChanged = true;
     }
-    if (sizes_[i] != newSizes[i]) {
-      geometryChanged_ = geometryChanged_ || sizes_[i] != newSizes[i];
-      sizes_[i] = newSizes[i];
+    if (sizes_[i] != size) {
+      geometryChanged_ = true;
+      sizes_[i] = size;
       anyChanged = true;
       minDirtyIndex_ = std::min(minDirtyIndex_, i);
+    }
+  };
+  if (contiguous) {
+    const auto move = [&](int32_t i) {
+      const bool mapped = i >= newStart && i - newStart < pairCount;
+      const int32_t source = mapped ? oldStart + (i - newStart) : 0;
+      const bool measured = mapped && measured_[source] != 0;
+      assign(i, measured ? sizes_[source] : estimateForTypeLocked(types_[i]), measured ? 1 : 0);
+    };
+    // Traverse in the direction that reads overlapping sources before overwriting
+    // them, including when resetting destinations outside the surviving run.
+    if (newStart > oldStart) {
+      for (int32_t i = itemCount_; i-- > 0;) move(i);
+    } else {
+      for (int32_t i = 0; i < itemCount_; ++i) move(i);
+    }
+  } else {
+    std::vector<float> newSizes(itemCount_);
+    std::vector<uint8_t> newMeasured(itemCount_, 0);
+    for (int32_t i = 0; i < itemCount_; i++) {
+      newSizes[i] = estimateForTypeLocked(types_[i]);
+    }
+    for (int32_t p = 0; p < pairCount; p++) {
+      const double oldRaw = pairs[p * 2];
+      const double newRaw = pairs[p * 2 + 1];
+      if (!(oldRaw >= 0.0) || !(newRaw >= 0.0) || oldRaw > 2000000000.0 || newRaw > 2000000000.0) {
+        continue;
+      }
+      const auto oldIdx = static_cast<int32_t>(oldRaw);
+      const auto newIdx = static_cast<int32_t>(newRaw);
+      if (oldIdx >= sourceLimit || newIdx >= itemCount_ || measured_[oldIdx] == 0) {
+        continue;
+      }
+      newSizes[newIdx] = sizes_[oldIdx];
+      newMeasured[newIdx] = 1;
+    }
+    for (int32_t i = 0; i < itemCount_; i++) {
+      assign(i, newSizes[i], newMeasured[i]);
     }
   }
   if (anyChanged) {
