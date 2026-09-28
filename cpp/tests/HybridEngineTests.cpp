@@ -30,6 +30,18 @@ int main() {
   assert(engine.getItemSize(1) == 300);
   assert(engine.getTotalSize() == 500);
   assert(notifications == 1);
+  engine.updateData(doubles({1,2,100,0,0,1,0,0,2,-1,-1,0,0,2,0,0,0}), empty, empty,
+                    empty, doubles({1,0,0,1,0,0,0,1}));
+  assert(engine.getItemSize(0) == 300 && engine.getItemSize(1) == 200);
+  engine.updateData(doubles({1,2,100,0,0,1,0,0,2,-1,-1,0,0,2,0,0,0}), empty, empty,
+                    empty, doubles({1,0,0,1,1,1,1,1}));
+  assert(engine.getItemSize(0) == 200 && engine.getItemSize(1) == 300);
+  engine.updateData(doubles({1,2,100,0,0,1,0,0,2,-1,-1,0,0,0,0,0,0}), empty, empty,
+                    empty, doubles({1,0,0,1}));
+  assert(engine.getItemSize(0) == 200 && engine.getItemSize(1) == 300);
+  engine.updateData(doubles({1,2,100,0,0,1,0,0,2,-1,-1,0,0,3,0,0,0}), empty, empty,
+                    empty, doubles({1,0,0,1}));
+  assert(engine.getItemSize(0) == 200 && engine.getItemSize(1) == 300);
   engine.updateData(doubles({1,8,100,0,0,1,0,0,1,0,-1,0,0,0,0,0,0}), empty, empty, empty, empty);
   assert(engine.getTotalSize() == 500); // obsolete data revision rejected
   notifications = 0;

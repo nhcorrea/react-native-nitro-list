@@ -68,7 +68,7 @@ describe('maintainVisibleContentPosition integration', () => {
     harness.update({data: prepended});
     await harness.settle(50);
 
-    expect(harness.mirror.dataCommits.some(c => c[13] > 0 && c[7] === 0)).toBe(true);
+    expect(harness.mirror.dataCommits.some(c => c[13] === items.length && c[7] === 0)).toBe(true);
     expect(harness.mirror.callLog).not.toContain('resetItemSizes');
     expect(harness.handle.getItemSize(10)).toBe(sizeOfOldFirst);
 

@@ -46,7 +46,7 @@ import {
   type ScrollToIndexCtx,
 } from './scrollToIndex';
 import {noteScrollCommand, type NitroListScrollCommandEcho} from './scrollEvents';
-import {firstDifferingIndex} from './keyRemap';
+import {firstDifferingIndex, type KeyRemapPairs} from './keyRemap';
 import {
   EndSpaceSpacer,
   IS_DEV,
@@ -1509,7 +1509,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const nativeDataRevisionRef = useRef(0);
   const nativeMeasurementRevisionRef = useRef<typeof measurementRevision | null>(null);
   const fixedDataBufferRef = useRef(new Float64Array(128));
-  const commitNativeData = (remap: Float64Array | null, reset: boolean, invalidateFrom: number): void => {
+  const commitNativeData = (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number): void => {
     const engine = engineRef.current;
     if (engine == null) return;
     const domainChanged = nativeMeasurementRevisionRef.current !== measurementRevision;
@@ -1547,11 +1547,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       draw: effectiveDrawDistance, horizontal: isHorizontal, columns: resolvedColumns,
       epsilon: MEASUREMENT_EPSILON_DP, reset, revision: ++nativeDataRevisionRef.current,
       invalidateFrom, typeStart: prepared.start, typeCount: prepared.count, typeOffset: prepared.offset,
-      fixedCount, remapCount: remap == null ? 0 : remap.length / 2,
+      fixedCount, remapCount: remap?.mappedCount ?? 0,
       spanCount: columnLayout == null ? 0 : itemCount - (reset ? 0 : columnLayout.changedFrom),
       spanStart: reset ? 0 : columnLayout?.changedFrom ?? 0}), prepared.types.buffer,
       (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER,
-      fixedDataBufferRef.current.buffer, (remap?.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER);
+      fixedDataBufferRef.current.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER);
   };
 
   const previousItemsRef = useRef<ReadonlyArray<T>>(items);

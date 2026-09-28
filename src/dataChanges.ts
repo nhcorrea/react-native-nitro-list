@@ -1,5 +1,10 @@
 import type {DataAnalysis} from './dataAnalysis';
-import {buildKeyRemapPairs, REMAP_MIN_MAPPED_FRACTION} from './keyRemap';
+import {
+  buildKeyRemapPairs,
+  REMAP_MIN_MAPPED_FRACTION,
+  type KeyRemapAnchor,
+  type KeyRemapPairs,
+} from './keyRemap';
 import {maybeWarnMissingKeyExtractor} from './devWarnings';
 import {MVCP_POSITION_EPSILON} from './measurement';
 import type {NitroListEngine} from './NitroListEngine.nitro';
@@ -9,7 +14,7 @@ type Ref<V> = {current: V};
 type RangeState = {start: number; end: number; layoutVersion: number};
 
 export interface DataChangeCtx<T> {
-  commitData: (remap: Float64Array | null, reset: boolean, invalidateFrom: number) => void;
+  commitData: (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number) => void;
   analysis: DataAnalysis<T>;
   items: ReadonlyArray<T>;
   dataVersion: unknown;
@@ -43,6 +48,21 @@ export interface DataChangeCtx<T> {
   evaluateViewability: () => void;
 }
 
+function findAnchorIndex<T>(
+  items: ReadonlyArray<T>,
+  keyExtractor: (item: T, index: number) => string,
+  anchor: KeyRemapAnchor,
+): number {
+  const sameIndexItem = items[anchor.index];
+  if (sameIndexItem !== undefined && keyExtractor(sameIndexItem, anchor.index) === anchor.key) {
+    return anchor.index;
+  }
+  for (let i = 0; i < items.length; i++) {
+    if (keyExtractor(items[i], i) === anchor.key) return i;
+  }
+  return -1;
+}
+
 export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
   return function onDataMaybeChanged(): void {
     const versionChanged = !Object.is(ctx.previousDataVersionRef.current, ctx.dataVersion);
@@ -67,7 +87,12 @@ export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
           ctx.keyExtractor != null
             ? ctx.mvcpStateRef.current.anchor
             : null;
-        let remapPairs: Float64Array | null = null;
+        const anchorRequest: KeyRemapAnchor | null =
+          mvcpAnchorBefore != null && mvcpAnchorBefore.key != null
+            ? {index: mvcpAnchorBefore.index, key: mvcpAnchorBefore.key}
+            : null;
+        let remapPairs: KeyRemapPairs | null = null;
+        let resolvedAnchorIndex: number | null = null;
         if (!versionChanged && ctx.keyExtractor != null && ctx.items.length > 0) {
           const remap = buildKeyRemapPairs(
             prevItems,
@@ -75,36 +100,27 @@ export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
             ctx.keyExtractor,
             (previous, next, index) =>
               Object.is(previous, next) || ctx.itemsAreEqual?.(previous, next, index) === true,
+            anchorRequest,
           );
-          if (remap != null && remap.mappedCount >= ctx.items.length * REMAP_MIN_MAPPED_FRACTION) {
-            remapPairs = remap.pairs;
+          if (remap != null) {
+            resolvedAnchorIndex = remap.anchorIndex;
+            if (remap.mappedCount >= ctx.items.length * REMAP_MIN_MAPPED_FRACTION) {
+              remapPairs = remap;
+            }
           }
         }
         ctx.commitData(remapPairs, remapPairs == null, ctx.analysis.firstChanged);
         committed = true;
-        if (mvcpAnchorBefore != null && mvcpAnchorBefore.key != null && ctx.keyExtractor) {
-          let newIndex = -1;
-          const sameIndexItem = ctx.items[mvcpAnchorBefore.index];
-          if (
-            sameIndexItem !== undefined &&
-            ctx.keyExtractor(sameIndexItem, mvcpAnchorBefore.index) === mvcpAnchorBefore.key
-          ) {
-            newIndex = mvcpAnchorBefore.index;
-          } else {
-            for (let i = 0; i < ctx.items.length; i++) {
-              if (ctx.keyExtractor(ctx.items[i], i) === mvcpAnchorBefore.key) {
-                newIndex = i;
-                break;
-              }
-            }
-          }
+        if (mvcpAnchorBefore != null && anchorRequest != null && ctx.keyExtractor) {
+          const newIndex =
+            resolvedAnchorIndex ?? findAnchorIndex(ctx.items, ctx.keyExtractor, anchorRequest);
           if (newIndex >= 0) {
             ctx.invalidateLayoutCache();
             const offsetAfter = ctx.readItemOffset(newIndex);
             const diff = offsetAfter - mvcpAnchorBefore.offset;
             ctx.mvcpStateRef.current.anchor = {
               index: newIndex,
-              key: mvcpAnchorBefore.key,
+              key: anchorRequest.key,
               offset: mvcpAnchorBefore.offset,
             };
             if (Math.abs(diff) > MVCP_POSITION_EPSILON) {
