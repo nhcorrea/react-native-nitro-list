@@ -52,6 +52,7 @@ public:
   double getItemOffset(double index) override;
   double getItemSize(double index) override;
   double getTotalSize() override;
+  double readLayout(double start, double count, const std::shared_ptr<ArrayBuffer>& out) override;
 
   size_t getExternalMemorySize() noexcept override;
 

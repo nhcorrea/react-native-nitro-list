@@ -45,6 +45,7 @@ export interface ScrollToIndexCtx {
   getMaxScrollOffset: () => number;
   readItemOffset: (index: number) => number;
   readItemSize: (index: number) => number;
+  ensureLayout: (start: number, end?: number) => void;
   applyScrollOffsetSync: (engineOffset: number) => void;
   resetScrollVelocity: () => void;
   scrollToAbsoluteOffset: (offset: number, animated: boolean) => number;
@@ -83,6 +84,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     viewOffset: number,
   ): number | null => {
     if (index < 0 || index >= ctx.itemCount) return null;
+    ctx.ensureLayout(index);
     const top = ctx.readItemOffset(index);
     const itemH = ctx.readItemSize(index);
     const viewportH = ctx.mainViewportRef.current;

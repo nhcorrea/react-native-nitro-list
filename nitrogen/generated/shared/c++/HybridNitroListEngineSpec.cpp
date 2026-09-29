@@ -40,6 +40,7 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridMethod("getItemOffset", &HybridNitroListEngineSpec::getItemOffset);
       prototype.registerHybridMethod("getItemSize", &HybridNitroListEngineSpec::getItemSize);
       prototype.registerHybridMethod("getTotalSize", &HybridNitroListEngineSpec::getTotalSize);
+      prototype.registerHybridMethod("readLayout", &HybridNitroListEngineSpec::readLayout);
     });
   }
 

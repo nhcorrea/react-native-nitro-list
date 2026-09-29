@@ -91,6 +91,7 @@ export interface NitroListCellsProps {
   cellBridge: CellBridge;
   itemsAreEqual?: ItemsAreEqualFn;
   readItemOffset: (index: number) => number;
+  ensureLayout: (start: number, end?: number) => void;
   onCommit: (
     range: RangeState,
     prewarmRange: RangeState | null,
@@ -123,6 +124,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   cellBridge,
   itemsAreEqual,
   readItemOffset,
+  ensureLayout,
   onCommit,
 }: NitroListCellsProps) {
   if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordCellsRender();
@@ -192,6 +194,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   });
   const seenRenderKeys = IS_DEV ? new Set<string>() : null;
   for (const {start, end} of mergeRenderRanges(renderRanges)) {
+    ensureLayout(start, end);
     for (let i = start; i <= end; i++) {
       const item = items[i];
       let metadata = metadataRef.current.get(i);

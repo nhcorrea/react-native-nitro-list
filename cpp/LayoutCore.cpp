@@ -545,6 +545,30 @@ int32_t LayoutCore::getLayoutVersion() {
   return layoutVersion_;
 }
 
+int32_t LayoutCore::readLayout(int32_t start, int32_t count, double* out, int32_t capacityDoubles) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (out == nullptr || capacityDoubles < 4) {
+    return -1;
+  }
+  ensureClean();
+  const bool inside = start >= 0 && start < itemCount_;
+  const int32_t first = inside ? start : 0;
+  const int32_t available = inside ? std::min(std::max(0, count), itemCount_ - first) : 0;
+  out[0] = layoutVersion_;
+  out[1] = totalSize_;
+  out[2] = first;
+  out[3] = available;
+  if (capacityDoubles < 4 + static_cast<int64_t>(available) * 2) {
+    return -1;
+  }
+  double* cursor = out + 4;
+  for (int32_t i = first; i < first + available; i++) {
+    *cursor++ = offsets_[i];
+    *cursor++ = static_cast<double>(sizes_[i]);
+  }
+  return available;
+}
+
 LayoutCore::EngagedRange LayoutCore::getEngagedRange(double scrollOffset,
                                                      double viewportHeight,
                                                      double drawDistance) {

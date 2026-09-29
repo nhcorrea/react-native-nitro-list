@@ -19,3 +19,17 @@ export function validSnapshot(slab: Float64Array, written: number): boolean {
     SNAPSHOT_HEADER + written * 2 <= slab.length
   );
 }
+
+export const LAYOUT_READ_SCHEMA = 1;
+export const LAYOUT_READ_HEADER = 8;
+export function validLayoutRead(buffer: Float64Array, written: number, start: number): boolean {
+  return (
+    written >= 0 &&
+    buffer.length >= LAYOUT_READ_HEADER &&
+    buffer[0] === LAYOUT_READ_SCHEMA &&
+    buffer[1] === LAYOUT_READ_HEADER &&
+    buffer[6] === start &&
+    buffer[7] === written &&
+    LAYOUT_READ_HEADER + written * 2 <= buffer.length
+  );
+}

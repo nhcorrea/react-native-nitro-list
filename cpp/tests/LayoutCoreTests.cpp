@@ -1268,6 +1268,76 @@ static void testAllocatedGeometryMemory() {
   CHECK(core.getMemoryFootprint() == 0);
 }
 
+static void testReadLayout() {
+  LayoutCore core;
+  core.setEstimate(50.0f);
+  core.setItemCount(300);
+  const double sizes[] = {3, 120, 7, 80, 150, 64};
+  core.setItemSizes(sizes, 3, 1.0);
+  std::vector<double> out(8 + 2 * 64, -7.0);
+  const int32_t written = core.readLayout(10, 20, out.data(), static_cast<int32_t>(out.size()));
+  CHECK(written == 20);
+  CHECK(out[0] == core.getLayoutVersion());
+  CHECK(out[1] == core.getTotalSize());
+  CHECK(out[2] == 10 && out[3] == 20);
+  for (int32_t k = 0; k < 20; ++k) {
+    CHECK(out[4 + k * 2] == core.getOffset(10 + k));
+    CHECK(out[5 + k * 2] == core.getSize(10 + k));
+  }
+  CHECK(core.readLayout(290, 64, out.data(), static_cast<int32_t>(out.size())) == 10);
+  CHECK(out[2] == 290 && out[3] == 10);
+  CHECK(core.readLayout(-1, 5, out.data(), static_cast<int32_t>(out.size())) == 0);
+  CHECK(out[2] == 0 && out[3] == 0);
+  CHECK(core.readLayout(300, 5, out.data(), static_cast<int32_t>(out.size())) == 0);
+  CHECK(core.readLayout(0, 5, out.data(), 4 + 2 * 5 - 1) == -1);
+  CHECK(out[3] == 5 && out[1] == core.getTotalSize());
+  CHECK(core.readLayout(0, 5, out.data(), 3) == -1);
+  const double version = out[0];
+  core.setItemSize(4, 200.0);
+  CHECK(core.readLayout(5, 1, out.data(), static_cast<int32_t>(out.size())) == 1);
+  CHECK(out[0] != version);
+  CHECK(out[4] == core.getOffset(5));
+  CHECK(core.getOffset(5) == core.getOffset(4) + 200.0);
+
+  LayoutCore empty;
+  CHECK(empty.readLayout(0, 8, out.data(), static_cast<int32_t>(out.size())) == 0);
+  CHECK(out[1] == 0 && out[3] == 0);
+
+  LayoutCore grid;
+  grid.setEstimate(40.0f);
+  grid.setItemCount(50);
+  grid.setColumnCount(3);
+  std::vector<uint16_t> spans(50, 1);
+  spans[4] = 2;
+  spans[9] = 3;
+  grid.setItemSpans(spans.data(), 50);
+  const double gridSizes[] = {2, 90, 5, 70};
+  grid.setItemSizes(gridSizes, 2, 1.0);
+  CHECK(grid.readLayout(0, 50, out.data(), static_cast<int32_t>(out.size())) == 50);
+  for (int32_t k = 0; k < 50; ++k) {
+    CHECK(out[4 + k * 2] == grid.getOffset(k));
+    CHECK(out[5 + k * 2] == grid.getSize(k));
+  }
+
+  LayoutCore sampled;
+  LayoutCore reference;
+  for (LayoutCore* c : {&sampled, &reference}) {
+    c->setEstimate(100.0f);
+    c->setItemCount(200);
+    c->setClockForTesting(&fakeClock);
+    c->setDirectionalBuffers(true);
+  }
+  const double offsets[] = {4800.0, 4900.0, 5000.0, 4900.0};
+  for (int32_t step = 0; step < 4; ++step) {
+    gFakeNowMs = step * 16.0;
+    sampled.readLayout(40, 30, out.data(), static_cast<int32_t>(out.size()));
+    const auto a = sampled.getEngagedRange(offsets[step], 800.0, 250.0);
+    sampled.readLayout(0, 64, out.data(), static_cast<int32_t>(out.size()));
+    const auto b = reference.getEngagedRange(offsets[step], 800.0, 250.0);
+    CHECK(a.start == b.start && a.end == b.end && a.version == b.version);
+  }
+}
+
 static void testIncrementalGridAgainstPacking() {
   for (int columns : {1, 2, 3, 5}) {
     LayoutCore core;
@@ -1341,6 +1411,7 @@ int main(int argc, char** argv) {
   testAllocatedGeometryMemory();
   testSeedTypeMeans();
   testFillLayoutSlab();
+  testReadLayout();
   testDirectionalBuffers();
   testEstimatesFrozen();
   testResetScrollVelocity();

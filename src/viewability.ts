@@ -70,6 +70,7 @@ export interface ViewabilityCtx<T> {
   effectivePaddingStartRef: Ref<number>;
   readItemOffset: (index: number) => number;
   readItemSize: (index: number) => number;
+  ensureLayout: (start: number, end?: number) => void;
   reschedule: () => void;
 }
 
@@ -157,6 +158,7 @@ export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
     const potential = scratch.potential;
     potential.clear();
     if (!waitForInteraction || ctx.hasInteractedRef.current) {
+      ctx.ensureLayout(start, end);
       for (let i = start; i <= end; i++) {
         const top = ctx.readItemOffset(i);
         const h = ctx.readItemSize(i);

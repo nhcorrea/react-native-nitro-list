@@ -539,6 +539,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const invalidateLayoutCache = layout.invalidate;
   const readItemOffset = layout.readItemOffset;
   const readItemSize = layout.readItemSize;
+  const ensureLayout = layout.ensureLayout;
   const readTotalSize = layout.readTotalSize;
   const writeSlabToCache = layout.writeSlab;
   const fillSlab = layout.fillSlab;
@@ -1496,6 +1497,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       effectivePaddingStartRef,
       readItemOffset,
       readItemSize,
+      ensureLayout,
       reschedule: () => evaluateViewabilityRef.current(),
     } satisfies ViewabilityCtx<T>);
   });
@@ -1851,6 +1853,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       readTotalSize,
       readItemOffset,
       readItemSize,
+      ensureLayout,
       setAlignPad,
       setSnapOffsets,
     } satisfies GeometryCtx);
@@ -2233,6 +2236,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       getMaxScrollOffset,
       readItemOffset,
       readItemSize,
+      ensureLayout,
       applyScrollOffsetSync,
       resetScrollVelocity,
       scrollToAbsoluteOffset,
@@ -2417,6 +2421,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (index: number, animated: boolean, viewOffset: number): Promise<void> => {
       if (index < 0 || index >= itemCount) return Promise.resolve();
       const viewportMain = mainViewportRef.current;
+      ensureLayout(index);
       const itemTop = effectivePaddingStartRef.current + readItemOffset(index);
       const itemBottom = itemTop + readItemSize(index);
       const visibleTop = lastScrollOffsetRef.current + viewOffset;
@@ -2433,7 +2438,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         viewOffset: alignToEnd ? contentInsetBottomRef.current : viewOffset,
       });
     },
-    [itemCount, readItemOffset, readItemSize, scrollToIndexPrecisely],
+    [itemCount, ensureLayout, readItemOffset, readItemSize, scrollToIndexPrecisely],
   );
 
   const handleCtxRef = useRef<HandleCtx<T> | null>(null);
@@ -2464,6 +2469,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       checkEdgeCallbacksRef,
       readItemOffset,
       readItemSize,
+      ensureLayout,
       readTotalSize,
       beginScrollCommand,
       trackScrollCommand,
@@ -2596,6 +2602,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
                 cellBridge={cellBridgeRef.current}
                 itemsAreEqual={itemsAreEqual as ItemsAreEqualFn | undefined}
                 readItemOffset={readItemOffset}
+                ensureLayout={ensureLayout}
                 onCommit={handleCellsCommit}
               />
             </ListContainer>

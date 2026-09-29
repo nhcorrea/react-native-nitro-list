@@ -52,6 +52,18 @@ int main() {
   auto* header = reinterpret_cast<double*>(small->data());
   assert(header[4] == 1 && header[5] == 12 && header[9] == 50 && header[10] == -1);
   const double sequence = header[7];
+  auto layout = std::make_shared<ArrayBuffer>(12 * sizeof(double));
+  assert(engine.readLayout(0, 2, layout) == 2);
+  auto* read = reinterpret_cast<double*>(layout->data());
+  assert(read[0] == 1 && read[1] == 8 && read[2] == 2 && read[3] == 12);
+  assert(read[5] == 550 && read[6] == 0 && read[7] == 2);
+  assert(read[8] == 0 && read[9] == 250 && read[10] == 250 && read[11] == 300);
+  auto tiny = std::make_shared<ArrayBuffer>(9 * sizeof(double));
+  assert(engine.readLayout(0, 2, tiny) == -1 && reinterpret_cast<double*>(tiny->data())[3] == 12);
+  assert(engine.readLayout(0.5, 1, layout) == -2 && engine.readLayout(0, -1, layout) == -2);
+  assert(engine.readLayout(0, 1, std::make_shared<ArrayBuffer>(7 * sizeof(double))) == -2);
+  assert(engine.readLayout(5, 1, layout) == 0 && read[7] == 0);
+  assert(notifications == 0);
   auto full = std::make_shared<ArrayBuffer>(static_cast<size_t>(header[11]) * sizeof(double));
   assert(engine.readSnapshot(sequence, full) == 2);
   auto* snapshot = reinterpret_cast<double*>(full->data());

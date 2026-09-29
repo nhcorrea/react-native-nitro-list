@@ -24,6 +24,7 @@ export interface GeometryCtx {
   readTotalSize: () => number;
   readItemOffset: (index: number) => number;
   readItemSize: (index: number) => number;
+  ensureLayout: (start: number, end?: number) => void;
   setAlignPad: (value: number) => void;
   setSnapOffsets: (updater: (prev: number[] | undefined) => number[] | undefined) => void;
 }
@@ -86,6 +87,7 @@ export function createGeometry(ctx: GeometryCtx): GeometryApi {
   const viewportH = ctx.mainViewportRef.current;
   if (viewportH <= 0) return;
   const anchor = Math.max(0, Math.min(Math.trunc(config.anchorIndex), ctx.itemCount - 1));
+  ctx.ensureLayout(anchor);
   let tail = ctx.readTotalSize() - ctx.readItemOffset(anchor);
   const anchorSize = ctx.readItemSize(anchor);
   if (config.anchorMaxSize != null && anchorSize > config.anchorMaxSize) {

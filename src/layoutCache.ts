@@ -1,4 +1,9 @@
-import {SNAPSHOT_HEADER, validSnapshot} from './layoutSnapshot';
+import {
+  LAYOUT_READ_HEADER,
+  SNAPSHOT_HEADER,
+  validLayoutRead,
+  validSnapshot,
+} from './layoutSnapshot';
 import type {NitroListEngine} from './NitroListEngine.nitro';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 
@@ -15,8 +20,10 @@ export interface LayoutCacheApi {
   invalidate: () => void;
   retainedPageBytes: () => number;
   hasCurrentSnapshot: () => boolean;
+  retainedReadBytes: () => number;
   readItemOffset: (index: number) => number;
   readItemSize: (index: number) => number;
+  ensureLayout: (start: number, end?: number) => void;
   readTotalSize: () => number;
   writeSlab: (slab: Float64Array, written: number) => void;
   fillSlab: (
@@ -31,6 +38,7 @@ export interface LayoutCacheApi {
 export const LAYOUT_PAGE_ITEMS = 64;
 export const LAYOUT_MAX_PAGES = 64;
 export const LAYOUT_PAGE_BYTES = LAYOUT_PAGE_ITEMS * (8 + 8 + 1);
+export const LAYOUT_READ_BYTES = (LAYOUT_READ_HEADER + 2 * LAYOUT_PAGE_ITEMS) * 8;
 
 type Page = {generation: number; tops: Float64Array; sizes: Float64Array; valid: Uint8Array};
 
@@ -44,6 +52,10 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
   let snapshotGeneration = 0;
   let previousCount = ctx.itemCount;
   let slab: Float64Array<ArrayBuffer> = new Float64Array(SNAPSHOT_HEADER + 2 * 64);
+  let readBuffer: Float64Array<ArrayBuffer> | null = null;
+  let knownGeneration = 0;
+  let knownVersion = 0;
+  let knownRevision = 0;
 
   const invalidate = (): void => {
     ++generation;
@@ -52,6 +64,7 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
       pages.clear();
       if (slab.length > SNAPSHOT_HEADER + 2 * 64) slab = new Float64Array(SNAPSHOT_HEADER + 2 * 64);
     }
+    if (ctx.engineRef.current == null) readBuffer = null;
     previousCount = ctx.itemCount;
   };
 
@@ -112,6 +125,55 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
     return value;
   };
 
+  const noteLayout = (version: number, revision: number): void => {
+    if (knownGeneration === generation && (knownVersion !== version || knownRevision !== revision)) {
+      ++generation;
+      lastPage = null;
+    }
+    knownGeneration = generation;
+    knownVersion = version;
+    knownRevision = revision;
+  };
+
+  const readRun = (engine: NitroListEngine, start: number, count: number): void => {
+    readBuffer ??= new Float64Array(LAYOUT_READ_HEADER + 2 * LAYOUT_PAGE_ITEMS);
+    const buffer = readBuffer;
+    const written = engine.readLayout(start, count, buffer.buffer);
+    if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
+    if (!validLayoutRead(buffer, written, start)) return;
+    noteLayout(buffer[4], buffer[2]);
+    if (written === 0) return;
+    const page = pageFor(start),
+      first = start % LAYOUT_PAGE_ITEMS;
+    for (let k = 0; k < written; ++k) {
+      page.tops[first + k] = buffer[LAYOUT_READ_HEADER + k * 2];
+      page.sizes[first + k] = buffer[LAYOUT_READ_HEADER + k * 2 + 1];
+      page.valid[first + k] = 3;
+    }
+    totalSize = buffer[5];
+    totalGeneration = generation;
+  };
+
+  const ensureLayout = (start: number, end: number = start): void => {
+    const engine = ctx.engineRef.current;
+    if (engine == null) return;
+    const last = Math.min(end, ctx.itemCount - 1);
+    let index = Math.max(0, start);
+    while (index <= last) {
+      const page = pageFor(index),
+        slot = index % LAYOUT_PAGE_ITEMS;
+      if (page.valid[slot] === 3) {
+        ++index;
+        continue;
+      }
+      const pageLast = Math.min(last, index - slot + LAYOUT_PAGE_ITEMS - 1);
+      let runEnd = index;
+      while (runEnd < pageLast && page.valid[(runEnd + 1) % LAYOUT_PAGE_ITEMS] !== 3) ++runEnd;
+      readRun(engine, index, runEnd - index + 1);
+      index = runEnd + 1;
+    }
+  };
+
   const readTotalSize = (): number => {
     const engine = ctx.engineRef.current;
     if (engine == null) return Math.max(0, ctx.itemCount * ctx.estimatedItemSize);
@@ -124,6 +186,7 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
 
   const writeSlab = (source: Float64Array, written: number): void => {
     if (!validSnapshot(source, written)) return;
+    noteLayout(source[0], source[6]);
     const start = source[2];
     for (let k = 0; k < written; ++k) {
       const index = start + k,
@@ -183,9 +246,11 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
   return {
     invalidate,
     retainedPageBytes: () => pages.size * LAYOUT_PAGE_BYTES,
+    retainedReadBytes: () => (readBuffer == null ? 0 : readBuffer.byteLength),
     hasCurrentSnapshot: () => snapshotGeneration === generation,
     readItemOffset,
     readItemSize,
+    ensureLayout,
     readTotalSize,
     writeSlab,
     fillSlab,

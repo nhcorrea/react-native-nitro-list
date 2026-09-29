@@ -38,4 +38,5 @@ export interface NitroListEngine extends HybridObject<{ios: 'c++'; android: 'c++
   getItemOffset(index: number): number;
   getItemSize(index: number): number;
   getTotalSize(): number;
+  readLayout(start: number, count: number, out: ArrayBuffer): number;
 }

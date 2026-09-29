@@ -35,6 +35,7 @@ export interface HandleCtx<T> {
   checkEdgeCallbacksRef: Ref<() => void>;
   readItemOffset: (index: number) => number;
   readItemSize: (index: number) => number;
+  ensureLayout: (start: number, end?: number) => void;
   readTotalSize: () => number;
   beginScrollCommand: () => number;
   trackScrollCommand: (commandId: number) => Promise<void>;
@@ -97,6 +98,7 @@ export function createNitroListHandle<T>(ctx: HandleCtx<T>): NitroListHandle {
     },
     getLayout(index: number) {
       if (!Number.isInteger(index) || index < 0 || index >= ctx.itemCount) return undefined;
+      ctx.ensureLayout(index);
       const offset = ctx.readItemOffset(index);
       const size = Math.max(0, ctx.readItemSize(index) - ctx.mainAxisGap);
       const crossSize = Math.max(0, ctx.crossViewportRef.current - ctx.crossPadding.start - ctx.crossPadding.end);

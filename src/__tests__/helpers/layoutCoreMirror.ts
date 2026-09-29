@@ -449,6 +449,25 @@ export class LayoutCoreMirror {
     return this.layoutVersion;
   }
 
+  readLayout(start: number, count: number, out: Float64Array, capacityDoubles: number): number {
+    if (capacityDoubles < 4) return -1;
+    this.ensureClean();
+    const inside = start >= 0 && start < this.itemCount;
+    const first = inside ? start : 0;
+    const available = inside ? Math.min(Math.max(0, count), this.itemCount - first) : 0;
+    out[0] = this.layoutVersion;
+    out[1] = this.totalSize;
+    out[2] = first;
+    out[3] = available;
+    if (capacityDoubles < 4 + available * 2) return -1;
+    let cursor = 4;
+    for (let i = first; i < first + available; i++) {
+      out[cursor++] = this.offsets[i];
+      out[cursor++] = this.sizes[i];
+    }
+    return available;
+  }
+
   fillTypeStats(out: Float64Array, capacityDoubles: number, outputScale: number): number {
     let count = 0;
     for (const stats of this.typeStats) {
@@ -765,6 +784,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   readonly callLog: string[] = [];
   readonly dataCommits: number[][] = [];
+  readonly reads = {offset: 0, size: 0, layout: 0, layoutItems: 0};
   private readonly asyncRangeDelivery: boolean;
   private readonly explicitEpsilon: boolean;
   disposed = false;
@@ -1041,11 +1061,26 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   }
 
   getItemOffset(index: number): number {
+    this.reads.offset++;
     return this.core.getOffset(Math.trunc(index));
   }
 
   getItemSize(index: number): number {
+    this.reads.size++;
     return this.core.getSize(Math.trunc(index));
+  }
+
+  readLayout(start: number, count: number, out: ArrayBuffer): number {
+    this.reads.layout++;
+    const target = new Float64Array(out);
+    if (target.length < 8 || !Number.isInteger(start) || !Number.isInteger(count) || count < 0) return -2;
+    const written = this.core.readLayout(start, count, target.subarray(4), target.length - 4);
+    target[0] = 1;
+    target[1] = 8;
+    target[2] = this.dataRevision;
+    target[3] = 8 + target[7] * 2;
+    if (written > 0) this.reads.layoutItems += written;
+    return written;
   }
 
   getTotalSize(): number {

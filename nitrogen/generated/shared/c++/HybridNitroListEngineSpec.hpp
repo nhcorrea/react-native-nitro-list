@@ -75,6 +75,7 @@ namespace margelo::nitro::nitrolist {
       virtual double getItemOffset(double index) = 0;
       virtual double getItemSize(double index) = 0;
       virtual double getTotalSize() = 0;
+      virtual double readLayout(double start, double count, const std::shared_ptr<ArrayBuffer>& out) = 0;
 
     protected:
       // Hybrid Setup

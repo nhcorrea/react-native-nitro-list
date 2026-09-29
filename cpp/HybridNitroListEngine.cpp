@@ -407,6 +407,22 @@ double HybridNitroListEngine::getTotalSize() {
   return core_.getTotalSize();
 }
 
+double HybridNitroListEngine::readLayout(double start, double count,
+                                         const std::shared_ptr<ArrayBuffer>& out) {
+  constexpr int32_t header = 8;
+  int32_t capacity = 0;
+  auto* target = const_cast<double*>(doublesOf(out, capacity));
+  if (target == nullptr || capacity < header || !std::isfinite(start) || !std::isfinite(count) ||
+      start != std::floor(start) || count != std::floor(count) || count < 0) return -2;
+  std::lock_guard<std::mutex> guard(stateMutex_);
+  const int32_t written = core_.readLayout(toIndex(start), toIndex(count), target + 4, capacity - 4);
+  target[0] = 1;
+  target[1] = header;
+  target[2] = dataRevision_;
+  target[3] = header + target[7] * 2;
+  return written;
+}
+
 size_t HybridNitroListEngine::getExternalMemorySize() noexcept {
   try {
     std::lock_guard<std::mutex> guard(stateMutex_);
