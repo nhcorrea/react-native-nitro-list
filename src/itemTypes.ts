@@ -4,6 +4,7 @@ import {NitroListDevFlags} from './devFlags';
 import {maybeWarnTooManyItemTypes} from './devWarnings';
 import type {DataAnalysis} from './dataAnalysis';
 import {getCachedFixedSize, getCachedMean, measurementCacheKey} from './measurementCache';
+import {nativeFloat64Array, nativeUint16Array} from './nativeBuffers';
 import type {NitroListEngine} from './NitroListEngine.nitro';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 
@@ -42,7 +43,7 @@ export interface ItemTypesApi {
 export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
   let typedItems: ReadonlyArray<T> | null = null;
   let typedWithCallback = false;
-  let typeBuffer = new Uint16Array(0);
+  let typeBuffer: Uint16Array<ArrayBuffer> | null = null;
   let sentCount = -1;
 
   const seedTypeMeans = (): void => {
@@ -82,7 +83,9 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
       if (next != null) ctx.commitAutoFixedTypes(next, true);
     }
     if (seedCount === 0) return;
-    hybrid.seedTypeMeans(seeds.slice(0, seedCount * 2).buffer);
+    const pairs = nativeFloat64Array(seedCount * 2);
+    pairs.set(seeds.subarray(0, seedCount * 2));
+    hybrid.seedTypeMeans(pairs.buffer);
     if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
   };
 
@@ -101,14 +104,18 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
           ? ctx.itemCount
           : ctx.analysis.firstChanged
         : 0;
-    if (typeBuffer.length > Math.max(64, ctx.itemCount * 4)) {
-      typeBuffer = typeBuffer.slice(0, Math.max(64, ctx.itemCount));
-    }
-    if (typeBuffer.length < ctx.itemCount) {
-      const next = new Uint16Array(Math.max(ctx.itemCount, typeBuffer.length * 2, 64));
+    if (typeBuffer == null) {
+      typeBuffer = nativeUint16Array(Math.max(ctx.itemCount, 64));
+    } else if (typeBuffer.length > Math.max(64, ctx.itemCount * 4)) {
+      const next = nativeUint16Array(Math.max(64, ctx.itemCount));
+      next.set(typeBuffer.subarray(0, next.length));
+      typeBuffer = next;
+    } else if (typeBuffer.length < ctx.itemCount) {
+      const next = nativeUint16Array(Math.max(ctx.itemCount, typeBuffer.length * 2, 64));
       next.set(typeBuffer);
       typeBuffer = next;
     }
+    const buffer = typeBuffer;
     let changedFrom = sentCount < 0 ? 0 : ctx.itemCount;
     const map = ctx.typeIdMapRef.current;
     for (let i = from; i < ctx.itemCount; ++i) {
@@ -119,16 +126,16 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
         id = found ?? Math.min(map.size + 1, 65535);
         if (found == null) map.set(type, id);
       }
-      if (typeBuffer[i] !== id || (i >= sentCount && id !== 0))
+      if (buffer[i] !== id || (i >= sentCount && id !== 0))
         changedFrom = Math.min(changedFrom, i);
-      typeBuffer[i] = id;
+      buffer[i] = id;
     }
     maybeWarnTooManyItemTypes(map.size);
     typedItems = ctx.items;
     typedWithCallback = ctx.getItemType != null;
     sentCount = ctx.itemCount;
     return {
-      types: typeBuffer,
+      types: buffer,
       start: changedFrom >= ctx.itemCount ? -1 : changedFrom,
       count: Math.max(0, ctx.itemCount - changedFrom),
       offset: changedFrom,

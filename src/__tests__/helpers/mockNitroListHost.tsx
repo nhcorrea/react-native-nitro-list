@@ -16,6 +16,10 @@ export function getLastMirror(): HybridNitroListEngineMirror {
   return mirror;
 }
 
+export function allMirrorsForTests(): ReadonlyArray<HybridNitroListEngineMirror> {
+  return mirrors;
+}
+
 export function clearMirrorsForTests(): void {
   mirrors.length = 0;
   nextMirrorConfig = {};

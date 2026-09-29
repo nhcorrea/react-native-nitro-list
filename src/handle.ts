@@ -7,6 +7,7 @@ import type {
 } from './NitroList';
 import type {NitroListEngine} from './NitroListEngine.nitro';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
+import {nativeFloat64Array} from './nativeBuffers';
 
 type Ref<V> = {current: V};
 export type ItemTypeKey = string | number;
@@ -177,11 +178,11 @@ export function createNitroListHandle<T>(ctx: HandleCtx<T>): NitroListHandle {
       const result: Record<string, {average: number; count: number}> = {};
       const hybrid = ctx.engineRef.current;
       if (hybrid == null) return result;
-      let stats = new Float64Array((ctx.typeIdMapRef.current.size + 2) * 3);
+      let stats = nativeFloat64Array((ctx.typeIdMapRef.current.size + 2) * 3);
       let written = hybrid.fillTypeStats(stats.buffer);
       if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
       if (written < 0) {
-        stats = new Float64Array(4096 * 3);
+        stats = nativeFloat64Array(4096 * 3);
         written = hybrid.fillTypeStats(stats.buffer);
         if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
         if (written < 0) return result;

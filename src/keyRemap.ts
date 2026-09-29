@@ -22,6 +22,7 @@ export function buildKeyRemapPairs<T>(
   keyExtractor: (item: T, index: number) => string,
   equivalent?: (previous: T, next: T, index: number) => boolean,
   anchor?: KeyRemapAnchor | null,
+  allocatePairs: (length: number) => Float64Array = (length) => new Float64Array(length),
 ): KeyRemapResult | null {
   if (prev.length === 0 || next.length === 0) return null;
   const oldIndexByKey = new Map<string, number>();
@@ -29,7 +30,7 @@ export function buildKeyRemapPairs<T>(
     const key = keyExtractor(prev[i], i);
     if (!oldIndexByKey.has(key)) oldIndexByKey.set(key, i);
   }
-  const pairs = new Float64Array(next.length * 2);
+  const pairs = allocatePairs(next.length * 2);
   let mappedCount = 0;
   let anchorIndex = -1;
   for (let i = 0; i < next.length; i++) {

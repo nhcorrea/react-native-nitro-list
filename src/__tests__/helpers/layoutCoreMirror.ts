@@ -1,3 +1,4 @@
+import {isNativeArrayBufferForTests} from './mockNitroModules';
 import type {NitroListEngine} from '../../NitroListEngine.nitro';
 
 const f32 = Math.fround;
@@ -783,6 +784,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     | null = null;
 
   readonly callLog: string[] = [];
+  readonly jsBuffers: string[] = [];
   readonly dataCommits: number[][] = [];
   readonly reads = {offset: 0, size: 0, layout: 0, layoutItems: 0};
   private readonly asyncRangeDelivery: boolean;
@@ -806,6 +808,12 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     this.disposed = true;
   }
 
+  private requireNative(method: string, ...buffers: ArrayBuffer[]): void {
+    for (const buffer of buffers) {
+      if (!isNativeArrayBufferForTests(buffer)) this.jsBuffers.push(method);
+    }
+  }
+
   get onRangeChange():
     | ((start: number, end: number, layoutVersion: number, offset: number) => void)
     | undefined {
@@ -822,6 +830,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   updateData(config: ArrayBuffer, types: ArrayBuffer, spans: ArrayBuffer,
     fixedSizes: ArrayBuffer, remap: ArrayBuffer): void {
     this.callLog.push('updateData');
+    this.requireNative('updateData', config, types, spans, fixedSizes, remap);
     const c = new Float64Array(config);
     this.dataCommits.push(Array.from(c));
     this.dataRevision = c[8];
@@ -922,6 +931,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   }
   readSnapshot(sequence: number, slab: ArrayBuffer): number {
     this.callLog.push('readSnapshot');
+    this.requireNative('readSnapshot', slab);
     const pending = this.pendingSnapshot;
     if (pending == null || pending[7] !== sequence || sequence !== this.snapshotSequence || pending[6] !== this.dataRevision || pending[0] !== this.core.getLayoutVersion() || pending[8] !== this.scrollOffset) return -2;
     const out = new Float64Array(slab);
@@ -932,6 +942,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   setItemSizesAndFill(pairs: ArrayBuffer, pairCount: number, anchorIndex: number,
     revision: number, slab: ArrayBuffer): number {
     this.callLog.push('setItemSizesAndFill');
+    this.requireNative('setItemSizesAndFill', pairs, slab);
     if (revision !== this.dataRevision || pairCount < 0 || pairCount * 16 > pairs.byteLength) return -2;
     const typed = new Float64Array(pairs);
     let delta = 0;
@@ -941,6 +952,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   }
   setScrollOffsetAndFill(offset: number, slab: ArrayBuffer): number {
     this.callLog.push('setScrollOffsetAndFill');
+    this.requireNative('setScrollOffsetAndFill', slab);
     this.scrollOffset = offset;
     return this.fillSnapshot(slab);
   }
@@ -974,6 +986,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   setItemSizesBatch(pairs: ArrayBuffer, emitRange: boolean): void {
     this.callLog.push('setItemSizesBatch');
+    this.requireNative('setItemSizesBatch', pairs);
     const typed = new Float64Array(pairs);
     const pairCount = typed.length >> 1;
     if (pairCount === 0) return;
@@ -984,6 +997,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   setItemSizesBatchAnchored(pairs: ArrayBuffer, anchorIndex: number, emitRange: boolean): number {
     this.callLog.push('setItemSizesBatchAnchored');
+    this.requireNative('setItemSizesBatchAnchored', pairs);
     const typed = new Float64Array(pairs);
     const pairCount = typed.length >> 1;
     if (pairCount === 0) return 0;
@@ -1001,6 +1015,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   remapItemSizes(pairs: ArrayBuffer): void {
     this.callLog.push('remapItemSizes');
+    this.requireNative('remapItemSizes', pairs);
     const typed = new Float64Array(pairs);
     const pairCount = typed.length >> 1;
     if (pairCount === 0) return;
@@ -1011,6 +1026,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   setItemSpans(spans: ArrayBuffer): void {
     this.callLog.push('setItemSpans');
+    this.requireNative('setItemSpans', spans);
     const typed = new Uint16Array(spans);
     if (this.core.setItemSpans(typed.length === 0 ? null : typed, typed.length)) {
       this.maybeEmitRange();
@@ -1019,6 +1035,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   setItemTypes(types: ArrayBuffer): boolean {
     this.callLog.push('setItemTypes');
+    this.requireNative('setItemTypes', types);
     const typed = new Uint16Array(types);
     const allTracked = this.core.setItemTypes(typed.length === 0 ? null : typed, typed.length);
     this.maybeEmitRange();
@@ -1027,6 +1044,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   setItemTypesRange(start: number, types: ArrayBuffer): boolean {
     this.callLog.push('setItemTypesRange');
+    this.requireNative('setItemTypesRange', types);
     const typed = new Uint16Array(types);
     if (typed.length === 0) return true;
     const allTracked = this.core.setItemTypesRange(Math.trunc(start), typed, typed.length);
@@ -1040,6 +1058,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   seedTypeMeans(pairs: ArrayBuffer): void {
     this.callLog.push('seedTypeMeans');
+    this.requireNative('seedTypeMeans', pairs);
     const typed = new Float64Array(pairs);
     const pairCount = typed.length >> 1;
     if (pairCount === 0) return;
@@ -1050,11 +1069,13 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   fillLayoutSlab(slab: ArrayBuffer): number {
     this.callLog.push('fillLayoutSlab');
+    this.requireNative('fillLayoutSlab', slab);
     return this.fillSnapshot(slab);
   }
 
   fillTypeStats(out: ArrayBuffer): number {
     this.callLog.push('fillTypeStats');
+    this.requireNative('fillTypeStats', out);
     const capacity = out.byteLength / 8;
     if (capacity === 0) return -1;
     return this.core.fillTypeStats(new Float64Array(out), capacity, 1);
@@ -1072,6 +1093,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
 
   readLayout(start: number, count: number, out: ArrayBuffer): number {
     this.reads.layout++;
+    this.requireNative('readLayout', out);
     const target = new Float64Array(out);
     if (target.length < 8 || !Number.isInteger(start) || !Number.isInteger(count) || count < 0) return -2;
     const written = this.core.readLayout(start, count, target.subarray(4), target.length - 4);

@@ -1,5 +1,6 @@
 import {analyzeData} from './dataAnalysis';
-import {dataConfig, EMPTY_DATA_BUFFER} from './dataTransaction';
+import {DATA_CONFIG_LENGTH, writeDataConfig} from './dataTransaction';
+import {emptyNativeBuffer, growNativeFloat64Array, nativeFloat64Array, nativeUint16Array} from './nativeBuffers';
 import React, {
   forwardRef,
   useCallback,
@@ -409,7 +410,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         ? cached
         : null;
     const from = reusable != null ? Math.min(reusable.items === items ? itemCount : dataAnalysis.firstChanged, itemCount) : 0;
-    const spans = new Uint16Array(itemCount);
+    const spans = nativeUint16Array(itemCount);
     const colOf = new Uint16Array(itemCount);
     const rowStarts = new Int32Array(itemCount);
     const layoutProbe = {span: 1};
@@ -710,10 +711,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   useEffect(() => cancelFlingPrewarm, [cancelFlingPrewarm]);
 
   const pendingSizesRef = useRef<{
-    buffer: Float64Array;
+    buffer: Float64Array<ArrayBuffer>;
     count: number;
     rafId: number | null;
-  }>({buffer: new Float64Array(32 * 2), count: 0, rafId: null});
+  }>(null as unknown as {buffer: Float64Array<ArrayBuffer>; count: number; rafId: number | null});
+  pendingSizesRef.current ??= {buffer: nativeFloat64Array(32 * 2), count: 0, rafId: null};
   const cellBridgeRef = useRef<CellBridge>({
     awaitingLayout: 0,
     cells: new Set(),
@@ -1559,7 +1561,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const nativeDataRevisionRef = useRef(0);
   const nativeMeasurementRevisionRef = useRef<typeof measurementRevision | null>(null);
-  const fixedDataBufferRef = useRef(new Float64Array(128));
+  const fixedDataBufferRef = useRef<Float64Array<ArrayBuffer> | null>(null);
+  fixedDataBufferRef.current ??= nativeFloat64Array(128);
+  const dataConfigBufferRef = useRef<Float64Array<ArrayBuffer> | null>(null);
+  dataConfigBufferRef.current ??= nativeFloat64Array(DATA_CONFIG_LENGTH);
   const commitNativeData = (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number): void => {
     const engine = engineRef.current;
     if (engine == null) return;
@@ -1573,35 +1578,35 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
     nativeMeasurementRevisionRef.current = measurementRevision;
     const prepared = itemTypes.prepareTypes();
-    if (fixedDataBufferRef.current.length > Math.max(128, itemCount * 8)) {
-      fixedDataBufferRef.current = new Float64Array(Math.max(128, itemCount * 2));
+    if (fixedDataBufferRef.current!.length > Math.max(128, itemCount * 8)) {
+      fixedDataBufferRef.current = nativeFloat64Array(Math.max(128, itemCount * 2));
     }
+    let fixedData = fixedDataBufferRef.current!;
     let fixedCount = 0;
     const from = reset ? 0 : invalidateFrom < 0 ? itemCount : invalidateFrom;
     if (getFixedItemSize != null || autoFixedTypesRef.current.size > 0) {
       for (let i = from; i < itemCount; ++i) {
         const size = resolveFixedSize(items[i], i, getItemType?.(items[i], i));
         if (size == null || !Number.isFinite(size) || size < 0) continue;
-        if ((fixedCount + 1) * 2 > fixedDataBufferRef.current.length) {
-          const grown = new Float64Array(fixedDataBufferRef.current.length * 2);
-          grown.set(fixedDataBufferRef.current);
-          fixedDataBufferRef.current = grown;
-        }
-        fixedDataBufferRef.current[fixedCount * 2] = i;
-        fixedDataBufferRef.current[fixedCount * 2 + 1] = size;
+        fixedData = growNativeFloat64Array(fixedData, (fixedCount + 1) * 2);
+        fixedData[fixedCount * 2] = i;
+        fixedData[fixedCount * 2 + 1] = size;
         ++fixedCount;
       }
     }
+    fixedDataBufferRef.current = fixedData;
     invalidateLayoutCache();
-    engine.updateData(dataConfig({count: itemCount, estimate: estimatedItemSize,
+    const config = dataConfigBufferRef.current!;
+    writeDataConfig(config, {count: itemCount, estimate: estimatedItemSize,
       draw: effectiveDrawDistance, horizontal: isHorizontal, columns: resolvedColumns,
       epsilon: MEASUREMENT_EPSILON_DP, reset, revision: ++nativeDataRevisionRef.current,
       invalidateFrom, typeStart: prepared.start, typeCount: prepared.count, typeOffset: prepared.offset,
       fixedCount, remapCount: remap?.mappedCount ?? 0,
       spanCount: columnLayout == null ? 0 : itemCount - (reset ? 0 : columnLayout.changedFrom),
-      spanStart: reset ? 0 : columnLayout?.changedFrom ?? 0}), prepared.types.buffer,
-      (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER,
-      fixedDataBufferRef.current.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? EMPTY_DATA_BUFFER);
+      spanStart: reset ? 0 : columnLayout?.changedFrom ?? 0});
+    engine.updateData(config.buffer, prepared.types.buffer,
+      (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer(),
+      fixedData.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer());
   };
 
   const previousItemsRef = useRef<ReadonlyArray<T>>(items);

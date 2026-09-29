@@ -7,6 +7,7 @@ import {
 } from './keyRemap';
 import {maybeWarnMissingKeyExtractor} from './devWarnings';
 import {MVCP_POSITION_EPSILON} from './measurement';
+import {nativeFloat64Array} from './nativeBuffers';
 import type {NitroListEngine} from './NitroListEngine.nitro';
 import type {ViewToken} from './viewability';
 
@@ -64,6 +65,13 @@ function findAnchorIndex<T>(
 }
 
 export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
+  let remapBuffer: Float64Array<ArrayBuffer> | null = null;
+  const allocateRemapPairs = (length: number): Float64Array<ArrayBuffer> => {
+    if (remapBuffer == null || remapBuffer.length < length || remapBuffer.length > Math.max(256, length * 4)) {
+      remapBuffer = nativeFloat64Array(Math.max(256, length));
+    }
+    return remapBuffer;
+  };
   return function onDataMaybeChanged(): void {
     const versionChanged = !Object.is(ctx.previousDataVersionRef.current, ctx.dataVersion);
     let committed = false;
@@ -101,6 +109,7 @@ export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
             (previous, next, index) =>
               Object.is(previous, next) || ctx.itemsAreEqual?.(previous, next, index) === true,
             anchorRequest,
+            allocateRemapPairs,
           );
           if (remap != null) {
             resolvedAnchorIndex = remap.anchorIndex;

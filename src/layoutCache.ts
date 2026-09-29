@@ -4,6 +4,7 @@ import {
   validLayoutRead,
   validSnapshot,
 } from './layoutSnapshot';
+import {nativeFloat64Array} from './nativeBuffers';
 import type {NitroListEngine} from './NitroListEngine.nitro';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 
@@ -51,7 +52,7 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
   let totalGeneration = 0;
   let snapshotGeneration = 0;
   let previousCount = ctx.itemCount;
-  let slab: Float64Array<ArrayBuffer> = new Float64Array(SNAPSHOT_HEADER + 2 * 64);
+  let slab: Float64Array<ArrayBuffer> = nativeFloat64Array(SNAPSHOT_HEADER + 2 * 64);
   let readBuffer: Float64Array<ArrayBuffer> | null = null;
   let knownGeneration = 0;
   let knownVersion = 0;
@@ -62,7 +63,7 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
     lastPage = null;
     if (ctx.itemCount < previousCount || ctx.engineRef.current == null) {
       pages.clear();
-      if (slab.length > SNAPSHOT_HEADER + 2 * 64) slab = new Float64Array(SNAPSHOT_HEADER + 2 * 64);
+      if (slab.length > SNAPSHOT_HEADER + 2 * 64) slab = nativeFloat64Array(SNAPSHOT_HEADER + 2 * 64);
     }
     if (ctx.engineRef.current == null) readBuffer = null;
     previousCount = ctx.itemCount;
@@ -136,7 +137,7 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
   };
 
   const readRun = (engine: NitroListEngine, start: number, count: number): void => {
-    readBuffer ??= new Float64Array(LAYOUT_READ_HEADER + 2 * LAYOUT_PAGE_ITEMS);
+    readBuffer ??= nativeFloat64Array(LAYOUT_READ_HEADER + 2 * LAYOUT_PAGE_ITEMS);
     const buffer = readBuffer;
     const written = engine.readLayout(start, count, buffer.buffer);
     if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
@@ -206,12 +207,12 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
     if (engine == null) return null;
     if (written === -1 && slab[11] > slab.length) {
       const sequence = slab[7];
-      slab = new Float64Array(Math.max(slab.length * 2, slab[11]));
+      slab = nativeFloat64Array(Math.max(slab.length * 2, slab[11]));
       written = engine.readSnapshot(sequence, slab.buffer);
     }
     // Another runtime may have published in between. Read current state; never replay a mutation.
     for (let attempt = 0; written < 0 && attempt < 3; ++attempt) {
-      if (slab[11] > slab.length) slab = new Float64Array(Math.max(slab.length * 2, slab[11]));
+      if (slab[11] > slab.length) slab = nativeFloat64Array(Math.max(slab.length * 2, slab[11]));
       written = engine.fillLayoutSlab(slab.buffer);
     }
     return validSnapshot(slab, written) ? {slab, written} : null;
@@ -228,7 +229,7 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
       2 * Math.min(ctx.itemCount, Math.max(0, expectedEnd - expectedStart + 1)) +
       16;
     if (slab.length < required) {
-      slab = new Float64Array(required);
+      slab = nativeFloat64Array(required);
     }
     const written = engine.fillLayoutSlab(slab.buffer);
     if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();

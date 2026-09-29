@@ -37,7 +37,7 @@ The layout engine is shared C++ compiled into both platforms and exposed to Java
 ## Requirements
 
 - React Native with the **new architecture** enabled (developed against RN 0.86)
-- [`react-native-nitro-modules`](https://www.npmjs.com/package/react-native-nitro-modules) (0.35.x)
+- [`react-native-nitro-modules`](https://www.npmjs.com/package/react-native-nitro-modules) 0.37.1+ (the generated bindings come from `nitrogen` 0.37.1)
 - [`react-native-reanimated`](https://www.npmjs.com/package/react-native-reanimated) 4+ with its peer [`react-native-worklets`](https://www.npmjs.com/package/react-native-worklets) 0.10+ — make sure the worklets Babel plugin is in your `babel.config.js`, as Reanimated itself requires
 - Optional: [`react-native-keyboard-controller`](https://www.npmjs.com/package/react-native-keyboard-controller) 1.21.7+, only for the [`/keyboard`](#keyboard-aware-chat-keyboard) entry point
 

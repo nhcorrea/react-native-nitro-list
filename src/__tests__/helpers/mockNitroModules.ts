@@ -29,7 +29,25 @@ const nativeScrollView = {
   },
 };
 
+const nativeArrayBuffers = new WeakSet<ArrayBuffer>();
+let nativeArrayBufferAllocations = 0;
+
+export function isNativeArrayBufferForTests(buffer: ArrayBuffer): boolean {
+  return nativeArrayBuffers.has(buffer);
+}
+
+export function nativeArrayBufferAllocationsForTests(): number {
+  return nativeArrayBufferAllocations;
+}
+
 export const NitroModules = {
+  createNativeArrayBuffer(size: number): ArrayBuffer {
+    const buffer = new ArrayBuffer(size);
+    new Uint8Array(buffer).fill(0xab);
+    nativeArrayBuffers.add(buffer);
+    nativeArrayBufferAllocations++;
+    return buffer;
+  },
   createHybridObject(name: string): unknown {
     if (name === 'NitroListScrollView') return nativeScrollView;
     throw new Error(

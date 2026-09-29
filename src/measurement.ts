@@ -4,6 +4,7 @@ import {PixelRatio} from 'react-native';
 import {IS_DEV} from './cells';
 import {accumulateEstimateDriftSample, type EstimateDriftStats} from './devWarnings';
 import {measurementCacheKey, recordMeasurement} from './measurementCache';
+import {growNativeFloat64Array, nativeFloat64Array} from './nativeBuffers';
 import {
   isCurrentMeasurement,
   type MeasurementIdentity,
@@ -22,7 +23,7 @@ export interface MeasurementCtx<T> {
   dataRevisionRef: Ref<number>;
   layout: LayoutCacheApi;
   consumeSnapshot: (slab: Float64Array, written: number, commitRange?: boolean) => boolean;
-  pendingSizesRef: Ref<{buffer: Float64Array; count: number; rafId: number | null}>;
+  pendingSizesRef: Ref<{buffer: Float64Array<ArrayBuffer>; count: number; rafId: number | null}>;
   engineRef: Ref<NitroListEngine | null>;
   mvcpStateRef: Ref<{
     enabled: boolean;
@@ -100,7 +101,7 @@ export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
     if (pairCount === 0 || ctx.dataRevisionRef.current !== acceptedRevision) return;
     // Detach the pending buffer before calling anything that can enqueue again.
     const batch = state.buffer as Float64Array<ArrayBuffer>;
-    state.buffer = freeBatches.pop() ?? new Float64Array(Math.max(128, batch.length));
+    state.buffer = freeBatches.pop() ?? nativeFloat64Array(Math.max(128, batch.length));
     try {
       // The normal unique/valid batch is consumed directly, without copying pairs.
       if (pairCount !== queuedCount) {
@@ -215,12 +216,7 @@ export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
       };
     }
     const state = ctx.pendingSizesRef.current;
-    const neededSlots = (state.count + 1) * 2;
-    if (neededSlots > state.buffer.length) {
-      const next = new Float64Array(state.buffer.length * 2);
-      next.set(state.buffer);
-      state.buffer = next;
-    }
+    state.buffer = growNativeFloat64Array(state.buffer, (state.count + 1) * 2);
     const offset = state.count * 2;
     state.buffer[offset] = index;
     state.buffer[offset + 1] = sizeDp;

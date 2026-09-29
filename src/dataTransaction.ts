@@ -1,9 +1,7 @@
 /** Internal ABI, shared with HybridNitroListEngine::updateData. */
 export const DATA_CONFIG_SCHEMA = 1;
 export const DATA_CONFIG_LENGTH = 17;
-export const EMPTY_DATA_BUFFER = new ArrayBuffer(0);
-
-export function dataConfig(values: {
+export function writeDataConfig(target: Float64Array, values: {
   count: number;
   estimate: number;
   draw: number;
@@ -20,24 +18,22 @@ export function dataConfig(values: {
   spanCount: number;
   typeOffset: number;
   spanStart: number;
-}): ArrayBuffer {
-  return new Float64Array([
-    DATA_CONFIG_SCHEMA,
-    values.count,
-    values.estimate,
-    values.draw,
-    Number(values.horizontal),
-    values.columns,
-    values.epsilon,
-    Number(values.reset),
-    values.revision,
-    values.invalidateFrom,
-    values.typeStart,
-    values.typeCount,
-    values.fixedCount,
-    values.remapCount,
-    values.spanCount,
-    values.typeOffset,
-    values.spanStart,
-  ]).buffer;
+}): void {
+  target[0] = DATA_CONFIG_SCHEMA;
+  target[1] = values.count;
+  target[2] = values.estimate;
+  target[3] = values.draw;
+  target[4] = Number(values.horizontal);
+  target[5] = values.columns;
+  target[6] = values.epsilon;
+  target[7] = Number(values.reset);
+  target[8] = values.revision;
+  target[9] = values.invalidateFrom;
+  target[10] = values.typeStart;
+  target[11] = values.typeCount;
+  target[12] = values.fixedCount;
+  target[13] = values.remapCount;
+  target[14] = values.spanCount;
+  target[15] = values.typeOffset;
+  target[16] = values.spanStart;
 }

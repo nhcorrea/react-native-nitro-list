@@ -10,7 +10,12 @@ import type {
   NitroListProps,
   NitroListRenderScrollComponentProps,
 } from '../../NitroList';
-import {clearMirrorsForTests, getLastMirror, setMirrorConfigForTests} from './mockNitroListHost';
+import {
+  allMirrorsForTests,
+  clearMirrorsForTests,
+  getLastMirror,
+  setMirrorConfigForTests,
+} from './mockNitroListHost';
 import {registerNativeScrollViewForTests} from './mockNitroModules';
 import {
   clearCreatedSharedValuesForTests,
@@ -156,6 +161,10 @@ export class NitroListHarness<T = string> {
     act(() => {
       this.renderer.unmount();
     });
+    const jsBuffers = allMirrorsForTests().flatMap((mirror) => mirror.jsBuffers);
+    if (jsBuffers.length > 0) {
+      throw new Error(`JS ArrayBuffers reached the engine: ${Array.from(new Set(jsBuffers)).join(', ')}`);
+    }
   }
 
   get mirror(): HybridNitroListEngineMirror {
