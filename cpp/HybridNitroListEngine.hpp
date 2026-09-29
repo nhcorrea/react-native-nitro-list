@@ -55,6 +55,7 @@ public:
   double readLayout(double start, double count, const std::shared_ptr<ArrayBuffer>& out) override;
 
   size_t getExternalMemorySize() noexcept override;
+  void dispose() override;
 
 private:
   double mainViewportLocked() const;

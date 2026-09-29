@@ -197,6 +197,7 @@ double HybridNitroListEngine::fillSnapshotLocked(double* out, int32_t capacity, 
     out[10] = -1;
     return -1;
   }
+  if (pendingSnapshot_.capacity() != 0) std::vector<double>().swap(pendingSnapshot_);
   return written;
 }
 
@@ -421,6 +422,21 @@ double HybridNitroListEngine::readLayout(double start, double count,
   target[2] = dataRevision_;
   target[3] = header + target[7] * 2;
   return written;
+}
+
+void HybridNitroListEngine::dispose() {
+  std::optional<RangeCallback> released;
+  {
+    std::lock_guard<std::mutex> guard(stateMutex_);
+    released.swap(onRangeChange_);
+    std::vector<double>().swap(pendingSnapshot_);
+    itemCount_ = 0;
+    lastStart_ = -1;
+    lastEnd_ = -2;
+    lastVersion_ = -1;
+    ++sequence_;
+    core_.resetAll();
+  }
 }
 
 size_t HybridNitroListEngine::getExternalMemorySize() noexcept {

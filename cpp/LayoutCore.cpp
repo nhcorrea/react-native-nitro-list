@@ -23,6 +23,13 @@ inline double typeMeanSweepBar(double appliedMean) {
   return relative > kTypeMeanSweepThreshold ? relative : kTypeMeanSweepThreshold;
 }
 constexpr int32_t kMaxTypeStats = 4096;
+constexpr int32_t kCapacityFloorItems = 4096;
+
+template <typename T>
+void truncateCapacity(std::vector<T>& values, size_t keep) {
+  std::vector<T>(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(std::min(keep, values.size())))
+      .swap(values);
+}
 
 double defaultClockMs() {
   using namespace std::chrono;
@@ -66,6 +73,7 @@ bool LayoutCore::setItemCount(int32_t count) {
   const bool shrank = count < itemCount_;
   itemCount_ = count;
   if (shrank) {
+    releaseCapacityLocked();
     rebuildTypeObservationsLocked();
     applyTypeMeansLocked();
   }
@@ -306,8 +314,10 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
       for (int32_t i = 0; i < itemCount_; ++i) move(i);
     }
   } else {
-    std::vector<float> newSizes(itemCount_);
-    std::vector<uint8_t> newMeasured(itemCount_, 0);
+    if (static_cast<int32_t>(remapSizes_.size()) < itemCount_) remapSizes_.resize(itemCount_);
+    remapMeasured_.assign(static_cast<size_t>(itemCount_), 0);
+    auto& newSizes = remapSizes_;
+    auto& newMeasured = remapMeasured_;
     for (int32_t i = 0; i < itemCount_; i++) {
       newSizes[i] = estimateForTypeLocked(types_[i]);
     }
@@ -336,8 +346,24 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   return applyTypeMeansLocked() || anyChanged;
 }
 
+void LayoutCore::releaseCapacityLocked() {
+  const auto capacity = static_cast<int32_t>(sizes_.size());
+  if (capacity <= kCapacityFloorItems || itemCount_ >= capacity / 4) return;
+  const auto keep = static_cast<size_t>(itemCount_);
+  truncateCapacity(sizes_, keep);
+  truncateCapacity(offsets_, keep);
+  truncateCapacity(measured_, keep);
+  truncateCapacity(types_, keep);
+  truncateCapacity(spans_, keep);
+  truncateCapacity(rowStart_, keep);
+  std::vector<float>().swap(remapSizes_);
+  std::vector<uint8_t>().swap(remapMeasured_);
+}
+
 void LayoutCore::resetAll() {
   std::lock_guard<std::mutex> guard(mutex_);
+  std::vector<float>().swap(remapSizes_);
+  std::vector<uint8_t>().swap(remapMeasured_);
   std::vector<float>().swap(sizes_);
   std::vector<double>().swap(offsets_);
   std::vector<uint8_t>().swap(measured_);
@@ -375,7 +401,8 @@ size_t LayoutCore::getMemoryFootprint() {
   return sizes_.capacity() * sizeof(float) + offsets_.capacity() * sizeof(double) +
          measured_.capacity() * sizeof(uint8_t) + types_.capacity() * sizeof(uint16_t) +
          spans_.capacity() * sizeof(uint16_t) + rowStart_.capacity() * sizeof(int32_t) +
-         typeStats_.capacity() * sizeof(TypeStats);
+         typeStats_.capacity() * sizeof(TypeStats) + remapSizes_.capacity() * sizeof(float) +
+         remapMeasured_.capacity() * sizeof(uint8_t);
 }
 
 bool LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {

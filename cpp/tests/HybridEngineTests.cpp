@@ -11,6 +11,47 @@ std::shared_ptr<ArrayBuffer> doubles(std::initializer_list<double> values) {
   std::memcpy(out->data(), values.begin(), out->size());
   return out;
 }
+static std::shared_ptr<ArrayBuffer> config(double count, double revision, double reset) {
+  return doubles({1, count, 100, 0, 0, 1, 0, reset, revision, -1, -1, 0, 0, 0, 0, 0, 0});
+}
+
+static void testDisposeReleasesMemory() {
+  HybridNitroListEngine engine;
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  engine.updateData(config(100000, 1, 1), empty, empty, empty, empty);
+  engine.setViewport(400, 600);
+  int notifications = 0;
+  engine.setOnRangeChange([&](double, double, double, double) { ++notifications; });
+  assert(engine.getExternalMemorySize() >= 100000 * (sizeof(float) + sizeof(double)));
+  engine.dispose();
+  assert(engine.getExternalMemorySize() == 0);
+  assert(!engine.getOnRangeChange().has_value());
+  notifications = 0;
+  engine.setScrollOffset(5000);
+  assert(notifications == 0);
+  auto slab = std::make_shared<ArrayBuffer>(64 * sizeof(double));
+  assert(engine.fillLayoutSlab(slab) == 0);
+  assert(engine.getTotalSize() == 0);
+}
+
+static void testPendingSnapshotReleasedByNextPublication() {
+  HybridNitroListEngine engine;
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  engine.updateData(config(1000, 1, 1), empty, empty, empty, empty);
+  engine.setViewport(400, 20000);
+  const size_t base = engine.getExternalMemorySize();
+  auto small = std::make_shared<ArrayBuffer>(12 * sizeof(double));
+  assert(engine.fillLayoutSlab(small) == -1);
+  const double required = reinterpret_cast<double*>(small->data())[11];
+  assert(engine.getExternalMemorySize() >= base + static_cast<size_t>(required) * sizeof(double));
+  auto full = std::make_shared<ArrayBuffer>(static_cast<size_t>(required) * sizeof(double));
+  const double sequence = reinterpret_cast<double*>(small->data())[7];
+  assert(engine.readSnapshot(sequence, full) > 0);
+  assert(engine.readSnapshot(sequence, full) > 0);
+  assert(engine.fillLayoutSlab(full) > 0);
+  assert(engine.getExternalMemorySize() == base);
+}
+
 int main() {
   HybridNitroListEngine engine;
   auto empty = std::make_shared<ArrayBuffer>(0);
@@ -80,5 +121,7 @@ int main() {
   engine.updateData(doubles({1,0,100,0,0,1,0,0,3,-1,-1,0,0,0,0,0,0}), empty, empty, empty, empty);
   assert(engine.fillLayoutSlab(full) == 0);
   assert(reinterpret_cast<double*>(full->data())[10] == 2); // valid empty is distinct
+  testDisposeReleasesMemory();
+  testPendingSnapshotReleasedByNextPublication();
   std::cout << "Hybrid engine tests passed\n";
 }

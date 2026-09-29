@@ -24,7 +24,7 @@ import {
 import Animated, {useAnimatedScrollHandler, useSharedValue} from 'react-native-reanimated';
 import {scheduleOnRN, scheduleOnUI} from 'react-native-worklets';
 
-import {createNitroListEngine, type NitroListEngine} from './NitroListHost';
+import {createNitroListEngine, reportEngineMemory, type NitroListEngine} from './NitroListHost';
 import {scrollToNativeOffset} from './nativeScroll';
 import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
@@ -234,6 +234,7 @@ const FLING_PREWARM_MAX_ITEMS = 80;
 const ADAPTIVE_ENTER_DP_S = 3000;
 const ADAPTIVE_EXIT_DP_S = 1000;
 const ADAPTIVE_EXIT_DELAY_MS = 250;
+const ENGINE_MEMORY_REPORT_MIN_ITEMS = 4096;
 
 type UiScrollContext = {
   lastY?: number;
@@ -1571,6 +1572,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const nativeMeasurementRevisionRef = useRef<typeof measurementRevision | null>(null);
   const fixedDataBufferRef = useRef<Float64Array<ArrayBuffer> | null>(null);
   fixedDataBufferRef.current ??= nativeFloat64Array(128);
+  const reportedMemoryCountRef = useRef(0);
   const dataConfigBufferRef = useRef<Float64Array<ArrayBuffer> | null>(null);
   dataConfigBufferRef.current ??= nativeFloat64Array(DATA_CONFIG_LENGTH);
   const commitNativeData = (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number): void => {
@@ -1639,6 +1641,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     engine.updateData(config.buffer, prepared.types.buffer,
       (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer(),
       fixedData.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer());
+    const reportedCount = reportedMemoryCountRef.current;
+    if (
+      itemCount >= Math.max(ENGINE_MEMORY_REPORT_MIN_ITEMS, reportedCount * 2) ||
+      (reportedCount >= ENGINE_MEMORY_REPORT_MIN_ITEMS && itemCount * 4 <= reportedCount)
+    ) {
+      reportedMemoryCountRef.current = itemCount;
+      reportEngineMemory(engine);
+    }
   };
 
   const previousItemsRef = useRef<ReadonlyArray<T>>(items);
@@ -2592,6 +2602,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     if (engine == null) {
       engine = createNitroListEngine();
       engineRef.current = engine;
+      reportedMemoryCountRef.current = 0;
       nativeMeasurementRevisionRef.current = null;
       itemTypes.forgetSent();
     }

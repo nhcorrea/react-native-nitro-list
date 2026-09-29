@@ -53,6 +53,10 @@ export class LayoutCoreMirror {
   private estimatesFrozen = false;
   private typeStats: TypeStats[] = [];
   private itemCount = 0;
+
+  getItemCount(): number {
+    return this.itemCount;
+  }
   private estimate = 0;
   private totalSize = 0;
   private measurementEpsilon = 0;

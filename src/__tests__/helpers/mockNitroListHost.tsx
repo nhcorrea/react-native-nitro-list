@@ -22,7 +22,18 @@ export function allMirrorsForTests(): ReadonlyArray<HybridNitroListEngineMirror>
 
 export function clearMirrorsForTests(): void {
   mirrors.length = 0;
+  engineMemoryReports.length = 0;
   nextMirrorConfig = {};
+}
+
+const engineMemoryReports: Array<{count: number}> = [];
+
+export function engineMemoryReportsForTests(): ReadonlyArray<{count: number}> {
+  return engineMemoryReports;
+}
+
+export function reportEngineMemory(engine: NitroListEngine): void {
+  engineMemoryReports.push({count: (engine as HybridNitroListEngineMirror).core.getItemCount()});
 }
 
 export function createNitroListEngine(): NitroListEngine {

@@ -1263,9 +1263,54 @@ static void testAllocatedGeometryMemory() {
   const size_t grid = core.getMemoryFootprint();
   CHECK(grid >= linear + 100000 * sizeof(int32_t));
   core.setItemCount(100);
-  CHECK(core.getMemoryFootprint() == grid); // retained capacity is still allocated
+  CHECK(core.getMemoryFootprint() * 50 < grid);
+  CHECK_EQ_F(core.getTotalSize(), 5000.0f);
   core.resetAll();
   CHECK(core.getMemoryFootprint() == 0);
+}
+
+static void testCapacityShrinkHysteresis() {
+  LayoutCore core;
+  core.setEstimate(100);
+  core.setItemCount(100000);
+  core.setItemSize(10, 250.0f);
+  core.setItemSize(30000, 300.0f);
+  const size_t full = core.getMemoryFootprint();
+  core.setItemCount(40000);
+  CHECK(core.getMemoryFootprint() == full);
+  core.setItemCount(20000);
+  const size_t shrunk = core.getMemoryFootprint();
+  CHECK(shrunk * 3 < full);
+  CHECK_EQ_F(core.getSize(10), 250.0f);
+  CHECK_EQ_F(core.getTotalSize(), 20000 * 100.0f + 150.0f);
+  core.setItemCount(60000);
+  CHECK_EQ_F(core.getSize(30000), 100.0f);
+  CHECK_EQ_F(core.getSize(59999), 100.0f);
+  CHECK_EQ_F(core.getTotalSize(), 60000 * 100.0f + 150.0f);
+  core.setItemCount(50);
+  CHECK(core.getMemoryFootprint() <= 4096 * (sizeof(float) + sizeof(double) + 1 + 2 * sizeof(uint16_t)));
+  CHECK_EQ_F(core.getTotalSize(), 50 * 100.0f + 150.0f);
+}
+
+static void testGeneralRemapReusesScratch() {
+  LayoutCore core;
+  core.setEstimate(100);
+  core.setItemCount(50000);
+  for (int32_t i = 0; i < 50000; i += 7) core.setItemSize(i, 120.0f + (i % 5));
+  std::vector<double> reverse(50000 * 2);
+  for (int32_t i = 0; i < 50000; ++i) {
+    reverse[i * 2] = i;
+    reverse[i * 2 + 1] = 49999 - i;
+  }
+  core.remapItemSizes(reverse.data(), 50000);
+  const size_t afterFirst = core.getMemoryFootprint();
+  CHECK_EQ_F(core.getSize(49999), 120.0f);
+  core.remapItemSizes(reverse.data(), 50000);
+  CHECK(core.getMemoryFootprint() == afterFirst);
+  CHECK_EQ_F(core.getSize(0), 120.0f);
+  CHECK_EQ_F(core.getSize(7), 122.0f);
+  core.setItemCount(100);
+  CHECK(core.getMemoryFootprint() * 50 < afterFirst);
 }
 
 static void testReadLayout() {
@@ -1409,6 +1454,8 @@ int main(int argc, char** argv) {
   testPartialTypesAtZero();
   testCurrentTypeObservations();
   testAllocatedGeometryMemory();
+  testCapacityShrinkHysteresis();
+  testGeneralRemapReusesScratch();
   testSeedTypeMeans();
   testFillLayoutSlab();
   testReadLayout();

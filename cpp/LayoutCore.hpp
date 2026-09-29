@@ -95,6 +95,8 @@ private:
 
   bool assignTypesLocked(int32_t start, const uint16_t* types, int32_t count, bool replaceAll);
 
+  void releaseCapacityLocked();
+
   void resetTypeObservationsLocked(bool resetApplied = true);
   void rebuildTypeObservationsLocked();
 
@@ -111,6 +113,8 @@ private:
   std::vector<uint8_t> measured_;
   std::vector<uint16_t> types_;
   std::vector<uint16_t> spans_;
+  std::vector<float> remapSizes_;
+  std::vector<uint8_t> remapMeasured_;
 
   int32_t columnCount_ = 1;
   std::vector<int32_t> rowStart_;
