@@ -94,24 +94,42 @@ it('a queued size cannot cross a content replacement with the same key', async (
   expect(harness.handle.getItemSize(0)).toBe(100);
 });
 
-it('a width change invalidates both measured geometry and delayed events', async () => {
-  harness = renderNitroList({
-    data: makeItems(3),
-    keyExtractor: itemKey,
-    estimatedItemSize: 100,
-    renderItem: () => null,
-  });
+it('a width change drops offscreen geometry and re-supplies mounted cells with their latest frame', async () => {
+  harness = renderNitroList(
+    {
+      data: makeItems(40),
+      keyExtractor: itemKey,
+      estimatedItemSize: 100,
+      renderItem: () => null,
+    },
+    {typeAverages: false},
+  );
   harness.layout(400, 600);
   harness.measureAllCells(() => 200);
   await harness.settle(50);
-  const oldLayout = harness
+  harness.scroll(3000);
+  await harness.settle(20);
+  harness.measureUnmeasuredCells(() => 200);
+  await harness.settle(20);
+  const offscreen = harness.renderedIndices()[0];
+  harness.scroll(0);
+  await harness.settle(50);
+  harness.measureUnmeasuredCells(() => 200);
+  await harness.settle(50);
+  expect(harness.renderedIndices()).not.toContain(offscreen);
+  expect(harness.handle.getItemSize(offscreen)).toBe(200);
+  expect(harness.handle.getItemSize(0)).toBe(200);
+  const layoutOfFirst = harness
     .cellInstances()
     .get(0)!
     .findAll((node) => node.type === View && node.props.onLayout != null)[0].props.onLayout;
   harness.layout(300, 600);
-  act(() => oldLayout({nativeEvent: {layout: {x: 0, y: 0, width: 400, height: 250}}}));
   await harness.settle(50);
-  expect(harness.handle.getItemSize(0)).toBe(100);
+  expect(harness.handle.getItemSize(offscreen)).toBe(100);
+  expect(harness.handle.getItemSize(0)).toBe(200);
+  act(() => layoutOfFirst({nativeEvent: {layout: {x: 0, y: 0, width: 300, height: 250}}}));
+  await harness.settle(50);
+  expect(harness.handle.getItemSize(0)).toBe(250);
 });
 
 it('coalesces repeated sizes into one batch without the old callback/refill path', async () => {

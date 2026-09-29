@@ -55,6 +55,7 @@ import {
   MvcpAdjustAnchorSlot,
   NitroListCells,
   StickyHeaderSlot,
+  resupplyCellSize,
   type CellBridge,
   type ItemsAreEqualFn,
   type ItemTypeKey,
@@ -118,8 +119,10 @@ import {createVelocityRing, resetVelocityRing} from './scrollVelocity';
 import {
   maybeWarnJsOnScrollUnderUiDriver,
   maybeWarnZeroViewport,
+  noteRenderItemIdentity,
   warnDevOnce,
   type EstimateDriftStats,
+  type RenderItemChurn,
 } from './devWarnings';
 
 export type {
@@ -309,11 +312,18 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const items = (data ?? EMPTY) as ReadonlyArray<T>;
   const itemCount = items.length;
+  const renderItemChurnRef = useRef<RenderItemChurn>({last: undefined, streak: 0});
+  if (IS_DEV) commitBindings.push(() => noteRenderItemIdentity(renderItemChurnRef.current, renderItem));
   const {fontScale} = useWindowDimensions();
+  const hasKeyExtractor = keyExtractor != null;
+  const hasItemType = getItemType != null;
+  const hasFixedItemSize = getFixedItemSize != null;
+  const hasItemLayoutOverride = overrideItemLayout != null;
+  const hasSeparator = ItemSeparatorComponent != null;
   const analyzedCommitRef = useRef({items, dataVersion});
   const dataAnalysis = useMemo(() => analyzeData(analyzedCommitRef.current.items, items,
     !Object.is(analyzedCommitRef.current.dataVersion, dataVersion), keyExtractor),
-    [items, dataVersion, keyExtractor]);
+    [items, dataVersion, hasKeyExtractor]);
   commitBindings.push(() => { analyzedCommitRef.current = {items, dataVersion}; });
   const storeRef = useRef<ListStore | null>(null);
   if (storeRef.current == null) {
@@ -364,15 +374,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, [isHorizontal, requestedColumns]);
   const mainAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.rowGap ?? 0) : 0;
   const crossAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.columnGap ?? 0) : 0;
-  // A cache entry belongs to this list/template and constraint domain. Type
-  // labels alone do not establish compatibility across lists or mixed spans.
+  // A cache entry belongs to this list and constraint domain. Type labels
+  // alone do not establish compatibility across lists or mixed spans.
   const measurementCacheDomain = useMemo(() => ({}), [
-    renderItem, getItemType, ItemSeparatorComponent, dataVersion, fontScale,
-    isHorizontal, resolvedColumns, mainAxisGap, crossAxisGap, overrideItemLayout,
+    hasItemType, hasSeparator, dataVersion, fontScale,
+    isHorizontal, resolvedColumns, mainAxisGap, crossAxisGap, hasItemLayoutOverride,
   ]);
-  const cacheEnabled = overrideItemLayout == null;
+  const cacheEnabled = !hasItemLayoutOverride;
   const measurementRevision = useMemo(createMeasurementRevision, [
-    measurementCacheDomain, getFixedItemSize, keyExtractor, itemsAreEqual,
+    measurementCacheDomain, hasFixedItemSize, hasKeyExtractor,
     crossPadding.start, crossPadding.end,
   ]);
   const [, setMeasurementGeometry] = useState(0);
@@ -384,7 +394,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const columnLayoutCacheRef = useRef<{
     items: ReadonlyArray<T>;
     resolvedColumns: number;
-    overrideItemLayout: typeof overrideItemLayout;
+    hasItemLayoutOverride: boolean;
     layout: {spans: Uint16Array; colOf: Uint16Array; rowStarts: Int32Array};
   } | null>(null);
   const columnLayout = useMemo(() => {
@@ -395,7 +405,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       cached != null &&
       !dataAnalysis.versionChanged &&
       cached.resolvedColumns === resolvedColumns &&
-      cached.overrideItemLayout === overrideItemLayout
+      cached.hasItemLayoutOverride === hasItemLayoutOverride
         ? cached
         : null;
     const from = reusable != null ? Math.min(reusable.items === items ? itemCount : dataAnalysis.firstChanged, itemCount) : 0;
@@ -433,9 +443,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
     const layout = {spans, colOf, rowStarts, changedFrom: from};
     return layout;
-  }, [resolvedColumns, itemCount, items, overrideItemLayout, dataAnalysis]);
+  }, [resolvedColumns, itemCount, items, hasItemLayoutOverride, dataAnalysis]);
   commitBindings.push(() => {
-    columnLayoutCacheRef.current = columnLayout == null ? null : {items, resolvedColumns, overrideItemLayout, layout: columnLayout};
+    columnLayoutCacheRef.current = columnLayout == null ? null : {items, resolvedColumns, hasItemLayoutOverride, layout: columnLayout};
   });
 
   const [headerSize, setHeaderSize] = useState(0);
@@ -706,6 +716,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }>({buffer: new Float64Array(32 * 2), count: 0, rafId: null});
   const cellBridgeRef = useRef<CellBridge>({
     awaitingLayout: 0,
+    cells: new Set(),
     onLayoutSettled: () => {},
     onAutoFixedMismatch: () => {},
   });
@@ -721,10 +732,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const measurementCtxRef = useRef<{
     items: ReadonlyArray<T>;
     getItemType?: (item: T, index: number) => ItemTypeKey;
+    itemsAreEqual?: (prev: T, next: T, index: number) => boolean;
     estimatedItemSize: number;
-  }>({items, getItemType, estimatedItemSize});
+  }>({items, getItemType, itemsAreEqual, estimatedItemSize});
   commitBindings.push(() => {
-    measurementCtxRef.current = {items, getItemType, estimatedItemSize};
+    measurementCtxRef.current = {items, getItemType, itemsAreEqual, estimatedItemSize};
   });
   const estimateDriftStatsRef = useRef<Map<string, EstimateDriftStats> | null>(null);
   const onItemSizeChangedRef = useRef(onItemSizeChanged);
@@ -752,6 +764,30 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     [measurement],
   );
   useEffect(() => () => measurement.cancelPending(), [measurement]);
+  const rearmMountedCells = useCallback(
+    (from: number) => {
+      const ctx = measurementCtxRef.current;
+      const revision = measurementApiCtxRef.current!.revision;
+      for (const record of cellBridgeRef.current.cells) {
+        const identity = record.identity;
+        if (identity == null || identity.index < from || record.raw < 0) continue;
+        if (
+          record.measures &&
+          isCurrentMeasurement(
+            identity,
+            ctx.items,
+            revision,
+            ctx.itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined,
+          )
+        ) {
+          resupplyCellSize(record, enqueueItemSize);
+        } else {
+          record.rearm = true;
+        }
+      }
+    },
+    [enqueueItemSize],
+  );
 
 
   const autoFixedEnabled = autoFixedItemSizes === true && getItemType != null && cacheEnabled;
@@ -771,8 +807,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   );
   const lastFixedPushRef = useRef<{
     items: ReadonlyArray<T>;
-    getFixedItemSize: typeof getFixedItemSize;
-    getItemType: typeof getItemType;
+    hasFixedItemSize: boolean;
+    hasItemType: boolean;
     autoFixed: ReadonlyMap<ItemTypeKey, number>;
     mainAxisGap: number;
   } | null>(null);
@@ -788,8 +824,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       !full &&
       NitroListDevFlags.dataAppendFastPath &&
       last != null &&
-      last.getFixedItemSize === getFixedItemSize &&
-      last.getItemType === getItemType &&
+      last.hasFixedItemSize === hasFixedItemSize &&
+      last.hasItemType === hasItemType &&
       last.mainAxisGap === mainAxisGap &&
       last.autoFixed === autoFixed
         ? firstDifferingIndex(last.items, items)
@@ -806,11 +842,13 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         (itemCount - from) * ((getItemType != null ? 1 : 0) + (getFixedItemSize != null ? 1 : 0)),
       );
     }
-    lastFixedPushRef.current = {items, getFixedItemSize, getItemType, autoFixed, mainAxisGap};
+    lastFixedPushRef.current = {items, hasFixedItemSize, hasItemType, autoFixed, mainAxisGap};
     flushPendingItemSizes();
   }, [
     getFixedItemSize,
     getItemType,
+    hasFixedItemSize,
+    hasItemType,
     items,
     itemCount,
     enqueueItemSize,
@@ -850,7 +888,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const handleAutoFixedMismatch = useCallback(
     (index: number, sizeDp: number, identity?: MeasurementIdentity) => {
       const ctx = measurementCtxRef.current;
-      if (identity != null && !isCurrentMeasurement(identity, ctx.items, measurementApiCtxRef.current!.revision)) return;
+      if (
+        identity != null &&
+        !isCurrentMeasurement(
+          identity,
+          ctx.items,
+          measurementApiCtxRef.current!.revision,
+          ctx.itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined,
+        )
+      )
+        return;
       const item = ctx.items[index];
       if (item !== undefined && ctx.getItemType != null) {
         const type = ctx.getItemType(item, index);
@@ -884,7 +931,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     dataChangeCtxRef.current!.commitData(null, true, -1);
     invalidateLayoutCache();
     refillLayoutCacheRef.current();
-  }, [measurementCacheDomain, autoFixedEnabled, commitAutoFixedTypes, measurement, invalidateLayoutCache]);
+    rearmMountedCells(0);
+  }, [measurementCacheDomain, autoFixedEnabled, commitAutoFixedTypes, measurement, invalidateLayoutCache,
+    rearmMountedCells]);
 
 
   const readTotalSizeRef = useRef(readTotalSize);
@@ -1519,7 +1568,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       reset = true;
       itemTypes.forgetSent();
       if (nativeMeasurementRevisionRef.current != null) {
-        measurement.cancelPending();
         commitAutoFixedTypes(new Map(), false);
       }
     }
@@ -2498,7 +2546,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (wanted.has(keyExtractor(items[i], i))) found.push(i);
     }
     return found;
-  }, [alwaysRenderKeysJoined, items, keyExtractor]);
+  }, [alwaysRenderKeysJoined, items, dataVersion, hasKeyExtractor]);
 
   const attachedRangeCallbackRef = useRef<typeof handleRangeChange | null>(null);
   useLayoutEffect(() => {
@@ -2512,11 +2560,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
     // The data handler remaps old sources before a shrinking count is applied.
     onDataMaybeChanged();
-    if (first) attachEngineRef.current(engine);
+    if (first) {
+      attachEngineRef.current(engine);
+      rearmMountedCells(0);
+    }
     itemTypes.seedTypeMeans();
-  }, [items, dataVersion, keyExtractor, measurementRevision, itemCount, estimatedItemSize,
-    effectiveDrawDistance, isHorizontal, resolvedColumns, columnLayout, getFixedItemSize,
-    getItemType, onDataMaybeChanged, itemTypes]);
+  }, [items, dataVersion, measurementRevision, itemCount, estimatedItemSize,
+    effectiveDrawDistance, isHorizontal, resolvedColumns, columnLayout,
+    onDataMaybeChanged, itemTypes, rearmMountedCells]);
   useLayoutEffect(() => {
     const engine = engineRef.current;
     if (engine == null || attachedRangeCallbackRef.current === handleRangeChange) return;

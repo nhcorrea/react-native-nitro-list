@@ -116,3 +116,25 @@ export function maybeWarnJsOnScrollUnderUiDriver(
       'or scrollOffsetSharedValue.',
   );
 }
+
+export const UNSTABLE_RENDER_ITEM_COMMITS = 10;
+
+export type RenderItemChurn = {last: unknown; streak: number};
+
+export function noteRenderItemIdentity(churn: RenderItemChurn, renderItem: unknown): void {
+  if (!IS_DEV) return;
+  if (churn.last !== undefined && churn.last !== renderItem) {
+    churn.streak++;
+    if (churn.streak >= UNSTABLE_RENDER_ITEM_COMMITS) {
+      warnDevOnce(
+        'unstable-render-item',
+        `renderItem changed identity on ${churn.streak} consecutive renders. Cells stay ` +
+          'mounted, but every mounted cell re-renders its content each time. Define renderItem ' +
+          'outside the component, or wrap it in useCallback with only what the cells display.',
+      );
+    }
+  } else {
+    churn.streak = 0;
+  }
+  churn.last = renderItem;
+}

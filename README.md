@@ -55,19 +55,22 @@ import { NitroList, type NitroListRenderItem } from '@nhcorrea/react-native-nitr
 
 type Item = { id: string; title: string };
 
-function MyList({ items }: { items: Item[] }) {
-  const renderItem: NitroListRenderItem<Item> = ({ item }) => <Row title={item.title} />;
+const renderItem: NitroListRenderItem<Item> = ({ item }) => <Row title={item.title} />;
+const keyExtractor = (item: Item) => item.id;
 
+function MyList({ items }: { items: Item[] }) {
   return (
     <NitroList
       data={items}
       renderItem={renderItem}
       estimatedItemSize={64}
-      keyExtractor={item => item.id}
+      keyExtractor={keyExtractor}
     />
   );
 }
 ```
+
+When `renderItem` needs component state, wrap it in `useCallback` with only what the cells display. See [Callbacks](#callbacks).
 
 Two things matter from the start:
 
@@ -102,8 +105,16 @@ The differences worth knowing:
 | `getItemType` | `(item, index) => string \| number` | Segments React keys by cell type, so a header cell is never recycled into a row cell. Also gives each type its own size statistics. |
 | `getFixedItemSize` | `(item, index, type) => number \| undefined` | Return the exact size in dp when it's known. Fixed-size cells skip measurement entirely (no `onLayout`), so offsets are exact from the first batch. The value must match the real layout — dev builds warn on divergence. |
 | `autoFixedItemSizes` | `boolean` | Opt-in; needs `getItemType`. After at least 32 near-identical samples, a type can use a learned fixed size. The cache distinguishes tagged types, exact cross-axis constraints, font scale and the list/template. It does not share trust across list instances. `onLayout` verifies subsequent sizes and unfreezes a mismatch. Disabled with `overrideItemLayout`, where one type can span different widths. |
-| `itemsAreEqual` | `(prev, next, index) => boolean` | With a stable function reference, a new data array whose items are recreated-but-equal re-renders zero rows. Compare visual content only — the key is already equal by construction. |
+| `itemsAreEqual` | `(prev, next, index) => boolean` | A new data array whose items are recreated-but-equal re-renders zero rows. The latest function is used, so it does not need a stable reference. Compare visual content only — the key is already equal by construction. |
 | `dataVersion` | `unknown` | Escape hatch for in-place mutation: change this value to force the list to treat `data` as changed even when the array identity did not. |
+
+### Callbacks
+
+Cells are keyed by item key. A new function identity never remounts a cell or discards a measurement, so an inline `keyExtractor`, `getItemType`, `getFixedItemSize`, `itemsAreEqual` or `overrideItemLayout` costs nothing extra.
+
+- `renderItem` and `ItemSeparatorComponent` are rendered: a new identity re-renders the content of every mounted cell, as in FlatList. Keep them stable (module scope or `useCallback`). Dev builds warn when `renderItem` changes on many consecutive renders.
+- `keyExtractor`, `getItemType`, `getFixedItemSize` and `overrideItemLayout` must be pure functions of `(item, index)`. Their results are read when the data changes, not when the function changes. If a callback starts returning different values for the same data, change `dataVersion`.
+- Adding or removing one of these callbacks (for example, passing `getFixedItemSize` where there was none) is a structural change: the list re-measures, keeping mounted cells mounted.
 
 ### Layout
 
@@ -234,12 +245,16 @@ From the root entry point:
 ```tsx
 import { NitroSectionList } from '@nhcorrea/react-native-nitro-list/section-list';
 
+const keyExtractor = (item: Item) => item.id;
+const renderItem = ({ item }: { item: Item }) => <Row item={item} />;
+const renderSectionHeader = ({ section }: { section: Section }) => <Header title={section.title} />;
+
 <NitroSectionList
   sections={sections}
   estimatedItemSize={64}
-  keyExtractor={item => item.id}
-  renderItem={({ item, index, section }) => <Row item={item} />}
-  renderSectionHeader={({ section }) => <Header title={section.title} />}
+  keyExtractor={keyExtractor}
+  renderItem={renderItem}
+  renderSectionHeader={renderSectionHeader}
 />;
 ```
 
@@ -364,6 +379,7 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 - `maintainVisibleContentPosition` with a custom `renderScrollComponent` that may not be forwarding the prop.
 - `numColumns` combined with `horizontal`.
 - A JS `onScroll` under `experimentalUiThreadScroll`.
+- `renderItem` changing identity on 10 consecutive renders — every mounted cell re-renders each time.
 
 ## Recipes
 

@@ -98,19 +98,18 @@ function NitroSectionListInner<
   const listRef = useRef<NitroListHandle | null>(null);
 
   const flattenedRef = useRef<FlattenedSections<ItemT, SectionT> | undefined>(undefined);
+  const withHeaders = renderSectionHeader != null;
+  const withFooters = renderSectionFooter != null;
+  const withSeparators = ItemSeparatorComponent != null;
+  const hasKeyExtractor = keyExtractor != null;
   const flattened = useMemo<FlattenedSections<ItemT, SectionT>>(
     () =>
       flattenSections<ItemT, SectionT>(
         sections,
-        {
-          keyExtractor,
-          withHeaders: renderSectionHeader != null,
-          withFooters: renderSectionFooter != null,
-          withSeparators: ItemSeparatorComponent != null,
-        },
+        {keyExtractor, withHeaders, withFooters, withSeparators},
         flattenedRef.current,
       ),
-    [sections, keyExtractor, renderSectionHeader, renderSectionFooter, ItemSeparatorComponent, listProps.dataVersion],
+    [sections, hasKeyExtractor, withHeaders, withFooters, withSeparators, listProps.dataVersion],
   );
   useInsertionEffect(() => {
     flattenedRef.current = flattened;

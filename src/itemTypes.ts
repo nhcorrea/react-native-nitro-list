@@ -41,7 +41,7 @@ export interface ItemTypesApi {
 
 export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
   let typedItems: ReadonlyArray<T> | null = null;
-  let typedCallback: ItemTypesCtx<T>['getItemType'];
+  let typedWithCallback = false;
   let typeBuffer = new Uint16Array(0);
   let sentCount = -1;
 
@@ -95,7 +95,7 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     const from =
       NitroListDevFlags.dataAppendFastPath &&
       typedItems != null &&
-      typedCallback === ctx.getItemType &&
+      typedWithCallback === (ctx.getItemType != null) &&
       !ctx.analysis.versionChanged
         ? typedItems === ctx.items
           ? ctx.itemCount
@@ -125,7 +125,7 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     }
     maybeWarnTooManyItemTypes(map.size);
     typedItems = ctx.items;
-    typedCallback = ctx.getItemType;
+    typedWithCallback = ctx.getItemType != null;
     sentCount = ctx.itemCount;
     return {
       types: typeBuffer,

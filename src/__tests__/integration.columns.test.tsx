@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
+import React, {useEffect} from 'react';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
@@ -92,23 +93,51 @@ describe('numColumns grid (T30)', () => {
     expect(cell).toBeDefined();
   });
 
-  it('changing numColumns drops measurements back to estimates', async () => {
-    harness = renderNitroList({
-      data: makeItems(20),
-      renderItem: () => null,
-      estimatedItemSize: 100,
-      keyExtractor: itemKey,
-      numColumns: 2,
-    });
+  it('changing numColumns drops offscreen measurements and keeps mounted cells mounted', async () => {
+    const mountsByItem = new Map<string, number>();
+    function MountProbe({id}: {id: string}) {
+      useEffect(() => {
+        mountsByItem.set(id, (mountsByItem.get(id) ?? 0) + 1);
+      }, [id]);
+      return null;
+    }
+    harness = renderNitroList(
+      {
+        data: makeItems(200),
+        renderItem: ({item}) => <MountProbe id={item} />,
+        estimatedItemSize: 100,
+        keyExtractor: itemKey,
+        numColumns: 2,
+      },
+      {typeAverages: false},
+    );
     harness.layout(VIEWPORT_W, VIEWPORT_H);
     harness.measureAllCells(() => 150);
     await harness.settle(50);
-    expect(harness.handle.getItemSize(0)).toBe(150);
+    harness.scroll(4000);
+    await harness.settle(20);
+    harness.measureUnmeasuredCells(() => 150);
+    await harness.settle(20);
+    const offscreen = harness.renderedIndices()[0];
+    harness.scroll(0);
+    await harness.settle(50);
+    harness.measureUnmeasuredCells(() => 150);
+    await harness.settle(50);
+    expect(harness.renderedIndices()).not.toContain(offscreen);
+    expect(harness.handle.getItemSize(offscreen)).toBe(150);
+    expect(mountsByItem.get('item-0')).toBe(2);
 
     harness.update({numColumns: 3});
     await harness.settle(50);
-    expect(harness.handle.getItemSize(0)).toBe(100);
-    expect(harness.handle.getItemOffset(3)).toBe(100);
+    expect(mountsByItem.get('item-0')).toBe(2);
+    expect(harness.handle.getItemSize(offscreen)).toBe(100);
+    expect(harness.handle.getItemSize(0)).toBe(150);
+    expect(harness.handle.getItemOffset(3)).toBe(150);
+    harness.measureCell(0, 90);
+    harness.measureCell(1, 90);
+    harness.measureCell(2, 90);
+    await harness.settle(50);
+    expect(harness.handle.getItemOffset(3)).toBe(90);
   });
 
   it('ranges always cover whole rows', async () => {

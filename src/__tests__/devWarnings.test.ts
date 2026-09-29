@@ -9,6 +9,8 @@ import {
   maybeWarnJsOnScrollUnderUiDriver,
   maybeWarnMissingKeyExtractor,
   maybeWarnZeroViewport,
+  noteRenderItemIdentity,
+  UNSTABLE_RENDER_ITEM_COMMITS,
   warnDevOnce,
   type EstimateDriftStats,
 } from '../devWarnings';
@@ -122,5 +124,26 @@ describe('W5 · maybeWarnJsOnScrollUnderUiDriver', () => {
     maybeWarnJsOnScrollUnderUiDriver(true, true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('onScrollWorklet');
+  });
+});
+
+describe('W6 · noteRenderItemIdentity', () => {
+  it('warns only after a streak of consecutive identity changes', () => {
+    const churn = {last: undefined as unknown, streak: 0};
+    for (let k = 0; k < UNSTABLE_RENDER_ITEM_COMMITS; k++) noteRenderItemIdentity(churn, () => null);
+    expect(warn).not.toHaveBeenCalled();
+    noteRenderItemIdentity(churn, () => null);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('useCallback');
+  });
+
+  it('resets the streak when a render keeps the same renderItem', () => {
+    const churn = {last: undefined as unknown, streak: 0};
+    const stable = () => null;
+    for (let k = 0; k < 3 * UNSTABLE_RENDER_ITEM_COMMITS; k++) {
+      noteRenderItemIdentity(churn, k % 2 === 0 ? () => null : stable);
+      noteRenderItemIdentity(churn, stable);
+    }
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -43,6 +43,7 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
   const stickyHeaderIndices: number[] = [];
   const headerFlatIndex: number[] = [];
   const itemFlatIndex: number[][] = [];
+  let reused = 0;
 
   for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
     const section = sections[sectionIndex];
@@ -56,12 +57,15 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
       stickyHeaderIndices.push(rows.length);
       const key = `s${sectionKey}:h`;
       const old = oldStart == null ? undefined : previous!.rows[oldStart];
-      rows.push(
+      if (
         old?.kind === 'header' && old.section === section &&
         old.sectionIndex === sectionIndex && old.key === key
-          ? old
-          : {kind: 'header', section, sectionIndex, key},
-      );
+      ) {
+        rows.push(old);
+        reused++;
+      } else {
+        rows.push({kind: 'header', section, sectionIndex, key});
+      }
     }
     const flatIndices: number[] = [];
     const data = section.data;
@@ -74,23 +78,29 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
       const oldItemIndex = oldItems?.[itemIndex];
       const old = oldItemIndex == null ? undefined : previous!.rows[oldItemIndex];
       flatIndices.push(rows.length);
-      rows.push(
+      if (
         old?.kind === 'item' && old.section === section &&
         old.sectionIndex === sectionIndex && old.item === item &&
         old.itemIndex === itemIndex && old.key === key
-          ? old
-          : {kind: 'item', item, section, sectionIndex, itemIndex, key},
-      );
+      ) {
+        rows.push(old);
+        reused++;
+      } else {
+        rows.push({kind: 'item', item, section, sectionIndex, itemIndex, key});
+      }
       if (options.withSeparators && itemIndex < data.length - 1) {
         const separatorKey = `s${sectionKey}:sep:${itemKey}`;
         const oldSeparator = oldItemIndex == null ? undefined : previous!.rows[oldItemIndex + 1];
-        rows.push(
+        if (
           oldSeparator?.kind === 'separator' && oldSeparator.section === section &&
           oldSeparator.sectionIndex === sectionIndex && oldSeparator.leadingItem === item &&
           oldSeparator.key === separatorKey
-            ? oldSeparator
-            : {kind: 'separator', leadingItem: item, section, sectionIndex, key: separatorKey},
-        );
+        ) {
+          rows.push(oldSeparator);
+          reused++;
+        } else {
+          rows.push({kind: 'separator', leadingItem: item, section, sectionIndex, key: separatorKey});
+        }
       }
     }
     itemFlatIndex.push(flatIndices);
@@ -98,13 +108,24 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
       const key = `s${sectionKey}:f`;
       const oldEnd = previous?.headerFlatIndex[sectionIndex + 1] ?? previous?.rows.length;
       const old = oldEnd == null ? undefined : previous!.rows[oldEnd - 1];
-      rows.push(
+      if (
         old?.kind === 'footer' && old.section === section &&
         old.sectionIndex === sectionIndex && old.key === key
-          ? old
-          : {kind: 'footer', section, sectionIndex, key},
-      );
+      ) {
+        rows.push(old);
+        reused++;
+      } else {
+        rows.push({kind: 'footer', section, sectionIndex, key});
+      }
     }
+  }
+  if (
+    previous != null &&
+    reused === rows.length &&
+    rows.length === previous.rows.length &&
+    stickyHeaderIndices.length === previous.stickyHeaderIndices.length
+  ) {
+    return previous;
   }
   return {rows, stickyHeaderIndices, headerFlatIndex, itemFlatIndex};
 }

@@ -8,7 +8,6 @@ export interface MeasurementIdentity {
   readonly index: number;
   readonly revision: MeasurementRevision;
   readonly geometry: number;
-  readonly itemsAreEqual?: (prev: unknown, next: unknown, index: number) => boolean;
   active: boolean;
 }
 
@@ -22,6 +21,7 @@ export function isCurrentMeasurement(
   identity: MeasurementIdentity,
   items: ReadonlyArray<unknown>,
   revision: MeasurementRevision,
+  itemsAreEqual?: (prev: unknown, next: unknown, index: number) => boolean,
 ): boolean {
   return (
     identity.active &&
@@ -30,6 +30,6 @@ export function isCurrentMeasurement(
     identity.index >= 0 &&
     identity.index < items.length &&
     (Object.is(items[identity.index], identity.item) ||
-      identity.itemsAreEqual?.(identity.item, items[identity.index], identity.index) === true)
+      itemsAreEqual?.(identity.item, items[identity.index], identity.index) === true)
   );
 }

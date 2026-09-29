@@ -33,6 +33,7 @@ export interface MeasurementCtx<T> {
   measurementCtxRef: Ref<{
     items: ReadonlyArray<T>;
     getItemType?: (item: T, index: number) => ItemTypeKey;
+    itemsAreEqual?: (prev: T, next: T, index: number) => boolean;
     estimatedItemSize: number;
   }>;
   crossViewportRef: Ref<number>;
@@ -81,7 +82,14 @@ export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
     const measurementDomain = ctx.measurementCacheDomain;
     for (let k = 0; k < state.count; k++) {
       const identity = identities[k];
-      if (isCurrentMeasurement(identity, mctx.items, ctx.revision)) {
+      if (
+        isCurrentMeasurement(
+          identity,
+          mctx.items,
+          ctx.revision,
+          mctx.itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined,
+        )
+      ) {
         accepted.set(identity.index, state.buffer[k * 2 + 1]);
       }
     }
