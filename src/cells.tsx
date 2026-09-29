@@ -76,6 +76,15 @@ export function resupplyCellSize(
   enqueueItemSize(identity.index, size, identity);
 }
 
+export function markCellSupplied(record: CellRecord, cellBridge: CellBridge): void {
+  record.laidOut = true;
+  record.reported = record.raw + record.gap;
+  if (!record.awaiting) return;
+  record.awaiting = false;
+  cellBridge.awaitingLayout--;
+  if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
+}
+
 export function pushRenderRange(
   ranges: RenderRange[],
   range: RenderRange | null | undefined,
@@ -564,8 +573,8 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
     record.fixedSize = fixedSize;
     record.autoFixedSize = autoFixedSize;
     if (previous !== identity) {
-      record.reported = -1;
-      record.laidOut = false;
+      record.laidOut = record.raw >= 0;
+      record.reported = record.raw >= 0 ? record.raw + record.gap : -1;
     }
     if (measures && record.raw >= 0) {
       const invalidated =
@@ -671,21 +680,21 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
       : [styles.absoluteRow, {top}, visibility];
   }, [horizontal, top, columnLeft, columnWidth, crossAxisGap, hidden]);
   return (
-    <View
-      collapsable={false}
-      pointerEvents={hidden ? 'none' : undefined}
-      onLayout={fixedSize != null && !IS_DEV ? undefined : handleLayout}
-      style={containerStyle}
-    >
-      <NitroListCellContent
-        index={index}
-        item={item}
-        renderItem={renderItem}
-        SeparatorComponent={SeparatorComponent}
-        isLastItem={isLastItem}
-        renderMode={renderMode}
-        itemsAreEqual={itemsAreEqual}
-      />
+    <View collapsable={false} pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
+      <View
+        onLayout={fixedSize != null && !IS_DEV ? undefined : handleLayout}
+        style={styles.cellMeasure}
+      >
+        <NitroListCellContent
+          index={index}
+          item={item}
+          renderItem={renderItem}
+          SeparatorComponent={SeparatorComponent}
+          isLastItem={isLastItem}
+          renderMode={renderMode}
+          itemsAreEqual={itemsAreEqual}
+        />
+      </View>
     </View>
   );
 }, areItemContainerPropsEqual);
@@ -740,6 +749,9 @@ export const StickyOverlay = React.memo(function StickyOverlay({
 export const styles = StyleSheet.create({
   hiddenCell: {
     opacity: 0,
+  },
+  cellMeasure: {
+    flexGrow: 1,
   },
   stickyOverlay: {
     position: 'absolute',

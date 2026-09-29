@@ -80,18 +80,23 @@ it('shrinking after removing the head preserves measurements from the old tail',
   expect(harness.handle.getItemSize(1)).toBe(300);
 });
 
-it('a queued size cannot cross a content replacement with the same key', async () => {
+it('a queued size from replaced content never overrides the frame reported by the new content', async () => {
+  const onItemSizeChanged = jest.fn();
   harness = renderNitroList({
     data: ['old'],
     keyExtractor: () => 'same',
     estimatedItemSize: 100,
     renderItem: () => null,
+    onItemSizeChanged,
   });
   harness.layout(400, 600);
   harness.measureAllCells(() => 250);
   harness.update({data: ['new']});
+  expect(harness.handle.getItemSize(0)).toBe(250);
+  harness.measureCell(0, 180);
   await harness.settle(50);
-  expect(harness.handle.getItemSize(0)).toBe(100);
+  expect(harness.handle.getItemSize(0)).toBe(180);
+  expect(onItemSizeChanged.mock.calls).toEqual([[{index: 0, size: 180}]]);
 });
 
 it('a width change drops offscreen geometry and re-supplies mounted cells with their latest frame', async () => {

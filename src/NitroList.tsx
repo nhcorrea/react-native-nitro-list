@@ -56,6 +56,7 @@ import {
   MvcpAdjustAnchorSlot,
   NitroListCells,
   StickyHeaderSlot,
+  markCellSupplied,
   resupplyCellSize,
   type CellBridge,
   type ItemsAreEqualFn,
@@ -1599,6 +1600,30 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         fixedData[fixedCount * 2] = i;
         fixedData[fixedCount * 2 + 1] = size;
         ++fixedCount;
+      }
+    }
+    const carryFrom = reset || remap != null ? 0 : invalidateFrom;
+    if (carryFrom >= 0) {
+      const cellBridge = cellBridgeRef.current;
+      for (const record of cellBridge.cells) {
+        const identity = record.identity;
+        if (identity == null || !record.measures || record.raw < 0 || identity.index < carryFrom) continue;
+        if (
+          !isCurrentMeasurement(
+            identity,
+            items,
+            measurementRevision,
+            itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined,
+          )
+        ) {
+          record.rearm = true;
+          continue;
+        }
+        fixedData = growNativeFloat64Array(fixedData, (fixedCount + 1) * 2);
+        fixedData[fixedCount * 2] = identity.index;
+        fixedData[fixedCount * 2 + 1] = record.raw + record.gap;
+        ++fixedCount;
+        markCellSupplied(record, cellBridge);
       }
     }
     fixedDataBufferRef.current = fixedData;
