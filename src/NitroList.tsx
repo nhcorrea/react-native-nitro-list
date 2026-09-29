@@ -519,12 +519,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     effectiveDrawDistanceRef.current = effectiveDrawDistance;
   });
 
-  const initialContentOffset = useMemo<{x: number; y: number} | undefined>(() => {
-    const initial = initialTargetRef.current;
-    if (initial == null || initial.offset <= 0) return undefined;
-    return isHorizontal ? {x: initial.offset, y: 0} : {x: 0, y: initial.offset};
-  }, [isHorizontal]);
-
   const scrollRef = useRef<ScrollView>(null);
   const hybridRef = useRef<NitroListEngine | null>(null);
   const engineRef = useRef<NitroListEngine | null>(null);
@@ -944,6 +938,19 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   });
 
   const lastScrollOffsetRef = useRef(initialTargetRef.current?.offset ?? 0);
+  const scrollDriverKey = experimentalUiThreadScroll === true ? 'ui-driver' : 'js-driver';
+  const committedScrollDriverKeyRef = useRef(scrollDriverKey);
+  commitBindings.push(() => {
+    committedScrollDriverKeyRef.current = scrollDriverKey;
+  });
+  const scrollMountOffset = useMemo<{x: number; y: number} | undefined>(() => {
+    const offset =
+      committedScrollDriverKeyRef.current !== scrollDriverKey
+        ? lastScrollOffsetRef.current
+        : (initialTargetRef.current?.offset ?? 0);
+    if (offset <= 0) return undefined;
+    return isHorizontal ? {x: offset, y: 0} : {x: 0, y: offset};
+  }, [isHorizontal, scrollDriverKey]);
   const viewportSizeRef = useRef<{width: number; height: number}>({width: 0, height: 0});
   const mainViewportRef = useRef(0);
   const crossViewportRef = useRef(0);
@@ -2603,11 +2610,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         style,
         initialRevealPending ? orchestratorStyles.hiddenUntilReveal : null,
       ]}>
-      {resolvedRenderScrollComponent({
+      {React.cloneElement(resolvedRenderScrollComponent({
         ref: scrollRef,
         horizontal: isHorizontal,
         snapToOffsets: snapOffsets,
-        onScroll: uiThreadDriverActive ? uiThreadScrollHandler : handleOuterScroll,
+        onScroll: experimentalUiThreadScroll === true ? uiThreadScrollHandler : handleOuterScroll,
         onScrollBeginDrag: handleScrollBeginDrag,
         onScrollEndDrag: handleScrollEndDrag,
         onMomentumScrollBegin: handleMomentumScrollBegin,
@@ -2616,7 +2623,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         scrollEventThrottle:
           experimentalUiThreadScroll === true || NitroListDevFlags.jsScrollEventThrottle1 ? 1 : 16,
         contentContainerStyle,
-        contentOffset: initialContentOffset,
+        contentOffset: scrollMountOffset,
         maintainVisibleContentPosition: mvcpEnabled ? MVCP_SCROLL_VIEW_CONFIG : undefined,
         children: (
           <>
@@ -2668,7 +2675,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
             <EndSpaceSpacer store={store} horizontal={isHorizontal} />
           </>
         ),
-      })}
+      }), {key: scrollDriverKey})}
       <StickyHeaderSlot
         store={store}
         items={items as ReadonlyArray<unknown>}

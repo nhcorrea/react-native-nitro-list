@@ -332,6 +332,7 @@ With `experimentalUiThreadScroll` on, a Reanimated worklet is the only scroll dr
 Notes:
 
 - The default outer ScrollView becomes an `Animated.ScrollView` automatically. A custom `renderScrollComponent` must be backed by one.
+- Turning `experimentalUiThreadScroll` on or off after mount remounts the scroll component, so its scroll handler is registered with Reanimated from the start.
 - `onScrollWorklet` must carry the `'worklet'` directive — automatic workletization does not cross package boundaries.
 - A plain JS `onScroll` still works but costs one JS wakeup per tick and receives a minimal synthesized event (`{ nativeEvent: { contentOffset } }`). Dev builds warn about this combination.
 - If animated components stutter *during* scroll, look at Reanimated's app-side static feature flags (`DISABLE_COMMIT_PAUSING_MECHANISM`, plus React Native's `preventShadowTreeCommitExhaustion` on RN 0.81+) — only the app can set those.
