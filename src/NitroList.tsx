@@ -67,7 +67,7 @@ import {
   type EdgeCallbacksCtx,
   type EdgeLatchState,
 } from './edges';
-import {computeSticky, driveStickyOnUi} from './sticky';
+import {computeSticky, createStickyResult, driveStickyOnUi} from './sticky';
 import {createViewability, type ViewabilityCtx} from './viewability';
 import {flushWaiters, waitForNextFrame} from './scrollCommands';
 import {createMeasurement, type MeasurementApi, type MeasurementCtx} from './measurement';
@@ -249,6 +249,15 @@ function watchZeroViewport(mainViewportRef: {current: number}, itemCount: number
     cancelled = true;
     cancelAnimationFrame(rafId);
   };
+}
+
+function isMvcpAnchorEligible<T>(
+  items: ReadonlyArray<T>,
+  shouldRestore: (item: T, index: number) => boolean,
+  index: number,
+): boolean {
+  const candidate = items[index];
+  return candidate === undefined || shouldRestore(candidate, index) !== false;
 }
 
 function scheduleRevealTimeout(setRevealPending: (pending: boolean) => void): () => void {
@@ -544,6 +553,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const stickyOverlaySizeSv = useSharedValue(stickySize ?? 0);
   const stickyOverlaySizeRef = useRef(stickySize ?? 0);
   const lastJsStickyTyRef = useRef<number | null>(null);
+  const lastJsStickyIndexRef = useRef<number | null>(null);
+  const stickyResultRef = useRef(createStickyResult());
 
   const layoutCacheCtxRef = useRef<LayoutCacheCtx | null>(null);
   if (layoutCacheCtxRef.current == null) {
@@ -560,6 +571,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const invalidateLayoutCache = layout.invalidate;
   const readItemOffset = layout.readItemOffset;
   const readItemSize = layout.readItemSize;
+  const stickyLayoutReaderRef = useRef<{
+    getItemOffset: (index: number) => number;
+    getItemSize: (index: number) => number;
+  } | null>(null);
+  stickyLayoutReaderRef.current ??= {getItemOffset: readItemOffset, getItemSize: readItemSize};
+  const stickyLayoutReader = stickyLayoutReaderRef.current;
   const ensureLayout = layout.ensureLayout;
   const readTotalSize = layout.readTotalSize;
   const writeSlabToCache = layout.writeSlab;
@@ -1040,7 +1057,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     requestAnimationFrame(() => {
       const current = stickToEndRef.current;
       const activity = scrollActivityRef.current;
-      if (!current.wasAtEnd || activity.dragging || activity.momentum) {
+      if (hybridRef.current == null || !current.wasAtEnd || activity.dragging || activity.momentum) {
         current.pending = false;
         current.regrow = false;
         return;
@@ -1210,7 +1227,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     let lastVersion = lastSeenLayoutVersionRef.current;
     while (stableFrames < SCROLL_READINESS_STABLE_FRAMES && Date.now() < deadline) {
       await waitForNextFrame();
-      if (commandId !== scrollCommandIdRef.current) return;
+      if (commandId !== scrollCommandIdRef.current || hybridRef.current == null) return;
       const version = lastSeenLayoutVersionRef.current;
       if (version === lastVersion) {
         stableFrames++;
@@ -1227,6 +1244,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
     }
   });
+  const isEngineAttached = useStableCallback(stableCallbacks, () => hybridRef.current != null);
   const releaseEstimateFreeze = useStableCallback(stableCallbacks, () => {
     if (
       estimateFreezeDepthRef.current > 0 &&
@@ -1289,7 +1307,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   );
   useEffect(() => {
     lastJsStickyTyRef.current = null;
-  }, [uiThreadDriverActive]);
+    lastJsStickyIndexRef.current = null;
+  }, [uiThreadDriverActive, stickyIndices]);
 
   const rangeStateRef = useRef<{start: number; end: number; layoutVersion: number}>({
     start: 0,
@@ -1356,6 +1375,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const lastPushedEngineOffsetRef = useRef<number | null>(null);
   const pendingScrollCommandRef = useRef<NitroListScrollCommandEcho | null>(null);
   const mvcpAnchorHintRef = useRef(0);
+  const mvcpAnchorKeySourceRef = useRef<object | null>(null);
   const lastLiveEngineOffsetRef = useRef(lastScrollOffsetRef.current);
 
   const rangeCtxRef = useRef<RangePipelineCtx | null>(null);
@@ -1458,10 +1478,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     stableCallbacks,
     (offset: number) => {
       if (stickyIndices.length === 0 || !hybridRef.current) {
-        uiStickyIndexSv.value = -1;
+        if (lastJsStickyIndexRef.current !== -1) {
+          lastJsStickyIndexRef.current = -1;
+          uiStickyIndexSv.value = -1;
+        }
         applyStickyIndex(-1);
         return;
       }
+      lastJsStickyIndexRef.current = null;
       if (uiThreadDriverActiveRef.current) {
         scheduleStickyRecomputeOnUi();
         return;
@@ -1470,9 +1494,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         offset,
         stickyIndices,
         stickyOffset,
-        readItemOffset,
-        readItemSize,
+        stickyLayoutReader,
         stickyOverlaySizeRef.current,
+        stickyResultRef.current,
       );
       applyStickyIndex(result.index);
       if (lastJsStickyTyRef.current !== result.translateY) {
@@ -1740,38 +1764,41 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           }
         }
       } else {
-        const isEligible = (index: number) => {
-          const candidate = items[index];
-          return candidate === undefined || shouldRestore(candidate, index) !== false;
-        };
         for (let i = low; i <= high; i++) {
-          if (readItemOffset(i) >= engineOffset && isEligible(i)) {
+          if (readItemOffset(i) >= engineOffset && isMvcpAnchorEligible(items, shouldRestore, i)) {
             anchorIndex = i;
             break;
           }
         }
         if (anchorIndex < 0) {
           for (let i = high; i >= low; i--) {
-            if (isEligible(i)) {
+            if (isMvcpAnchorEligible(items, shouldRestore, i)) {
               anchorIndex = i;
               break;
             }
           }
         }
       }
-      if (anchorIndex >= 0) mvcpAnchorHintRef.current = anchorIndex;
-      if (anchorIndex >= 0) {
-        const anchorItem = items[anchorIndex];
-        mvcp.anchor = {
-          index: anchorIndex,
-          key:
-            keyExtractor && anchorItem !== undefined
-              ? keyExtractor(anchorItem, anchorIndex)
-              : null,
-          offset: readItemOffset(anchorIndex),
-        };
-      } else {
+      if (anchorIndex < 0) {
         mvcp.anchor = null;
+        return;
+      }
+      mvcpAnchorHintRef.current = anchorIndex;
+      const offset = readItemOffset(anchorIndex);
+      const anchor = mvcp.anchor;
+      if (anchor != null && anchor.index === anchorIndex && mvcpAnchorKeySourceRef.current === dataAnalysis) {
+        anchor.offset = offset;
+        return;
+      }
+      const anchorItem = items[anchorIndex];
+      const key = keyExtractor && anchorItem !== undefined ? keyExtractor(anchorItem, anchorIndex) : null;
+      mvcpAnchorKeySourceRef.current = dataAnalysis;
+      if (anchor != null) {
+        anchor.index = anchorIndex;
+        anchor.key = key;
+        anchor.offset = offset;
+      } else {
+        mvcp.anchor = {index: anchorIndex, key, offset};
       }
     },
   );
@@ -2240,6 +2267,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       cancelPrewarmAdmission,
       acquireEstimateFreeze,
       releaseEstimateFreeze,
+      isEngineAttached,
     } satisfies ScrollToIndexCtx);
   });
   const stiRef = useRef<ScrollToIndexApi | null>(null);

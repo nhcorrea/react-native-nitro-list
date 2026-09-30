@@ -27,10 +27,29 @@ function noteDependencies(hook: string, deps: unknown): void {
   if (deps !== undefined) webOnlyDependencyUsages.push(hook);
 }
 
+let sharedValueWrites = 0;
+
+export function sharedValueWritesForTests(): number {
+  return sharedValueWrites;
+}
+
+function createCountingSharedValue<T>(initial: T): SharedValue<T> {
+  let current = initial;
+  return {
+    get value() {
+      return current;
+    },
+    set value(next: T) {
+      sharedValueWrites++;
+      current = next;
+    },
+  };
+}
+
 export function useSharedValue<T>(initial: T): SharedValue<T> {
   const ref = useRef<SharedValue<T> | null>(null);
   if (ref.current == null) {
-    ref.current = {value: initial};
+    ref.current = createCountingSharedValue(initial);
     createdSharedValues.push(ref.current as SharedValue<unknown>);
   }
   return ref.current;

@@ -4,15 +4,23 @@ import {scheduleOnRN} from 'react-native-worklets';
 import type {NitroListEngine} from './NitroListHost';
 
 export type StickyComputeResult = {index: number; translateY: number; height: number};
-export type LayoutReader = (index: number) => number;
+export type StickyLayoutReader = {
+  getItemOffset: (index: number) => number;
+  getItemSize: (index: number) => number;
+};
+
+export function createStickyResult(): StickyComputeResult {
+  'worklet';
+  return {index: -1, translateY: 0, height: 0};
+}
 
 export function computeSticky(
   scrollOffset: number,
   stickyIndices: ReadonlyArray<number>,
   stickyOffset: number,
-  readOffset: LayoutReader,
-  readSize: LayoutReader,
+  reader: StickyLayoutReader,
   overlaySize: number,
+  out: StickyComputeResult,
 ): StickyComputeResult {
   'worklet';
   const bar = scrollOffset + stickyOffset;
@@ -21,7 +29,7 @@ export function computeSticky(
   let hi = stickyIndices.length - 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (readOffset(stickyIndices[mid]) <= bar) {
+    if (reader.getItemOffset(stickyIndices[mid]) <= bar) {
       activeK = mid;
       lo = mid + 1;
     } else {
@@ -29,19 +37,25 @@ export function computeSticky(
     }
   }
   if (activeK === -1) {
-    return {index: -1, translateY: stickyOffset, height: 0};
+    out.index = -1;
+    out.translateY = stickyOffset;
+    out.height = 0;
+    return out;
   }
   const idx = stickyIndices[activeK];
-  const h = overlaySize > 0 ? overlaySize : readSize(idx);
+  const h = overlaySize > 0 ? overlaySize : reader.getItemSize(idx);
   let translateY = stickyOffset;
   const nextK = activeK + 1;
   if (nextK < stickyIndices.length) {
-    const nextNaturalY = readOffset(stickyIndices[nextK]) - scrollOffset;
+    const nextNaturalY = reader.getItemOffset(stickyIndices[nextK]) - scrollOffset;
     if (nextNaturalY < stickyOffset + h) {
       translateY = nextNaturalY - h;
     }
   }
-  return {index: idx, translateY, height: h};
+  out.index = idx;
+  out.translateY = translateY;
+  out.height = h;
+  return out;
 }
 
 export function driveStickyOnUi(
@@ -59,9 +73,9 @@ export function driveStickyOnUi(
     engineOffset,
     stickyIndices,
     stickyOffset,
-    (i: number) => hybrid.getItemOffset(i),
-    (i: number) => hybrid.getItemSize(i),
+    hybrid,
     overlaySizeSv.value,
+    createStickyResult(),
   );
   if (translateYSv.value !== result.translateY) {
     translateYSv.value = result.translateY;

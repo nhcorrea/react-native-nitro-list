@@ -72,6 +72,12 @@ export interface EdgeCallbacksCtx {
 }
 
 export function createEdgeCallbacks(ctx: EdgeCallbacksCtx): () => void {
+  const fireEndReached = (distanceFromEnd: number): void => {
+    ctx.onEndReached?.({distanceFromEnd});
+  };
+  const fireStartReached = (distanceFromStart: number): void => {
+    ctx.onStartReached?.({distanceFromStart});
+  };
   return function checkEdgeCallbacks(): void {
   const allowRearm = !ctx.suppressEdgeRearmRef.current;
   ctx.suppressEdgeRearmRef.current = false;
@@ -114,7 +120,7 @@ export function createEdgeCallbacks(ctx: EdgeCallbacksCtx): () => void {
       totalContent,
       liveItemCount,
       allowRearm,
-      (distanceFromEnd) => ctx.onEndReached?.({distanceFromEnd}),
+      fireEndReached,
     );
   } else {
     ctx.endEdgeStateRef.current.isReached = false;
@@ -127,7 +133,7 @@ export function createEdgeCallbacks(ctx: EdgeCallbacksCtx): () => void {
       totalContent,
       liveItemCount,
       allowRearm,
-      (distanceFromStart) => ctx.onStartReached?.({distanceFromStart}),
+      fireStartReached,
     );
   } else {
     ctx.startEdgeStateRef.current.isReached = false;

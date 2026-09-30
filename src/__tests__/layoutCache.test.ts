@@ -48,6 +48,32 @@ it('bounds sparse and sequential page retention, then releases pages on shrink',
   expect(cache.readItemOffset(99)).toBe(7920);
 });
 
+it('evicts the least recently used page', () => {
+  const getItemOffset = jest.fn((index: number) => index * 100);
+  const ctx: LayoutCacheCtx = {
+    engineRef: {
+      current: {
+        getItemOffset,
+        getItemSize: () => 100,
+        getTotalSize: () => ctx.itemCount * 100,
+      } as unknown as NitroListEngine,
+    },
+    liveRangeRef: {current: {start: 0, end: 10}},
+    estimatedItemSize: 100,
+    itemCount: 100000,
+  };
+  const cache = createLayoutCache(ctx);
+  for (let page = 0; page < LAYOUT_MAX_PAGES; page++) cache.readItemOffset(page * 64);
+  cache.readItemOffset(0);
+  cache.readItemOffset(LAYOUT_MAX_PAGES * 64);
+  getItemOffset.mockClear();
+  cache.readItemOffset(0);
+  expect(getItemOffset).not.toHaveBeenCalled();
+  cache.readItemOffset(64);
+  expect(getItemOffset).toHaveBeenCalledTimes(1);
+  expect(cache.retainedPageBytes()).toBe(LAYOUT_MAX_PAGES * LAYOUT_PAGE_BYTES);
+});
+
 function mirrorCache(count: number) {
   const engine = new HybridNitroListEngineMirror({typeAverages: false});
   engine.configure(count, 50, 250, false, 1, 0.5);

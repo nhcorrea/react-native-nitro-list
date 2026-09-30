@@ -99,6 +99,7 @@ export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
           mvcpAnchorBefore != null && mvcpAnchorBefore.key != null
             ? {index: mvcpAnchorBefore.index, key: mvcpAnchorBefore.key}
             : null;
+        const anchorOffsetBefore = mvcpAnchorBefore?.offset ?? 0;
         let remapPairs: KeyRemapPairs | null = null;
         let resolvedAnchorIndex: number | null = null;
         if (!versionChanged && ctx.keyExtractor != null && ctx.items.length > 0) {
@@ -126,11 +127,11 @@ export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
           if (newIndex >= 0) {
             ctx.invalidateLayoutCache();
             const offsetAfter = ctx.readItemOffset(newIndex);
-            const diff = offsetAfter - mvcpAnchorBefore.offset;
+            const diff = offsetAfter - anchorOffsetBefore;
             ctx.mvcpStateRef.current.anchor = {
               index: newIndex,
               key: anchorRequest.key,
-              offset: mvcpAnchorBefore.offset,
+              offset: anchorOffsetBefore,
             };
             if (Math.abs(diff) > MVCP_POSITION_EPSILON) {
               ctx.applyMvcpCorrectionRef.current(diff);

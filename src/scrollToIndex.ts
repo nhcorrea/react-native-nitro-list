@@ -55,6 +55,7 @@ export interface ScrollToIndexCtx {
   cancelPrewarmAdmission: () => void;
   acquireEstimateFreeze: () => void;
   releaseEstimateFreeze: () => void;
+  isEngineAttached: () => boolean;
 }
 
 export interface ScrollToIndexApi {
@@ -114,6 +115,8 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     if (index < 0 || index >= ctx.itemCount) return;
 
     const commandId = ctx.beginScrollCommand();
+    const superseded = (): boolean =>
+      commandId !== ctx.scrollCommandIdRef.current || !ctx.isEngineAttached();
     const devStartedAt = NITRO_LIST_PERF_COMPILED ? Date.now() : 0;
     const devTrace: string[] | undefined = NITRO_LIST_PERF_COMPILED ? [] : undefined;
     const devMark = (label: string) => {
@@ -128,7 +131,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     ctx.setPrewarmRangeTracked(null);
 
     await ctx.awaitScrollReadiness(commandId);
-    if (commandId !== ctx.scrollCommandIdRef.current) return;
+    if (superseded()) return;
     devMark('ready');
 
     let finalOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
@@ -167,7 +170,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
         let restarts = 0;
 
         for (let step = 0; step < SCROLL_TO_INDEX_STEPS; step++) {
-          if (commandId !== ctx.scrollCommandIdRef.current) return;
+          if (superseded()) return;
 
           const nextOffset = interpolateOffset(
             startOffset,
@@ -178,7 +181,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
           setLandingFocus(finalOffset);
           prewarmRenderWindow(nextOffset);
           await ctx.waitForLayoutSettle(devTrace);
-          if (commandId !== ctx.scrollCommandIdRef.current) return;
+          if (superseded()) return;
           devMark(`step${step}`);
 
           const newFinalOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
@@ -203,12 +206,12 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
         }
 
         for (let pass = 0; pass < SCROLL_TO_INDEX_CORRECTION_PASSES; pass++) {
-          if (commandId !== ctx.scrollCommandIdRef.current) return;
+          if (superseded()) return;
           devCorrectionPasses++;
           setLandingFocus(finalOffset);
           prewarmRenderWindow(finalOffset);
           await ctx.waitForLayoutSettle(devTrace);
-          if (commandId !== ctx.scrollCommandIdRef.current) return;
+          if (superseded()) return;
           devMark(`pass${pass}`);
 
           const correctedOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
@@ -237,7 +240,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
         }
       }
 
-      if (commandId !== ctx.scrollCommandIdRef.current) return;
+      if (superseded()) return;
       const promoted = ctx.lastPrewarmRangeRef.current;
       ctx.lastPrewarmRangeRef.current = null;
       if (promoted) {
@@ -259,10 +262,10 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     }
 
     for (let pass = 0; pass < SCROLL_TO_INDEX_CORRECTION_PASSES; pass++) {
-      if (commandId !== ctx.scrollCommandIdRef.current) return;
+      if (superseded()) return;
       devCorrectionPasses++;
       await waitForLayoutPass();
-      if (commandId !== ctx.scrollCommandIdRef.current) return;
+      if (superseded()) return;
 
       const correctedOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
       if (correctedOffset == null) {

@@ -75,8 +75,8 @@ export interface ViewabilityCtx<T> {
 }
 
 export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
-  let previous: {
-    items: ReadonlyArray<T>;
+  const previous: {
+    items: ReadonlyArray<T> | null;
     keyExtractor: ViewabilityCtx<T>['keyExtractor'];
     callback: ViewabilityCtx<T>['onViewableItemsChanged'];
     minimumViewTime: number;
@@ -86,14 +86,37 @@ export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
     viewport: number;
     padding: number;
     interacted: boolean;
-  } | null = null;
+  } = {
+    items: null,
+    keyExtractor: undefined,
+    callback: undefined,
+    minimumViewTime: 0,
+    waitForInteraction: false,
+    itemThreshold: undefined,
+    areaThreshold: undefined,
+    viewport: 0,
+    padding: 0,
+    interacted: false,
+  };
+  let hasPrevious = false;
+  let timerDeadline = Number.NaN;
+  const reschedule = (): void => {
+    ctx.timerRef.current = null;
+    ctx.reschedule();
+  };
+  const forget = (): void => {
+    hasPrevious = false;
+    previous.items = null;
+    previous.keyExtractor = undefined;
+    previous.callback = undefined;
+  };
   return function evaluate(): void {
     const cb = ctx.onViewableItemsChanged;
     const config = ctx.config;
     const viewable = ctx.viewableRef.current;
     const pending = ctx.pendingRef.current;
     if (!cb || !config) {
-      previous = null;
+      forget();
       if (viewable.size > 0) viewable.clear();
       if (pending.size > 0) pending.clear();
       if (ctx.timerRef.current != null) clearTimeout(ctx.timerRef.current);
@@ -108,14 +131,14 @@ export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
     const keyExtractor = ctx.keyExtractor;
     const minimumViewTime = config.minimumViewTime ?? 0;
     const waitForInteraction = config.waitForInteraction ?? false;
-    const subscriberChanged = previous != null && previous.callback !== cb;
-    const dataChanged = previous != null && (previous.items !== items || previous.keyExtractor !== keyExtractor);
-    const configChanged = previous != null && (
+    const subscriberChanged = hasPrevious && previous.callback !== cb;
+    const dataChanged = hasPrevious && (previous.items !== items || previous.keyExtractor !== keyExtractor);
+    const configChanged = hasPrevious && (
       previous.minimumViewTime !== minimumViewTime || previous.waitForInteraction !== waitForInteraction ||
       previous.itemThreshold !== config.itemVisiblePercentThreshold ||
       previous.areaThreshold !== config.viewAreaCoveragePercentThreshold
     );
-    const inputsChanged = previous == null || subscriberChanged || dataChanged || configChanged ||
+    const inputsChanged = !hasPrevious || subscriberChanged || dataChanged || configChanged ||
       previous.viewport !== viewportH || previous.padding !== ctx.effectivePaddingStartRef.current ||
       previous.interacted !== ctx.hasInteractedRef.current;
     if (subscriberChanged) viewable.clear();
@@ -146,13 +169,17 @@ export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
     last.start = start;
     last.end = end;
     last.layoutVersion = layoutVersion;
-    previous = {
-      items, keyExtractor, callback: cb, minimumViewTime, waitForInteraction,
-      itemThreshold: config.itemVisiblePercentThreshold,
-      areaThreshold: config.viewAreaCoveragePercentThreshold,
-      viewport: viewportH, padding: ctx.effectivePaddingStartRef.current,
-      interacted: ctx.hasInteractedRef.current,
-    };
+    hasPrevious = true;
+    previous.items = items;
+    previous.keyExtractor = keyExtractor;
+    previous.callback = cb;
+    previous.minimumViewTime = minimumViewTime;
+    previous.waitForInteraction = waitForInteraction;
+    previous.itemThreshold = config.itemVisiblePercentThreshold;
+    previous.areaThreshold = config.viewAreaCoveragePercentThreshold;
+    previous.viewport = viewportH;
+    previous.padding = ctx.effectivePaddingStartRef.current;
+    previous.interacted = ctx.hasInteractedRef.current;
 
     const scratch = ctx.scratchRef.current;
     const potential = scratch.potential;
@@ -224,21 +251,21 @@ export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
       if (tok.index != null) viewable.set(tok.index, tok);
     }
 
-    if (ctx.timerRef.current != null) {
-      clearTimeout(ctx.timerRef.current);
-      ctx.timerRef.current = null;
-    }
+    let earliest = Number.NaN;
     if (pending.size > 0 && minimumViewTime > 0) {
-      let earliest = Infinity;
+      earliest = Infinity;
       for (const since of pending.values()) {
         const deadline = since + minimumViewTime;
         if (deadline < earliest) earliest = deadline;
       }
-      const delay = Math.max(0, earliest - now);
-      ctx.timerRef.current = setTimeout(() => {
-        ctx.timerRef.current = null;
-        ctx.reschedule();
-      }, delay);
+    }
+    if (ctx.timerRef.current == null || earliest !== timerDeadline) {
+      if (ctx.timerRef.current != null) clearTimeout(ctx.timerRef.current);
+      ctx.timerRef.current = null;
+      timerDeadline = earliest;
+      if (!Number.isNaN(earliest)) {
+        ctx.timerRef.current = setTimeout(reschedule, Math.max(0, earliest - now));
+      }
     }
 
     if (removed.length > 0 || newlyViewable.length > 0) {

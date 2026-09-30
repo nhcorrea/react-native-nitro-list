@@ -12,7 +12,7 @@ import {
   type AdmissionRange,
 } from './prewarmAdmission';
 import {stabilizeRange} from './rangeHysteresis';
-import {flushWaiters, waitForLayoutPass} from './scrollCommands';
+import {flushWaiters, waitForEventOrLayoutPass, waitForLayoutPass} from './scrollCommands';
 
 type Ref<V> = {current: V};
 
@@ -166,11 +166,19 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     // needs the live window at every intermediate offset.
     const direction = engineOffset - ctx.lastLiveEngineOffsetRef.current;
     ctx.lastLiveEngineOffsetRef.current = engineOffset;
-    const raw: AdmissionRange = {start, end};
-    const stable = NitroListDevFlags.rangeEdgeHysteresis
-      ? stabilizeRange(raw, ctx.latestRangeRef.current, direction, ctx.itemCountRef.current)
-      : raw;
-    ctx.latestRangeRef.current = stable;
+    const latest = ctx.latestRangeRef.current;
+    let stable: AdmissionRange = latest;
+    if (latest.start !== start || latest.end !== end) {
+      const raw: AdmissionRange = {start, end};
+      stable = NitroListDevFlags.rangeEdgeHysteresis
+        ? stabilizeRange(raw, latest, direction, ctx.itemCountRef.current)
+        : raw;
+      ctx.latestRangeRef.current = stable;
+    }
+    const tracked = ctx.store.get('range');
+    if (tracked.start === stable.start && tracked.end === stable.end && tracked.layoutVersion === version) {
+      return;
+    }
     ctx.setRangeTracked({start: stable.start, end: stable.end, layoutVersion: version});
   };
 
@@ -298,10 +306,7 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     }
     if (ctx.commitCounterRef.current < ctx.pendingCommitRef.current) {
       const t = trace ? Date.now() : 0;
-      const by = await Promise.race([
-        new Promise<'evt'>((resolve) => ctx.commitWaitersRef.current.push(() => resolve('evt'))),
-        waitForLayoutPass().then(() => 'raf' as const),
-      ]);
+      const by = await waitForEventOrLayoutPass(ctx.commitWaitersRef.current);
       if (trace) trace.push(`commit:${by} ${Date.now() - t}`);
     } else if (trace) {
       trace.push('commit:skip');
@@ -309,12 +314,7 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     const awaiting = ctx.cellBridgeRef.current.awaitingLayout;
     if (awaiting > 0) {
       const t = trace ? Date.now() : 0;
-      const by = await Promise.race([
-        new Promise<'evt'>((resolve) =>
-          ctx.layoutSettleWaitersRef.current.push(() => resolve('evt')),
-        ),
-        waitForLayoutPass().then(() => 'raf' as const),
-      ]);
+      const by = await waitForEventOrLayoutPass(ctx.layoutSettleWaitersRef.current);
       if (trace) trace.push(`layout(${awaiting}):${by} ${Date.now() - t}`);
     } else if (trace) {
       trace.push('layout:skip');

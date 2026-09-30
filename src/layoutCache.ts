@@ -41,19 +41,40 @@ export const LAYOUT_MAX_PAGES = 64;
 export const LAYOUT_PAGE_BYTES = LAYOUT_PAGE_ITEMS * (8 + 8 + 1);
 export const LAYOUT_READ_BYTES = (LAYOUT_READ_HEADER + 2 * LAYOUT_PAGE_ITEMS) * 8;
 
-type Page = {generation: number; tops: Float64Array; sizes: Float64Array; valid: Uint8Array};
+type Page = {
+  generation: number;
+  used: number;
+  tops: Float64Array;
+  sizes: Float64Array;
+  valid: Uint8Array;
+};
+
+function leastRecentlyUsedKey(pages: Map<number, Page>): number {
+  let oldestKey = -1;
+  let oldestUse = Infinity;
+  for (const key of pages.keys()) {
+    const used = pages.get(key)!.used;
+    if (used < oldestUse) {
+      oldestUse = used;
+      oldestKey = key;
+    }
+  }
+  return oldestKey;
+}
 
 export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
   const pages = new Map<number, Page>();
   let generation = 1;
   let lastPageKey = -1;
   let lastPage: Page | null = null;
+  let useClock = 0;
   let totalSize = 0;
   let totalGeneration = 0;
   let snapshotGeneration = 0;
   let previousCount = ctx.itemCount;
   let slab: Float64Array<ArrayBuffer> = nativeFloat64Array(SNAPSHOT_HEADER + 2 * 64);
   let readBuffer: Float64Array<ArrayBuffer> | null = null;
+  const snapshot: {slab: Float64Array; written: number} = {slab, written: 0};
   let knownGeneration = 0;
   let knownVersion = 0;
   let knownRevision = 0;
@@ -73,26 +94,28 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
     const key = Math.floor(index / LAYOUT_PAGE_ITEMS);
     if (lastPageKey === key && lastPage != null) return lastPage;
     let page = pages.get(key);
-    if (page != null) {
-      pages.delete(key);
-    } else if (pages.size >= LAYOUT_MAX_PAGES) {
-      const oldest = pages.keys().next().value!;
-      page = pages.get(oldest)!;
-      pages.delete(oldest);
-      page.generation = -1;
-    } else {
-      page = {
-        generation: -1,
-        tops: new Float64Array(LAYOUT_PAGE_ITEMS),
-        sizes: new Float64Array(LAYOUT_PAGE_ITEMS),
-        valid: new Uint8Array(LAYOUT_PAGE_ITEMS),
-      };
+    if (page == null) {
+      if (pages.size >= LAYOUT_MAX_PAGES) {
+        const oldest = leastRecentlyUsedKey(pages);
+        page = pages.get(oldest)!;
+        pages.delete(oldest);
+        page.generation = -1;
+      } else {
+        page = {
+          generation: -1,
+          used: 0,
+          tops: new Float64Array(LAYOUT_PAGE_ITEMS),
+          sizes: new Float64Array(LAYOUT_PAGE_ITEMS),
+          valid: new Uint8Array(LAYOUT_PAGE_ITEMS),
+        };
+      }
+      pages.set(key, page);
     }
+    page.used = ++useClock;
     if (page.generation !== generation) {
       page.valid.fill(0);
       page.generation = generation;
     }
-    pages.set(key, page);
     lastPageKey = key;
     lastPage = page;
     return page;
@@ -215,7 +238,10 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
       if (slab[11] > slab.length) slab = nativeFloat64Array(Math.max(slab.length * 2, slab[11]));
       written = engine.fillLayoutSlab(slab.buffer);
     }
-    return validSnapshot(slab, written) ? {slab, written} : null;
+    if (!validSnapshot(slab, written)) return null;
+    snapshot.slab = slab;
+    snapshot.written = written;
+    return snapshot;
   };
 
   const fillSlab = (
