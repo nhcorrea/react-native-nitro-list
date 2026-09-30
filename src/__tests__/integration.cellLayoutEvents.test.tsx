@@ -59,7 +59,7 @@ describe('cell layout events (fronteira 1.5)', () => {
     expect(measuring.props.onLayout).toBe(beforeProps.onLayout);
   });
 
-  it('keeps mounted sizes when an in-place data change invalidates them, in the same data commit', async () => {
+  it('keeps mounted sizes without a data commit when an in-place change touches only measured cells', async () => {
     const items = Array.from({length: 30}, (_, i) => ({id: `r${i}`, rev: 0}));
     harness = renderNitroList<unknown>(
       {
@@ -80,16 +80,45 @@ describe('cell layout events (fronteira 1.5)', () => {
     const next = items.slice();
     next[2] = {id: 'r2', rev: 1};
     harness.mirror.callLog.length = 0;
+    const commitsBefore = harness.mirror.dataCommits.length;
 
     harness.update({data: next});
 
-    expect(harness.mirror.dataCommits.at(-1)![9]).toBe(2);
+    expect(harness.mirror.dataCommits).toHaveLength(commitsBefore);
     for (const index of mounted) expect(harness.handle.getItemSize(index)).toBe(150);
     await harness.settle(50);
     expect(harness.mirror.callLog.filter((call) => call === 'setItemSizesAndFill')).toHaveLength(0);
     for (const index of harness.renderedIndices()) {
       if (mounted.includes(index)) expect(harness.handle.getItemSize(index)).toBe(150);
     }
+  });
+
+  it('invalidates from the first changed item that no mounted cell re-supplies', async () => {
+    const items = Array.from({length: 30}, (_, i) => ({id: `r${i}`, rev: 0}));
+    harness = renderNitroList<unknown>(
+      {
+        data: items,
+        estimatedItemSize: 100,
+        keyExtractor: (item) => (item as {id: string}).id,
+        renderItem: () => null,
+      },
+      {typeAverages: false},
+    );
+    harness.layout(400, 800);
+    harness.measureUnmeasuredCells(() => 150);
+    await harness.settle(50);
+    harness.measureUnmeasuredCells(() => 150);
+    await harness.settle(50);
+    const mounted = harness.renderedIndices();
+    expect(mounted).not.toContain(25);
+    const next = items.slice();
+    next[2] = {id: 'r2', rev: 1};
+    next[25] = {id: 'r25', rev: 1};
+
+    harness.update({data: next});
+
+    expect(harness.mirror.dataCommits.at(-1)![9]).toBe(25);
+    for (const index of mounted) expect(harness.handle.getItemSize(index)).toBe(150);
   });
 
   it('does not wait for layout events from measured cells whose index shifted', async () => {

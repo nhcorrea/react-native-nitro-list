@@ -1575,9 +1575,45 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const fixedDataBufferRef = useRef<Float64Array<ArrayBuffer> | null>(null);
   fixedDataBufferRef.current ??= nativeFloat64Array(128);
   const reportedMemoryCountRef = useRef(0);
+  const sentColumnLayoutRef = useRef<typeof columnLayout>(null);
+  const carriedIndicesRef = useRef<Set<number>>(new Set());
+  const firstUncarriedChange = (from: number, last: number, previous?: ReadonlyArray<T>): number => {
+    if (from < 0 || from >= itemCount) return -1;
+    const carried = carriedIndicesRef.current;
+    carried.clear();
+    for (const record of cellBridgeRef.current.cells) {
+      const identity = record.identity;
+      if (identity == null || !record.measures || record.rearm || record.raw < 0) continue;
+      if (identity.index < from || identity.index > last) continue;
+      if (
+        isCurrentMeasurement(
+          identity,
+          items,
+          measurementRevision,
+          itemsAreEqual as ((prev: unknown, next: unknown, index: number) => boolean) | undefined,
+        )
+      ) {
+        carried.add(identity.index);
+      }
+    }
+    let index = from;
+    while (
+      index <= last &&
+      (carried.has(index) || (previous != null && index < previous.length && previous[index] === items[index]))
+    ) {
+      index++;
+    }
+    carried.clear();
+    return index <= last ? index : -1;
+  };
   const dataConfigBufferRef = useRef<Float64Array<ArrayBuffer> | null>(null);
   dataConfigBufferRef.current ??= nativeFloat64Array(DATA_CONFIG_LENGTH);
-  const commitNativeData = (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number): void => {
+  const commitNativeData = (
+    remap: KeyRemapPairs | null,
+    reset: boolean,
+    invalidateFrom: number,
+    previous?: ReadonlyArray<T>,
+  ): void => {
     const engine = engineRef.current;
     if (engine == null) return;
     const domainChanged = nativeMeasurementRevisionRef.current !== measurementRevision;
@@ -1589,15 +1625,23 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       }
     }
     nativeMeasurementRevisionRef.current = measurementRevision;
+    if (reset) itemTypes.forgetSeeds();
     const prepared = itemTypes.prepareTypes();
     if (fixedDataBufferRef.current!.length > Math.max(128, itemCount * 8)) {
       fixedDataBufferRef.current = nativeFloat64Array(Math.max(128, itemCount * 2));
     }
     let fixedData = fixedDataBufferRef.current!;
     let fixedCount = 0;
-    const from = reset ? 0 : invalidateFrom < 0 ? itemCount : invalidateFrom;
+    const fixedFrom = reset ? 0 : invalidateFrom < 0 ? itemCount : invalidateFrom;
+    if (!reset && remap == null && pendingSizesRef.current.count === 0) {
+      invalidateFrom = firstUncarriedChange(
+        invalidateFrom,
+        Math.min(dataAnalysis.lastChanged, itemCount - 1),
+        previous,
+      );
+    }
     if (getFixedItemSize != null || autoFixedTypesRef.current.size > 0) {
-      for (let i = from; i < itemCount; ++i) {
+      for (let i = fixedFrom; i < itemCount; ++i) {
         const size = resolveFixedSize(items[i], i, getItemType?.(items[i], i));
         if (size == null || !Number.isFinite(size) || size < 0) continue;
         fixedData = growNativeFloat64Array(fixedData, (fixedCount + 1) * 2);
@@ -1631,15 +1675,33 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       }
     }
     fixedDataBufferRef.current = fixedData;
-    invalidateLayoutCache();
     const config = dataConfigBufferRef.current!;
+    const spansPending = columnLayout != null && (reset || columnLayout !== sentColumnLayoutRef.current);
+    if (
+      !reset &&
+      remap == null &&
+      invalidateFrom < 0 &&
+      prepared.count === 0 &&
+      fixedCount === 0 &&
+      !spansPending &&
+      config[1] === itemCount &&
+      config[2] === estimatedItemSize &&
+      config[3] === effectiveDrawDistance &&
+      config[4] === Number(isHorizontal) &&
+      config[5] === resolvedColumns &&
+      config[6] === MEASUREMENT_EPSILON_DP
+    ) {
+      return;
+    }
+    sentColumnLayoutRef.current = columnLayout;
+    invalidateLayoutCache();
     writeDataConfig(config, {count: itemCount, estimate: estimatedItemSize,
       draw: effectiveDrawDistance, horizontal: isHorizontal, columns: resolvedColumns,
       epsilon: MEASUREMENT_EPSILON_DP, reset, revision: ++nativeDataRevisionRef.current,
       invalidateFrom, typeStart: prepared.start, typeCount: prepared.count, typeOffset: prepared.offset,
       fixedCount, remapCount: remap?.mappedCount ?? 0,
-      spanCount: columnLayout == null ? 0 : itemCount - (reset ? 0 : columnLayout.changedFrom),
-      spanStart: reset ? 0 : columnLayout?.changedFrom ?? 0});
+      spanCount: !spansPending ? 0 : itemCount - (reset ? 0 : columnLayout.changedFrom),
+      spanStart: reset || !spansPending ? 0 : columnLayout.changedFrom});
     engine.updateData(config.buffer, prepared.types.buffer,
       (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer(),
       fixedData.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer());

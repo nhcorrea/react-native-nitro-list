@@ -32,6 +32,7 @@ export interface ItemTypesCtx<T> {
 export interface ItemTypesApi {
   seedTypeMeans: () => void;
   forgetSent: () => void;
+  forgetSeeds: () => void;
   prepareTypes: () => {
     types: Uint16Array<ArrayBuffer>;
     start: number;
@@ -45,6 +46,7 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
   let typedWithCallback = false;
   let typeBuffer: Uint16Array<ArrayBuffer> | null = null;
   let sentCount = -1;
+  const seededKeys = new Set<string>();
 
   const seedTypeMeans = (): void => {
     const hybrid = ctx.engineRef.current;
@@ -56,13 +58,14 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     let seedCount = 0;
     const seeds = new Float64Array(map.size * 2);
     for (const [type, id] of map) {
-      const mean = getCachedMean(
-        measurementCacheKey(type, widthDp, fontScale, ctx.measurementCacheDomain),
-      );
+      const key = measurementCacheKey(type, widthDp, fontScale, ctx.measurementCacheDomain);
+      if (seededKeys.has(key)) continue;
+      const mean = getCachedMean(key);
       if (mean != null) {
         seeds[seedCount * 2] = id;
         seeds[seedCount * 2 + 1] = mean;
         seedCount++;
+        seededKeys.add(key);
       }
     }
     if (ctx.autoFixedEnabledRef.current) {
@@ -147,6 +150,10 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     seedTypeMeans,
     forgetSent: () => {
       sentCount = -1;
+      seededKeys.clear();
+    },
+    forgetSeeds: () => {
+      seededKeys.clear();
     },
   };
 }

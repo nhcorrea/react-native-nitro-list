@@ -64,6 +64,17 @@ export function didKeysChangeStructurally<T>(
   return false;
 }
 
+export function lastDifferingIndex<T>(
+  prev: ReadonlyArray<T>,
+  next: ReadonlyArray<T>,
+  from: number,
+): number {
+  if (prev.length !== next.length) return next.length - 1;
+  let i = next.length - 1;
+  while (i >= from && prev[i] === next[i]) i--;
+  return i;
+}
+
 export function firstDifferingIndex<T>(prev: ReadonlyArray<T>, next: ReadonlyArray<T>): number {
   const common = Math.min(prev.length, next.length);
   let i = 0;

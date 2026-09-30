@@ -47,6 +47,7 @@ function run(options: {
     },
     analysis: {
       firstChanged: 0,
+      lastChanged: options.next.length - 1,
       versionChanged: options.dataVersion != null,
       keysChanged: true,
     },

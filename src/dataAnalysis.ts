@@ -1,7 +1,8 @@
-import {didKeysChangeStructurally, firstDifferingIndex} from './keyRemap';
+import {didKeysChangeStructurally, firstDifferingIndex, lastDifferingIndex} from './keyRemap';
 
 export interface DataAnalysis {
   firstChanged: number;
+  lastChanged: number;
   versionChanged: boolean;
   keysChanged: boolean;
 }
@@ -14,10 +15,11 @@ export function analyzeData<T>(
   keyExtractor?: (item: T, index: number) => string,
 ): DataAnalysis {
   const firstChanged = versionChanged ? 0 : firstDifferingIndex(previous, items);
+  const lastChanged = versionChanged ? items.length - 1 : lastDifferingIndex(previous, items, firstChanged);
   const keysChanged =
     versionChanged ||
     (keyExtractor == null
       ? previous !== items
       : didKeysChangeStructurally(previous, items, keyExtractor, firstChanged));
-  return {firstChanged, versionChanged, keysChanged};
+  return {firstChanged, lastChanged, versionChanged, keysChanged};
 }

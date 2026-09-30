@@ -15,7 +15,12 @@ type Ref<V> = {current: V};
 type RangeState = {start: number; end: number; layoutVersion: number};
 
 export interface DataChangeCtx<T> {
-  commitData: (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number) => void;
+  commitData: (
+    remap: KeyRemapPairs | null,
+    reset: boolean,
+    invalidateFrom: number,
+    previous?: ReadonlyArray<T>,
+  ) => void;
   analysis: DataAnalysis;
   items: ReadonlyArray<T>;
   dataVersion: unknown;
@@ -160,7 +165,7 @@ export function createDataChangeHandler<T>(ctx: DataChangeCtx<T>): () => void {
           ctx.viewabilityTimerRef.current = null;
         }
       } else {
-        ctx.commitData(null, false, ctx.analysis.firstChanged);
+        ctx.commitData(null, false, ctx.analysis.firstChanged, prevItems);
         committed = true;
         const viewable = ctx.viewableRef.current;
         for (const [idx, tok] of viewable) {
