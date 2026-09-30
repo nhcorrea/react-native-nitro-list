@@ -16,7 +16,7 @@ type RangeState = {start: number; end: number; layoutVersion: number};
 
 export interface DataChangeCtx<T> {
   commitData: (remap: KeyRemapPairs | null, reset: boolean, invalidateFrom: number) => void;
-  analysis: DataAnalysis<T>;
+  analysis: DataAnalysis;
   items: ReadonlyArray<T>;
   dataVersion: unknown;
   keyExtractor?: (item: T, index: number) => string;

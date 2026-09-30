@@ -1,6 +1,5 @@
 import React, {
   forwardRef,
-  useCallback,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -77,6 +76,123 @@ export type NitroSectionListProps<
   onViewableItemsChanged?: NitroSectionListOnViewableItemsChanged<ItemT, SectionT>;
 };
 
+function rowKeyExtractor(row: {key: string}): string {
+  return row.key;
+}
+
+function createRowType<ItemT, SectionT extends NitroSectionBase<ItemT>>(
+  getItemType: ((item: ItemT, index: number) => string | number) | undefined,
+): (row: NitroSectionRow<ItemT, SectionT>) => string {
+  return (row) => {
+    if (row.kind === 'item' && getItemType != null) {
+      return `item:${getItemType(row.item, row.itemIndex)}`;
+    }
+    return row.kind;
+  };
+}
+
+function createRenderRow<ItemT, SectionT extends NitroSectionBase<ItemT>>(
+  renderItem: NitroSectionListProps<ItemT, SectionT>['renderItem'],
+  renderSectionHeader: NitroSectionListProps<ItemT, SectionT>['renderSectionHeader'],
+  renderSectionFooter: NitroSectionListProps<ItemT, SectionT>['renderSectionFooter'],
+  ItemSeparatorComponent: NitroSectionListProps<ItemT, SectionT>['ItemSeparatorComponent'],
+): NitroListRenderItem<NitroSectionRow<ItemT, SectionT>> {
+  return ({item: row}) => {
+    switch (row.kind) {
+      case 'header':
+        return renderSectionHeader?.({section: row.section}) ?? null;
+      case 'footer':
+        return renderSectionFooter?.({section: row.section}) ?? null;
+      case 'separator':
+        return ItemSeparatorComponent != null ? (
+          <ItemSeparatorComponent leadingItem={row.leadingItem} />
+        ) : null;
+      case 'item':
+        return renderItem({item: row.item, index: row.itemIndex, section: row.section});
+    }
+  };
+}
+
+function translateViewTokens<ItemT, SectionT extends NitroSectionBase<ItemT>>(
+  tokens: ReadonlyArray<NitroListViewToken<NitroSectionRow<ItemT, SectionT>>>,
+): Array<NitroSectionListViewToken<ItemT, SectionT>> {
+  const translated: Array<NitroSectionListViewToken<ItemT, SectionT>> = [];
+  for (const token of tokens) {
+    const row = token.item;
+    if (row.kind !== 'item') continue;
+    translated.push({
+      item: row.item,
+      key: token.key,
+      index: row.itemIndex,
+      section: row.section,
+      sectionIndex: row.sectionIndex,
+      isViewable: token.isViewable,
+      timestamp: token.timestamp,
+    });
+  }
+  return translated;
+}
+
+function createViewableRowsHandler<ItemT, SectionT extends NitroSectionBase<ItemT>>(
+  onViewableItemsChanged: NitroSectionListOnViewableItemsChanged<ItemT, SectionT> | undefined,
+): NitroListOnViewableItemsChanged<NitroSectionRow<ItemT, SectionT>> | undefined {
+  if (onViewableItemsChanged == null) return undefined;
+  return ({viewableItems, changed}) => {
+    const translatedViewable = translateViewTokens(viewableItems);
+    const translatedChanged = translateViewTokens(changed);
+    if (translatedViewable.length === 0 && translatedChanged.length === 0) return;
+    onViewableItemsChanged({
+      viewableItems: translatedViewable,
+      changed: translatedChanged,
+    });
+  };
+}
+
+function createSectionListHandle<ItemT, SectionT extends NitroSectionBase<ItemT>>(
+  listRef: {current: NitroListHandle | null},
+  flattenedRef: {current: FlattenedSections<ItemT, SectionT> | undefined},
+): NitroSectionListHandle {
+  const base = (): NitroListHandle => {
+    const current = listRef.current;
+    if (current == null) throw new Error('NitroSectionList handle is not attached');
+    return current;
+  };
+  return {
+    scrollToOffset: (params) => base().scrollToOffset(params),
+    scrollToIndex: (params) => base().scrollToIndex(params),
+    scrollToEnd: (animated) => base().scrollToEnd(animated),
+    getAbsoluteLastScrollOffset: () => base().getAbsoluteLastScrollOffset(),
+    getItemOffset: (index) => base().getItemOffset(index),
+    getItemSize: (index) => base().getItemSize(index),
+    getTotalSize: () => base().getTotalSize(),
+    getLayout: (index) => base().getLayout(index),
+    getWindowSize: () => base().getWindowSize(),
+    getFirstItemOffset: () => base().getFirstItemOffset(),
+    getScrollableNode: () => base().getScrollableNode(),
+    getNativeScrollRef: () => base().getNativeScrollRef(),
+    getAverageItemSizes: () => base().getAverageItemSizes(),
+    reportContentInset: (insets) => base().reportContentInset(insets),
+    scrollIndexIntoView: (params) => base().scrollIndexIntoView(params),
+    scrollItemIntoView: (params) => base().scrollItemIntoView(params),
+    scrollToLocation({
+      sectionIndex,
+      itemIndex,
+      animated = false,
+      viewOffset = 0,
+      viewPosition = 0,
+    }: NitroSectionListScrollToLocationParams) {
+      const flatIndex = flatIndexForLocation(flattenedRef.current!, sectionIndex, itemIndex);
+      if (flatIndex == null || listRef.current == null) return Promise.resolve();
+      return listRef.current.scrollToIndex({
+        index: flatIndex,
+        animated,
+        viewOffset,
+        viewPosition,
+      });
+    },
+  };
+}
+
 function NitroSectionListInner<
   ItemT,
   SectionT extends NitroSectionBase<ItemT> = NitroSectionBase<ItemT>,
@@ -115,111 +231,19 @@ function NitroSectionListInner<
     flattenedRef.current = flattened;
   });
 
-  const rowKeyExtractor = useCallback((row: NitroSectionRow<ItemT, SectionT>) => row.key, []);
+  const rowType = useMemo(() => createRowType<ItemT, SectionT>(getItemType), [getItemType]);
 
-  const rowType = useCallback(
-    (row: NitroSectionRow<ItemT, SectionT>) => {
-      if (row.kind === 'item' && getItemType != null) {
-        return `item:${getItemType(row.item, row.itemIndex)}`;
-      }
-      return row.kind;
-    },
-    [getItemType],
-  );
-
-  const renderRow = useCallback<NitroListRenderItem<NitroSectionRow<ItemT, SectionT>>>(
-    ({item: row}) => {
-      switch (row.kind) {
-        case 'header':
-          return renderSectionHeader?.({section: row.section}) ?? null;
-        case 'footer':
-          return renderSectionFooter?.({section: row.section}) ?? null;
-        case 'separator':
-          return ItemSeparatorComponent != null ? (
-            <ItemSeparatorComponent leadingItem={row.leadingItem} />
-          ) : null;
-        case 'item':
-          return renderItem({item: row.item, index: row.itemIndex, section: row.section});
-      }
-    },
+  const renderRow = useMemo(
+    () => createRenderRow<ItemT, SectionT>(renderItem, renderSectionHeader, renderSectionFooter, ItemSeparatorComponent),
     [renderItem, renderSectionHeader, renderSectionFooter, ItemSeparatorComponent],
   );
 
-  const onViewableRowsChanged = useMemo<
-    NitroListOnViewableItemsChanged<NitroSectionRow<ItemT, SectionT>> | undefined
-  >(() => {
-    if (onViewableItemsChanged == null) return undefined;
-    const translate = (
-      token: NitroListViewToken<NitroSectionRow<ItemT, SectionT>>,
-    ): NitroSectionListViewToken<ItemT, SectionT> | null => {
-      const row = token.item;
-      if (row.kind !== 'item') return null;
-      return {
-        item: row.item,
-        key: token.key,
-        index: row.itemIndex,
-        section: row.section,
-        sectionIndex: row.sectionIndex,
-        isViewable: token.isViewable,
-        timestamp: token.timestamp,
-      };
-    };
-    return ({viewableItems, changed}) => {
-      const translatedViewable = viewableItems
-        .map(translate)
-        .filter((token): token is NitroSectionListViewToken<ItemT, SectionT> => token != null);
-      const translatedChanged = changed
-        .map(translate)
-        .filter((token): token is NitroSectionListViewToken<ItemT, SectionT> => token != null);
-      if (translatedViewable.length === 0 && translatedChanged.length === 0) return;
-      onViewableItemsChanged({
-        viewableItems: translatedViewable,
-        changed: translatedChanged,
-      });
-    };
-  }, [onViewableItemsChanged]);
+  const onViewableRowsChanged = useMemo(
+    () => createViewableRowsHandler<ItemT, SectionT>(onViewableItemsChanged),
+    [onViewableItemsChanged],
+  );
 
-  useImperativeHandle(ref, () => {
-    const base = (): NitroListHandle => {
-      const current = listRef.current;
-      if (current == null) throw new Error('NitroSectionList handle is not attached');
-      return current;
-    };
-    return {
-      scrollToOffset: (params) => base().scrollToOffset(params),
-      scrollToIndex: (params) => base().scrollToIndex(params),
-      scrollToEnd: (animated) => base().scrollToEnd(animated),
-      getAbsoluteLastScrollOffset: () => base().getAbsoluteLastScrollOffset(),
-      getItemOffset: (index) => base().getItemOffset(index),
-      getItemSize: (index) => base().getItemSize(index),
-      getTotalSize: () => base().getTotalSize(),
-      getLayout: (index) => base().getLayout(index),
-      getWindowSize: () => base().getWindowSize(),
-      getFirstItemOffset: () => base().getFirstItemOffset(),
-      getScrollableNode: () => base().getScrollableNode(),
-      getNativeScrollRef: () => base().getNativeScrollRef(),
-      getAverageItemSizes: () => base().getAverageItemSizes(),
-      reportContentInset: (insets) => base().reportContentInset(insets),
-      scrollIndexIntoView: (params) => base().scrollIndexIntoView(params),
-      scrollItemIntoView: (params) => base().scrollItemIntoView(params),
-      scrollToLocation({
-        sectionIndex,
-        itemIndex,
-        animated = false,
-        viewOffset = 0,
-        viewPosition = 0,
-      }: NitroSectionListScrollToLocationParams) {
-        const flatIndex = flatIndexForLocation(flattenedRef.current!, sectionIndex, itemIndex);
-        if (flatIndex == null || listRef.current == null) return Promise.resolve();
-        return listRef.current.scrollToIndex({
-          index: flatIndex,
-          animated,
-          viewOffset,
-          viewPosition,
-        });
-      },
-    };
-  }, []);
+  useImperativeHandle(ref, () => createSectionListHandle(listRef, flattenedRef), []);
 
   return (
     <NitroList<NitroSectionRow<ItemT, SectionT>>

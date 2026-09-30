@@ -46,8 +46,6 @@ function run(options: {
       commits.push({remap, reset});
     },
     analysis: {
-      previous: options.prev,
-      items: options.next,
       firstChanged: 0,
       versionChanged: options.dataVersion != null,
       keysChanged: true,

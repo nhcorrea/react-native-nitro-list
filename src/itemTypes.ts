@@ -12,7 +12,7 @@ type Ref<V> = {current: V};
 export type ItemTypeKey = string | number;
 
 export interface ItemTypesCtx<T> {
-  analysis: DataAnalysis<T>;
+  analysis: DataAnalysis;
   items: ReadonlyArray<T>;
   itemCount: number;
   getItemType?: (item: T, index: number) => ItemTypeKey;

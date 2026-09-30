@@ -65,6 +65,10 @@ type ScrollHandlers = {
   onMomentumEnd?: (event: unknown, context: Record<string, unknown>) => void;
 };
 
+function useRegistrationThatOutlivesRenders(handlers: ScrollHandlers): void {
+  useRef(handlers);
+}
+
 export function useAnimatedScrollHandler(
   handlers: ScrollHandlers,
   deps?: ReadonlyArray<unknown>,
@@ -72,6 +76,7 @@ export function useAnimatedScrollHandler(
   noteDependencies('useAnimatedScrollHandler', deps);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
+  useRegistrationThatOutlivesRenders(handlers);
   const contextRef = useRef<Record<string, unknown>>({});
   const dispatchRef = useRef<((event: {nativeEvent?: unknown}) => void) | null>(null);
   if (dispatchRef.current == null) {

@@ -33,6 +33,60 @@ export type KeyboardAwareNitroListProps<T> = NitroListProps<T> & {
   keyboardFreeze?: boolean | SharedValue<boolean>;
 };
 
+type KeyboardScrollOptions = Pick<
+  KeyboardAwareNitroListProps<unknown>,
+  'keyboardOffset' | 'keyboardLiftBehavior' | 'extraContentPadding' | 'keyboardFreeze'
+>;
+type ContentInsets = {top: number; bottom: number; left: number; right: number};
+
+function wireAnchoredEndSpace(
+  anchoredEndSpace: NitroListAnchoredEndSpaceConfig | undefined,
+  blankSpace: SharedValue<number>,
+  userOnSizeChangedRef: {current: ((size: number) => void) | undefined},
+): NitroListAnchoredEndSpaceConfig | undefined {
+  if (anchoredEndSpace == null) return undefined;
+  return {
+    ...anchoredEndSpace,
+    onSizeChanged: (size: number) => {
+      blankSpace.value = size;
+      userOnSizeChangedRef.current?.(size);
+    },
+  };
+}
+
+function createInsetReporter(
+  listRef: {current: NitroListHandle | null},
+): (insets: ContentInsets) => void {
+  return (insets) => {
+    listRef.current?.reportContentInset({bottom: insets.bottom});
+  };
+}
+
+function createKeyboardScrollComponent(
+  module: KeyboardControllerModule | null,
+  options: KeyboardScrollOptions,
+  blankSpace: SharedValue<number>,
+  handleContentInsetChange: (insets: ContentInsets) => void,
+): NitroListRenderScrollComponent | undefined {
+  if (module == null) return undefined;
+  const ChatScrollView = module.KeyboardChatScrollView;
+  const {keyboardOffset, keyboardLiftBehavior, extraContentPadding, keyboardFreeze} = options;
+  return ({ref: scrollRef, children, ...scrollProps}) => (
+    <ChatScrollView
+      ref={scrollRef as React.Ref<ScrollView>}
+      style={StyleSheet.absoluteFill}
+      offset={keyboardOffset}
+      keyboardLiftBehavior={keyboardLiftBehavior}
+      extraContentPadding={extraContentPadding}
+      freeze={keyboardFreeze}
+      blankSpace={blankSpace}
+      onContentInsetChange={handleContentInsetChange}
+      {...scrollProps}>
+      {children}
+    </ChatScrollView>
+  );
+}
+
 function KeyboardAwareNitroListInner<T>(
   props: KeyboardAwareNitroListProps<T>,
   ref: React.Ref<NitroListHandle>,
@@ -53,50 +107,30 @@ function KeyboardAwareNitroListInner<T>(
   const userOnSizeChangedRef = useRef(anchoredEndSpace?.onSizeChanged);
   userOnSizeChangedRef.current = anchoredEndSpace?.onSizeChanged;
 
-  const wiredAnchored = useMemo<NitroListAnchoredEndSpaceConfig | undefined>(() => {
-    if (anchoredEndSpace == null) return undefined;
-    return {
-      ...anchoredEndSpace,
-      onSizeChanged: (size: number) => {
-        blankSpace.value = size;
-        userOnSizeChangedRef.current?.(size);
-      },
-    };
-  }, [anchoredEndSpace, blankSpace]);
-
-  const handleContentInsetChange = useCallback(
-    (insets: {top: number; bottom: number; left: number; right: number}) => {
-      listRef.current?.reportContentInset({bottom: insets.bottom});
-    },
-    [],
+  const wiredAnchored = useMemo(
+    () => wireAnchoredEndSpace(anchoredEndSpace, blankSpace, userOnSizeChangedRef),
+    [anchoredEndSpace, blankSpace],
   );
 
-  const renderScrollComponent = useMemo<NitroListRenderScrollComponent | undefined>(() => {
-    const module = keyboardControllerModule;
-    if (module == null) return undefined;
-    const ChatScrollView = module.KeyboardChatScrollView;
-    return ({ref: scrollRef, children, ...scrollProps}) => (
-      <ChatScrollView
-        ref={scrollRef as React.Ref<ScrollView>}
-        style={StyleSheet.absoluteFill}
-        offset={keyboardOffset}
-        keyboardLiftBehavior={keyboardLiftBehavior}
-        extraContentPadding={extraContentPadding}
-        freeze={keyboardFreeze}
-        blankSpace={blankSpace}
-        onContentInsetChange={handleContentInsetChange}
-        {...scrollProps}>
-        {children}
-      </ChatScrollView>
-    );
-  }, [
-    keyboardOffset,
-    keyboardLiftBehavior,
-    extraContentPadding,
-    keyboardFreeze,
-    blankSpace,
-    handleContentInsetChange,
-  ]);
+  const handleContentInsetChange = useMemo(() => createInsetReporter(listRef), []);
+
+  const renderScrollComponent = useMemo(
+    () =>
+      createKeyboardScrollComponent(
+        keyboardControllerModule,
+        {keyboardOffset, keyboardLiftBehavior, extraContentPadding, keyboardFreeze},
+        blankSpace,
+        handleContentInsetChange,
+      ),
+    [
+      keyboardOffset,
+      keyboardLiftBehavior,
+      extraContentPadding,
+      keyboardFreeze,
+      blankSpace,
+      handleContentInsetChange,
+    ],
+  );
 
   if (keyboardControllerModule == null) {
     warnDevOnce(

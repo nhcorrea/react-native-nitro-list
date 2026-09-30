@@ -1,5 +1,4 @@
 import React, {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -74,6 +73,85 @@ export function resupplyCellSize(
   record.laidOut = true;
   record.reported = size;
   enqueueItemSize(identity.index, size, identity);
+}
+
+function registerCell(cellBridge: CellBridge, record: CellRecord): () => void {
+  cellBridge.cells.add(record);
+  return () => {
+    cellBridge.cells.delete(record);
+    if (record.awaiting) {
+      record.awaiting = false;
+      cellBridge.awaitingLayout--;
+      if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
+    }
+  };
+}
+
+function deactivateOnCleanup(identity: MeasurementIdentity): () => void {
+  return () => {
+    identity.active = false;
+  };
+}
+
+function recordItemLifetime(): (() => void) | undefined {
+  if (!NITRO_LIST_PERF_COMPILED) return undefined;
+  NitroListPerfMonitor.recordItemMount();
+  return recordItemUnmount;
+}
+
+function recordItemUnmount(): void {
+  NitroListPerfMonitor.recordItemUnmount();
+}
+
+function createCellLayoutHandler(
+  record: CellRecord,
+  cellBridge: CellBridge,
+  enqueueItemSize: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void,
+): (e: LayoutChangeEvent) => void {
+  return (e) => {
+    const layout = e.nativeEvent.layout;
+    const raw = record.horizontal ? layout.width : layout.height;
+    record.raw = raw;
+    const current = record.identity;
+    if (current == null || !current.active) return;
+    if (record.fixedSize != null) {
+      if (IS_DEV && Math.abs(raw - record.fixedSize) > MEASUREMENT_NOISE_EPSILON_DP) {
+        warnDevOnce(
+          'fixed-item-size-mismatch',
+          `getFixedItemSize returned ${record.fixedSize} for index ${current.index}, but the ` +
+            `cell measured ${raw}. Fixed-size cells skip measurement, so the fixed value wins ` +
+            `and items after this one will overlap or gap. Fix getFixedItemSize or remove it ` +
+            `for this item.`,
+        );
+      }
+      return;
+    }
+    if (current.geometry !== current.revision.geometry) return;
+    const size = raw + record.gap;
+    if (record.autoFixedSize != null) {
+      if (Math.abs(size - record.autoFixedSize) > MEASUREMENT_NOISE_EPSILON_DP) {
+        cellBridge.onAutoFixedMismatch(current.index, size, current);
+      }
+      return;
+    }
+    if (!record.laidOut) {
+      record.laidOut = true;
+      if (record.awaiting) {
+        record.awaiting = false;
+        cellBridge.awaitingLayout--;
+      }
+    }
+    if (
+      record.reported >= 0 &&
+      Math.abs(size - record.reported) <= MEASUREMENT_NOISE_EPSILON_DP
+    ) {
+      if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
+      return;
+    }
+    record.reported = size;
+    enqueueItemSize(current.index, size, current);
+    if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
+  };
 }
 
 export function markCellSupplied(record: CellRecord, cellBridge: CellBridge): void {
@@ -530,13 +608,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   if (NITRO_LIST_PERF_COMPILED) {
     NitroListPerfMonitor.recordItemRender();
   }
-  useEffect(() => {
-    if (!NITRO_LIST_PERF_COMPILED) return;
-    NitroListPerfMonitor.recordItemMount();
-    return () => {
-      NitroListPerfMonitor.recordItemUnmount();
-    };
-  }, []);
+  useEffect(recordItemLifetime, []);
   const recordRef = useRef<CellRecord | null>(null);
   if (recordRef.current == null) recordRef.current = createCellRecord();
   const record = recordRef.current;
@@ -551,17 +623,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
     }),
     [index, item, measurementRevision, measurementGeometry],
   );
-  useLayoutEffect(() => {
-    cellBridge.cells.add(record);
-    return () => {
-      cellBridge.cells.delete(record);
-      if (record.awaiting) {
-        record.awaiting = false;
-        cellBridge.awaitingLayout--;
-        if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
-      }
-    };
-  }, [cellBridge, record]);
+  useLayoutEffect(() => registerCell(cellBridge, record), [cellBridge, record]);
   useLayoutEffect(() => {
     const previous = record.identity;
     const wasMeasuring = record.measures;
@@ -599,9 +661,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
         if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
       }
     }
-    return () => {
-      identity.active = false;
-    };
+    return deactivateOnCleanup(identity);
   }, [
     identity,
     horizontal,
@@ -613,51 +673,8 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
     enqueueItemSize,
     record,
   ]);
-  const handleLayout = useCallback(
-    (e: LayoutChangeEvent) => {
-      const layout = e.nativeEvent.layout;
-      const raw = record.horizontal ? layout.width : layout.height;
-      record.raw = raw;
-      const current = record.identity;
-      if (current == null || !current.active) return;
-      if (record.fixedSize != null) {
-        if (IS_DEV && Math.abs(raw - record.fixedSize) > MEASUREMENT_NOISE_EPSILON_DP) {
-          warnDevOnce(
-            'fixed-item-size-mismatch',
-            `getFixedItemSize returned ${record.fixedSize} for index ${current.index}, but the ` +
-              `cell measured ${raw}. Fixed-size cells skip measurement, so the fixed value wins ` +
-              `and items after this one will overlap or gap. Fix getFixedItemSize or remove it ` +
-              `for this item.`,
-          );
-        }
-        return;
-      }
-      if (current.geometry !== current.revision.geometry) return;
-      const size = raw + record.gap;
-      if (record.autoFixedSize != null) {
-        if (Math.abs(size - record.autoFixedSize) > MEASUREMENT_NOISE_EPSILON_DP) {
-          cellBridge.onAutoFixedMismatch(current.index, size, current);
-        }
-        return;
-      }
-      if (!record.laidOut) {
-        record.laidOut = true;
-        if (record.awaiting) {
-          record.awaiting = false;
-          cellBridge.awaitingLayout--;
-        }
-      }
-      if (
-        record.reported >= 0 &&
-        Math.abs(size - record.reported) <= MEASUREMENT_NOISE_EPSILON_DP
-      ) {
-        if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
-        return;
-      }
-      record.reported = size;
-      enqueueItemSize(current.index, size, current);
-      if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
-    },
+  const handleLayout = useMemo(
+    () => createCellLayoutHandler(record, cellBridge, enqueueItemSize),
     [record, cellBridge, enqueueItemSize],
   );
   const containerStyle = useMemo(() => {

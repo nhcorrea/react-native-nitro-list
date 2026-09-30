@@ -5,6 +5,7 @@ import {act, create, type ReactTestRenderer} from 'react-test-renderer';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
 import type {NitroListHandle} from '../NitroList';
+import {reachableLabels} from './helpers/gc';
 import {clearMirrorsForTests} from './helpers/mockNitroListHost';
 import {makeItems, itemKey} from './helpers/harness';
 
@@ -52,6 +53,24 @@ function getCaptured(): CapturedChatProps {
   };
   if (module.__captured.props == null) throw new Error('ChatScrollView never rendered');
   return module.__captured.props;
+}
+
+type KeyboardListProps = React.ComponentProps<typeof KeyboardAwareNitroList<string>>;
+
+function keyboardGeneration(refs: Map<string, WeakRef<object>>, tag: string): KeyboardListProps {
+  const items = makeItems(30);
+  refs.set(tag, new WeakRef(items));
+  return withFreshCallbacks({data: items, renderItem: () => null, estimatedItemSize: 100});
+}
+
+function withFreshCallbacks(props: KeyboardListProps): KeyboardListProps {
+  const items = props.data ?? [];
+  return {
+    ...props,
+    renderItem: () => (items.length > 0 ? null : null),
+    keyExtractor: (item) => (items.length > 0 ? item : ''),
+    anchoredEndSpace: {anchorIndex: 28, onSizeChanged: () => void items},
+  };
 }
 
 function getDismissMock(): jest.Mock {
@@ -187,5 +206,39 @@ describe('keyboard entry point (T27)', () => {
     });
     expect(getDismissMock()).toHaveBeenCalled();
     expect(ref.current?.getAbsoluteLastScrollOffset()).toBeCloseTo(30 * 100 - 600, 0);
+  });
+
+  it('keeps only the current data generation reachable', async () => {
+    const refs = new Map<string, WeakRef<object>>();
+    const state: {props: KeyboardListProps | null; mounted: boolean} = {props: null, mounted: false};
+    const render = () => {
+      act(() => {
+        const element = <KeyboardAwareNitroList<string> {...state.props!} />;
+        if (state.mounted) renderer.update(element);
+        else renderer = create(element);
+        state.mounted = true;
+      });
+    };
+    const advance = async (tag: string) => {
+      state.props = keyboardGeneration(refs, tag);
+      render();
+      if (tag === 'A') {
+        act(() => {
+          getCaptured().onLayout?.({
+            nativeEvent: {layout: {x: 0, y: 0, width: 400, height: 600}},
+          } as LayoutChangeEvent);
+        });
+      }
+      state.props = withFreshCallbacks(state.props);
+      render();
+      state.props = withFreshCallbacks(state.props);
+      render();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(50);
+      });
+    };
+    for (const tag of ['A', 'B', 'C', 'D', 'E']) await advance(tag);
+    expect(getCaptured().blankSpace?.value).toBe(400);
+    expect(await reachableLabels(refs)).toEqual(['E']);
   });
 });
