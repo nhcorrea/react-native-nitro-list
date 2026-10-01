@@ -78,3 +78,6 @@ lib/
 tsconfig.tsbuildinfo
 /docs
 .claude
+
+# Benchmark v2 sessions and build receipts
+/benchmark-results/

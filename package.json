@@ -51,6 +51,8 @@
     }
   },
   "scripts": {
+    "bench": "node scripts/benchmark/cli.mjs",
+    "test:bench": "node --test scripts/benchmark/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "clean": "git clean -dfX",
