@@ -1252,6 +1252,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       hybridRef.current
     ) {
       hybridRef.current.setEstimatesFrozen(false);
+      // The range notification may arrive later; synchronous landing reads
+      // must already see the means applied by the thaw.
+      invalidateLayoutCache();
       if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
     }
   });

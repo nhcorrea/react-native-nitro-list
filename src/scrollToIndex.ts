@@ -16,6 +16,8 @@ export interface ScrollToIndexParams {
   viewOffset?: number;
 }
 
+type ScrollRequest = ScrollToIndexParams & {resolveViewOffset?: () => number};
+
 type Ref<V> = {current: V};
 type RangeState = {start: number; end: number; layoutVersion: number};
 
@@ -66,7 +68,7 @@ export interface ScrollToIndexApi {
     viewOffset: number,
   ) => number | null;
   computeStartScrollOffset: (finalOffset: number, lastAbsoluteScrollOffset: number) => number;
-  converge: (params: ScrollToIndexParams) => Promise<void>;
+  converge: (params: ScrollToIndexParams, releaseEstimates?: () => void) => Promise<void>;
   precisely: (params: ScrollToIndexParams) => Promise<void>;
   toEnd: (animated: boolean) => Promise<void>;
 }
@@ -111,7 +113,8 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     animated = false,
     viewPosition = 0,
     viewOffset = 0,
-  }: ScrollToIndexParams): Promise<void> => {
+    resolveViewOffset,
+  }: ScrollRequest, releaseEstimates?: () => void): Promise<void> => {
     if (index < 0 || index >= ctx.itemCount) return;
 
     const commandId = ctx.beginScrollCommand();
@@ -134,7 +137,9 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     if (superseded()) return;
     devMark('ready');
 
-    let finalOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
+    const destination = () =>
+      computeIndexScrollOffset(index, viewPosition, resolveViewOffset?.() ?? viewOffset);
+    let finalOffset = destination();
     if (finalOffset == null) return;
 
     if (animated) {
@@ -184,7 +189,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
           if (superseded()) return;
           devMark(`step${step}`);
 
-          const newFinalOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
+          const newFinalOffset = destination();
           if (newFinalOffset == null) {
             ctx.setPrewarmRangeTracked(null);
             return;
@@ -205,6 +210,12 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
           }
         }
 
+        // Applying the newly learned type means can move every unmeasured
+        // prefix item. Converge on that geometry before issuing the native jump.
+        releaseEstimates?.();
+        if (superseded()) return;
+        finalOffset = destination();
+        if (finalOffset == null) return;
         for (let pass = 0; pass < SCROLL_TO_INDEX_CORRECTION_PASSES; pass++) {
           if (superseded()) return;
           devCorrectionPasses++;
@@ -214,7 +225,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
           if (superseded()) return;
           devMark(`pass${pass}`);
 
-          const correctedOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
+          const correctedOffset = destination();
           if (correctedOffset == null) {
             ctx.setPrewarmRangeTracked(null);
             return;
@@ -261,13 +272,14 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
       return;
     }
 
+    releaseEstimates?.();
     for (let pass = 0; pass < SCROLL_TO_INDEX_CORRECTION_PASSES; pass++) {
       if (superseded()) return;
       devCorrectionPasses++;
       await waitForLayoutPass();
       if (superseded()) return;
 
-      const correctedOffset = computeIndexScrollOffset(index, viewPosition, viewOffset);
+      const correctedOffset = destination();
       if (correctedOffset == null) {
         ctx.setPrewarmRangeTracked(null);
         return;
@@ -291,11 +303,17 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     }
   };
 
-  const precisely = async (params: ScrollToIndexParams): Promise<void> => {
+  const precisely = async (params: ScrollRequest): Promise<void> => {
     ctx.acquireEstimateFreeze();
+    let frozen = true;
+    const releaseEstimates = () => {
+      if (!frozen) return;
+      frozen = false;
+      ctx.releaseEstimateFreeze();
+    };
     try {
       const idBefore = ctx.scrollCommandIdRef.current;
-      const running = converge(params);
+      const running = converge(params, releaseEstimates);
       const commandId = ctx.scrollCommandIdRef.current;
       if (commandId === idBefore) {
         await running;
@@ -304,7 +322,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
       await Promise.race([running, ctx.trackScrollCommand(commandId)]);
       ctx.resolveScrollCommand(commandId);
     } finally {
-      ctx.releaseEstimateFreeze();
+      releaseEstimates();
     }
   };
 
@@ -324,7 +342,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
       index: ctx.itemCount - 1,
       animated,
       viewPosition: 1,
-      viewOffset:
+      resolveViewOffset: () =>
         ctx.footerSize +
         ctx.paddingEnd +
         ctx.endSpaceRef.current +

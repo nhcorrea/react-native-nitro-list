@@ -190,6 +190,8 @@ interface RunReport {
   traveledDp: number;
   itemsTraversed: number;
   mountsPerItem: number | null;
+  setupMs?: number;
+  streamUpdates?: number;
   perf: NitroListPerfSnapshot;
 }
 
@@ -415,6 +417,10 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
   const runAbortRef = useRef(false);
   const runningRef = useRef(false);
   const matrixRunningRef = useRef(false);
+  const streamPreparationRef = useRef<{
+    items: BenchItem[];
+    complete: (committed: boolean) => void;
+  } | null>(null);
 
   const items = useMemo(() => makeItems(dataset), [dataset]);
   const itemsRef = useRef(items);
@@ -424,11 +430,20 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
   const {estimatedItemSize} = DATASETS[dataset];
 
   useEffect(() => {
+    const preparation = streamPreparationRef.current;
+    if (streaming && preparation != null && chatItems === preparation.items) {
+      preparation.complete(true);
+    }
+  }, [chatItems, streaming]);
+
+  useEffect(() => {
     NitroListPerfMonitor.enable();
     const interval = setInterval(() => {
       setSnapshot(NitroListPerfMonitor.getSnapshot());
     }, 500);
     return () => {
+      runAbortRef.current = true;
+      streamPreparationRef.current?.complete(false);
       clearInterval(interval);
       NitroListPerfMonitor.disable();
     };
@@ -622,20 +637,47 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
   );
 
   const runStreamRun = useCallback(
-    (ds: DatasetKey, scenario: string) =>
-      new Promise<{row: string; report: RunReport} | null>((resolve) => {
-        const list = listRef.current;
-        if (!list) {
-          resolve(null);
-          return;
+    async (ds: DatasetKey, scenario: string): Promise<{row: string; report: RunReport} | null> => {
+      if (!listRef.current) return null;
+      markRunning(true);
+      runAbortRef.current = false;
+      const setupStartedAt = Date.now();
+      const preparedItems = itemsRef.current.slice();
+      const cancelPreparation = () => {
+        if (listRef.current != null) {
+          setStreaming(false);
+          markRunning(false);
         }
-        markRunning(true);
-        runAbortRef.current = false;
-        setChatItems(itemsRef.current.slice());
-        setStreaming(true);
-        void list.scrollToEnd(false);
-        NitroListPerfMonitor.reset();
+        return null;
+      };
 
+      try {
+        // Commit the chat data and anchor before issuing a scroll command.
+        const committed = await new Promise<boolean>((resolve) => {
+          const timeout = setTimeout(() => complete(false), LIST_READY_TIMEOUT_MS);
+          const complete = (ready: boolean) => {
+            clearTimeout(timeout);
+            streamPreparationRef.current = null;
+            resolve(ready);
+          };
+          streamPreparationRef.current = {items: preparedItems, complete};
+          setChatItems(preparedItems);
+          setStreaming(true);
+        });
+        if (runAbortRef.current || !listRef.current) return cancelPreparation();
+        if (!committed) throw new Error('chat preparation did not commit');
+        await listRef.current.scrollToEnd(false);
+        // Let the native scroll event and remaining layout work settle.
+        await delay(STI_REPOSITION_SETTLE_MS);
+        if (runAbortRef.current || !listRef.current) return cancelPreparation();
+      } catch (error) {
+        benchLog('[NitroListBenchmark] stream preparation failed:', String(error));
+        return cancelPreparation();
+      }
+
+      const setupMs = Date.now() - setupStartedAt;
+      NitroListPerfMonitor.reset();
+      return new Promise<{row: string; report: RunReport} | null>((resolve) => {
         const startedAt = Date.now();
         let lastTick = startedAt;
         let ticks = 0;
@@ -661,6 +703,10 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
 
         const finish = () => {
           clearInterval(interval);
+          if (!listRef.current) {
+            resolve(null);
+            return;
+          }
           const durationMs = Date.now() - startedAt;
           const gapTail = tickGaps.snapshot();
           const perf = NitroListPerfMonitor.getSnapshot();
@@ -678,6 +724,8 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
             traveledDp: 0,
             itemsTraversed: 0,
             mountsPerItem: null,
+            setupMs,
+            streamUpdates: token,
             perf,
           };
           setLastReport(report);
@@ -708,7 +756,8 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
           requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
-      }),
+      });
+    },
     [markRunning],
   );
 
@@ -747,6 +796,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
 
   const stop = useCallback(() => {
     runAbortRef.current = true;
+    streamPreparationRef.current?.complete(false);
   }, []);
 
   const remount = useCallback(() => {
@@ -842,6 +892,7 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
         } else if (cell.kind === 'stream') {
           const result = await runStreamRun(cell.dataset, scenario);
           if (result) {
+            benchLog('[NitroListBenchmark] stream run:', JSON.stringify(result.report, null, 2));
             allRows.push(result.row);
             cols.push(colsFrom(result.report.perf, result.report));
           }
@@ -887,18 +938,14 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
     benchLog('[NitroListBenchmark] results row:\n' + row);
   }, [dataset, lastReport, scenarioSuffix]);
 
-  if (!NITRO_LIST_PERF_COMPILED) {
-    return null;
-  }
-
   const s = snapshot;
   const avgBatch =
     s && s.batchFlushes > 0 ? Math.round((s.batchPairsSum / s.batchFlushes) * 10) / 10 : 0;
   const rendersPerMount =
     s && s.itemMounts > 0 ? Math.round((s.itemRenders / s.itemMounts) * 100) / 100 : null;
 
-  return (
-    <View style={styles.container}>
+  const controls = useMemo(
+    () => (
       <View style={styles.controls}>
         {headerAccessory}
         <View style={styles.buttonRow}>
@@ -1047,6 +1094,18 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
           </Text>
         ) : null}
       </View>
+    ),
+    [headerAccessory, dataset, applyConfig, runScrollTest, runScrollToIndexTest, runMode,
+      running, matrixProgress, stop, remount, dump, drawDistance, uiThreadScroll, driver,
+      runStreamTest, jsLoadMs, fixedSizes, autoFixed, runMatrix, devFlags, toggleDevFlag,
+      s, avgBatch, rendersPerMount, lastReport, matrixRows, lastRow],
+  );
+
+  if (!NITRO_LIST_PERF_COMPILED) return null;
+
+  return (
+    <View style={styles.container}>
+      {controls}
       <View style={styles.listWrapper}>
         <NitroList<BenchItem>
           key={`${dataset}-${remountKey}`}

@@ -393,6 +393,52 @@ describe('imperative scroll integration', () => {
     expect(harness.lastScrollTop()).toBeCloseTo(lastBottom - VIEWPORT_H, 0);
   });
 
+  it.each([
+    {tailSize: 60, atEnd: false},
+    {tailSize: 180, atEnd: false},
+    {tailSize: 60, atEnd: true},
+    {tailSize: 180, atEnd: true},
+  ])('keeps the landing when thawing a $tailSize dp tail (end=$atEnd)', async ({tailSize, atEnd}) => {
+    const count = 5_000;
+    const target = atEnd ? count - 1 : 4_000;
+    harness = renderNitroList({
+      data: makeItems(count),
+      renderItem: () => null,
+      estimatedItemSize: 120,
+      keyExtractor: itemKey,
+      getItemType: () => 'message',
+      anchoredEndSpace: atEnd ? {anchorIndex: target} : undefined,
+    }, {asyncRangeDelivery: true});
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    const height = (index: number) => index < count / 2 ? 120 : tailSize;
+    // The anchored tail starts at its estimate and gets its true height while
+    // the jump is preparing, changing the padding used by scrollToEnd.
+    await drive(index => atEnd && index === target ? 120 : height(index), 3);
+
+    let landing!: Promise<void>;
+    let done = false;
+    const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
+    act(() => {
+      landing = (atEnd ? harness.handle.scrollToEnd(false)
+        : harness.handle.scrollToIndex({index: target, viewPosition: 0.5}))
+        .then(() => { done = true; });
+    });
+    for (let round = 0; round < 40 && !done; round++) {
+      act(() => { jest.runOnlyPendingTimers(); });
+      harness.measureUnmeasuredCells(height);
+      await act(async () => {
+        for (let i = 0; i < 6; i++) await Promise.resolve();
+      });
+    }
+    expect(done).toBe(true);
+    await landing;
+
+    const expected = harness.mirror.getItemOffset(target) - (atEnd ? 0 : (VIEWPORT_H - tailSize) / 2);
+    expect(harness.lastScrollTop()).toBeCloseTo(expected, 0);
+    await harness.settle(20);
+    expect(harness.observedNativeOffset).toBeCloseTo(expected, 0);
+  });
+
   it('initialScrollIndex seeds contentOffset from the estimate and settles on the item', async () => {
     harness = renderNitroList({
       data: makeItems(200),

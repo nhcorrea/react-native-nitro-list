@@ -4,7 +4,8 @@ import {renderNitroList, type NitroListHarness} from './helpers/harness';
 
 type Msg = {id: string; type: string; text: string; height: number};
 
-const COUNT = 500;
+// Match the on-device chat benchmark, including its long unchanged prefix.
+const COUNT = 5_000;
 const VIEWPORT_W = 400;
 const VIEWPORT_H = 800;
 
@@ -65,7 +66,9 @@ describe('engine calls on a chat stream (fronteira 1.9)', () => {
   it('streams tokens into the last message without data commits or type seeding', async () => {
     harness = await mountAtEnd();
     harness.mirror.callLog.length = 0;
-    const TICKS = 24;
+    const anchorPosition =
+      harness.handle.getItemOffset(COUNT - 1) - harness.handle.getAbsoluteLastScrollOffset();
+    const TICKS = 128;
     for (let token = 1; token <= TICKS; token++) {
       const grow = token % 8 === 0 ? 20 : 0;
       const next = msgs.slice();
@@ -76,6 +79,9 @@ describe('engine calls on a chat stream (fronteira 1.9)', () => {
       await harness.settle(25);
       if (grow > 0) harness.measureCell(msgs.length - 1, msgs[msgs.length - 1].height);
       await harness.settle(25);
+      expect(
+        harness.handle.getItemOffset(COUNT - 1) - harness.handle.getAbsoluteLastScrollOffset(),
+      ).toBeCloseTo(anchorPosition, 0);
     }
     expect(calls('updateData')).toBe(0);
     expect(calls('seedTypeMeans')).toBe(0);
