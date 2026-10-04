@@ -36,7 +36,6 @@ const uint16_t* shortsOf(const std::shared_ptr<ArrayBuffer>& buffer, int32_t& co
 }
 
 HybridNitroListEngine::HybridNitroListEngine() : HybridObject(TAG) {
-  core_.setDirectionalBuffers(true);
   core_.setTypeAverages(true);
 }
 

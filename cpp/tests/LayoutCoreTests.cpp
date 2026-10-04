@@ -89,8 +89,12 @@ struct ReferenceModel {
       outEnd = -1;
       return;
     }
-    const double top = std::max(0.0, scroll - draw);
-    const double bottom = std::min(totalSize(), scroll + viewportH + draw);
+    const double total = totalSize();
+    const bool inside = scroll < total;
+    const double unusedTop = inside ? std::max(0.0, draw - scroll) : 0.0;
+    const double unusedBottom = inside ? std::max(0.0, scroll + viewportH + draw - total) : 0.0;
+    const double top = std::max(0.0, scroll - draw - unusedBottom);
+    const double bottom = std::min(total, scroll + viewportH + draw + unusedTop);
     int32_t start = 0;
     while (start < count && offsetOf(start) + sizes[start] <= top) start++;
     if (start >= count) {

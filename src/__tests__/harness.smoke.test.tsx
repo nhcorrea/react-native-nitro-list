@@ -30,7 +30,7 @@ describe('harness smoke', () => {
 
     harness.frame();
     const expanded = harness.renderedIndices();
-    expect(expanded[expanded.length - 1]).toBe(8);
+    expect(expanded[expanded.length - 1]).toBe(10);
 
     harness.measureAllCells(() => 150);
     harness.frame();

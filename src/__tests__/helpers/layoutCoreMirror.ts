@@ -586,19 +586,24 @@ export class LayoutCoreMirror {
       }
     }
     const regime = this.directionalBuffers ? this.regime : 0;
-    const topBuffer =
+    let topBuffer =
       regime === 0
         ? drawDistance
         : regime > 0
           ? drawDistance * BUFFER_BEHIND_RATIO
           : drawDistance * BUFFER_AHEAD_RATIO;
-    const bottomBuffer =
+    let bottomBuffer =
       regime === 0
         ? drawDistance
         : regime > 0
           ? drawDistance * BUFFER_AHEAD_RATIO
           : drawDistance * BUFFER_BEHIND_RATIO;
     this.ensureClean();
+    const inside = scrollOffset < this.totalSize;
+    const unusedTop = inside ? Math.max(0, topBuffer - scrollOffset) : 0;
+    const unusedBottom = inside ? Math.max(0, scrollOffset + viewportHeight + bottomBuffer - this.totalSize) : 0;
+    topBuffer += unusedBottom;
+    bottomBuffer += unusedTop;
     if (this.itemCount === 0 || viewportHeight <= 0) {
       return {start: 0, end: -1, version: this.layoutVersion};
     }
@@ -863,7 +868,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
   constructor(config: HybridMirrorConfig = {}) {
     this.explicitEpsilon = config.measurementEpsilon != null;
     this.core.setMeasurementEpsilon(config.measurementEpsilon ?? 0.51);
-    this.core.setDirectionalBuffers(config.directionalBuffers ?? true);
+    this.core.setDirectionalBuffers(config.directionalBuffers ?? false);
     this.core.setTypeAverages(config.typeAverages ?? true);
     this.asyncRangeDelivery = config.asyncRangeDelivery ?? false;
   }

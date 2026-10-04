@@ -708,13 +708,21 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
     }
   }
   const int32_t regime = directionalBuffers_ ? regime_ : 0;
-  const double topBuffer = regime == 0    ? drawDistance
-                           : regime > 0   ? drawDistance * kBufferBehindRatio
-                                          : drawDistance * kBufferAheadRatio;
-  const double bottomBuffer = regime == 0  ? drawDistance
-                              : regime > 0 ? drawDistance * kBufferAheadRatio
-                                           : drawDistance * kBufferBehindRatio;
-  if (hasRangeWindow_ && minDirtyIndex_ == INT32_MAX && cachedVersion_ == layoutVersion_ &&
+  double topBuffer = regime == 0    ? drawDistance
+                     : regime > 0   ? drawDistance * kBufferBehindRatio
+                                    : drawDistance * kBufferAheadRatio;
+  double bottomBuffer = regime == 0  ? drawDistance
+                        : regime > 0 ? drawDistance * kBufferAheadRatio
+                                     : drawDistance * kBufferBehindRatio;
+  ensureClean();
+  const bool inside = scrollOffset < totalSize_;
+  const double unusedTop = inside ? std::max(0.0, topBuffer - scrollOffset) : 0.0;
+  const double unusedBottom =
+      inside ? std::max(0.0, scrollOffset + viewportHeight + bottomBuffer - totalSize_) : 0.0;
+  const bool atEdge = unusedTop > 0.0 || unusedBottom > 0.0;
+  topBuffer += unusedBottom;
+  bottomBuffer += unusedTop;
+  if (!atEdge && hasRangeWindow_ && minDirtyIndex_ == INT32_MAX && cachedVersion_ == layoutVersion_ &&
       viewportHeight == rangeWindowViewport_ && drawDistance == rangeWindowDraw_ &&
       regime == cachedRegime_ && scrollOffset > rangeWindowMin_ &&
       scrollOffset < rangeWindowMax_) {
@@ -765,7 +773,7 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
   rangeWindowMax_ = upper;
   rangeWindowViewport_ = viewportHeight;
   rangeWindowDraw_ = drawDistance;
-  hasRangeWindow_ = upper > lower;
+  hasRangeWindow_ = !atEdge && upper > lower;
   return EngagedRange{start, end, layoutVersion_};
 }
 
