@@ -80,6 +80,7 @@ tsconfig.tsbuildinfo
 .claude
 /CLAUDE.md
 /example/
+/scripts/benchmark/
 
 # Benchmark v2 sessions and build receipts
 /benchmark-results/
