@@ -322,7 +322,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       range: {start: 0, end: -1, layoutVersion: 0},
       prewarmRange: null,
       stickyIndex: -1,
-      totalSize: Math.max(0, itemCount * estimatedItemSize),
+      containerSize: Math.max(0, itemCount * estimatedItemSize),
       autoFixedTypes: null,
       renderMode: 'normal',
       endSpace: 0,

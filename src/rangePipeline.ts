@@ -1,4 +1,5 @@
 import {validSnapshot} from './layoutSnapshot';
+import {nextContainerSize} from './containerSize';
 import type {CellBridge} from './cells';
 import {NitroListDevFlags} from './devFlags';
 import type {LayoutCacheApi} from './layoutCache';
@@ -223,7 +224,10 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       !ctx.layout.hasCurrentSnapshot()
     ) {
       ctx.writeSlabToCache(slab, written);
-      ctx.store.set('totalSize', slab[1]);
+      ctx.store.set(
+        'containerSize',
+        nextContainerSize(ctx.store.get('containerSize'), slab[1], offset, ctx.mainViewportRef.current),
+      );
     }
     lastDataRevision = slab[6];
     if (commitRange) {

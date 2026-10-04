@@ -6,7 +6,7 @@ export interface ListStoreState {
   range: RangeState;
   prewarmRange: RangeState | null;
   stickyIndex: number;
-  totalSize: number;
+  containerSize: number;
   autoFixedTypes: ReadonlyMap<string | number, number> | null;
   renderMode: 'normal' | 'fast';
   endSpace: number;

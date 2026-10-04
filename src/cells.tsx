@@ -427,9 +427,9 @@ export function ListContainer({
   horizontal: boolean;
   children: React.ReactNode;
 }) {
-  const totalSize = useStoreValue(store, 'totalSize');
+  const containerSize = useStoreValue(store, 'containerSize');
   return (
-    <View collapsable={false} style={horizontal ? {width: totalSize} : {height: totalSize}}>
+    <View collapsable={false} style={horizontal ? {width: containerSize} : {height: containerSize}}>
       {children}
     </View>
   );
