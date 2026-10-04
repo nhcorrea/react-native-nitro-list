@@ -11,6 +11,8 @@ namespace {
 constexpr double kBufferAheadRatio = 1.5;
 constexpr double kBufferBehindRatio = 0.5;
 constexpr double kDirectionalMinVelocity = 300.0;
+constexpr double kDirectionalHoldVelocity = 150.0;
+constexpr int32_t kRegimeExitSamples = 3;
 constexpr double kVelocityStaleMs = 200.0;
 constexpr double kVelocityMinSampleMs = 4.0;
 constexpr int32_t kRegimeConfirmSamples = 2;
@@ -93,6 +95,7 @@ void LayoutCore::setDirectionalBuffers(bool enabled) {
   regime_ = 0;
   pendingRegime_ = 0;
   pendingRegimeCount_ = 0;
+  slowSamples_ = 0;
   hasRangeWindow_ = false;
 }
 
@@ -116,6 +119,7 @@ void LayoutCore::resetScrollVelocity() {
   regime_ = 0;
   pendingRegime_ = 0;
   pendingRegimeCount_ = 0;
+  slowSamples_ = 0;
 }
 
 void LayoutCore::setClockForTesting(ClockFn clock) {
@@ -126,6 +130,7 @@ void LayoutCore::setClockForTesting(ClockFn clock) {
   regime_ = 0;
   pendingRegime_ = 0;
   pendingRegimeCount_ = 0;
+  slowSamples_ = 0;
   hasRangeWindow_ = false;
 }
 
@@ -394,6 +399,7 @@ void LayoutCore::resetAll() {
   regime_ = 0;
   pendingRegime_ = 0;
   pendingRegimeCount_ = 0;
+  slowSamples_ = 0;
 }
 
 size_t LayoutCore::getMemoryFootprint() {
@@ -634,11 +640,13 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
     const double now = clock_ != nullptr ? clock_() : defaultClockMs();
     bool advanceBaseline = true;
     bool sampled = false;
+    bool stale = false;
     if (lastSampleTimeMs_ >= 0.0) {
       const double dt = now - lastSampleTimeMs_;
       if (dt > kVelocityStaleMs) {
         velocity_ = 0.0;
         sampled = true;
+        stale = true;
       } else if (dt >= kVelocityMinSampleMs) {
         velocity_ = (scrollOffset - lastSampleOffset_) / dt * 1000.0;
         sampled = true;
@@ -654,8 +662,16 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
       int32_t candidate = 0;
       if (std::abs(velocity_) >= kDirectionalMinVelocity) {
         candidate = velocity_ > 0.0 ? 1 : -1;
+      } else if (regime_ != 0 && velocity_ * regime_ >= kDirectionalHoldVelocity) {
+        candidate = regime_;
       }
+      const bool slowInRegime =
+          candidate == 0 && regime_ != 0 && !stale && velocity_ * regime_ >= 0.0;
+      slowSamples_ = slowInRegime ? slowSamples_ + 1 : 0;
       if (candidate == regime_) {
+        pendingRegime_ = 0;
+        pendingRegimeCount_ = 0;
+      } else if (slowInRegime && slowSamples_ < kRegimeExitSamples) {
         pendingRegime_ = 0;
         pendingRegimeCount_ = 0;
       } else if (candidate == 0 || regime_ != 0) {

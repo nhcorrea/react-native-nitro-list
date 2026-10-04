@@ -151,6 +151,7 @@ private:
   int32_t regime_ = 0;
   int32_t pendingRegime_ = 0;
   int32_t pendingRegimeCount_ = 0;
+  int32_t slowSamples_ = 0;
 };
 
 }

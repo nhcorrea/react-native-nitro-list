@@ -189,6 +189,61 @@ describe('scripted bench driver churn', () => {
     expect(command.rendersPerMount).toBeLessThanOrEqual(finger.rendersPerMount + 0.1);
   }, 60000);
 
+  it('a slow scroll interrupted by JS stalls keeps the directional window', async () => {
+    async function run(stalls: boolean) {
+      const mounts = new Map<number, number>();
+      const Cell = ({index}: {index: number}) => {
+        useEffect(() => {
+          mounts.set(index, (mounts.get(index) ?? 0) + 1);
+        }, [index]);
+        return null;
+      };
+      const renderItem: NitroListRenderItem<string> = ({index, target}) =>
+        target === 'Cell' ? <Cell index={index} /> : null;
+      harness = renderNitroList(
+        {
+          data: makeItems(ITEM_COUNT),
+          renderItem,
+          estimatedItemSize: ITEM_SIZE,
+          keyExtractor: itemKey,
+          getItemType: () => 'row',
+          drawDistance: 500,
+        },
+      );
+      harness.layout(VIEWPORT_W, VIEWPORT_H);
+      harness.measureAllCells(() => ITEM_SIZE);
+      await harness.settle(50);
+      mounts.clear();
+      const FRAME_MS = 1000 / 60;
+      const STEP_DP = 700 / 60;
+      const FRAMES = 90;
+      const offsets: number[] = [];
+      for (let frame = 1; frame <= FRAMES; frame++) offsets.push(frame * STEP_DP);
+      for (let frame = FRAMES - 1; frame >= 0; frame--) offsets.push(frame * STEP_DP);
+      let next = 0;
+      while (next < offsets.length) {
+        const stalled = stalls && next % 6 === 5;
+        const burst = stalled ? Math.min(3, offsets.length - next) : 1;
+        await harness.settle(stalled ? 3 * FRAME_MS : FRAME_MS);
+        for (let event = 0; event < burst; event++) harness.scroll(offsets[next + event]);
+        next += burst;
+        harness.measureUnmeasuredCells(() => ITEM_SIZE);
+      }
+      await harness.settle(50);
+      let total = 0;
+      for (const count of mounts.values()) total += count;
+      harness.unmount();
+      harness = null;
+      clearMeasurementCache();
+      return total;
+    }
+
+    const stalled = await run(true);
+    const smooth = await run(false);
+    console.info('MOUNTS stalled-slow-scroll', JSON.stringify({stalled, smooth}));
+    expect(stalled).toBeLessThanOrEqual(smooth);
+  });
+
   it('does not churn with the directional buffers disabled', async () => {
     const result = await runDriver({mirrorConfig: {directionalBuffers: false}});
     console.info('MOUNTS_PER_ITEM no-directional', JSON.stringify(result));

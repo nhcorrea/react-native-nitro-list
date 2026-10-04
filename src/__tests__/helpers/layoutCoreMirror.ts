@@ -6,6 +6,8 @@ const f32 = Math.fround;
 const BUFFER_AHEAD_RATIO = 1.5;
 const BUFFER_BEHIND_RATIO = 0.5;
 const DIRECTIONAL_MIN_VELOCITY = 300;
+const DIRECTIONAL_HOLD_VELOCITY = 150;
+const REGIME_EXIT_SAMPLES = 3;
 const VELOCITY_STALE_MS = 200;
 const VELOCITY_MIN_SAMPLE_MS = 4;
 const REGIME_CONFIRM_SAMPLES = 2;
@@ -74,6 +76,7 @@ export class LayoutCoreMirror {
   private regime = 0;
   private pendingRegime = 0;
   private pendingRegimeCount = 0;
+  private slowSamples = 0;
 
   setClock(clock: (() => number) | null): void {
     this.clock = clock ?? (() => Date.now());
@@ -86,6 +89,7 @@ export class LayoutCoreMirror {
     this.regime = 0;
     this.pendingRegime = 0;
     this.pendingRegimeCount = 0;
+    this.slowSamples = 0;
   }
 
   setItemCount(count: number): boolean {
@@ -504,11 +508,13 @@ export class LayoutCoreMirror {
       const now = this.clock();
       let advanceBaseline = true;
       let sampled = false;
+      let stale = false;
       if (this.lastSampleTimeMs >= 0) {
         const dt = now - this.lastSampleTimeMs;
         if (dt > VELOCITY_STALE_MS) {
           this.velocity = 0;
           sampled = true;
+          stale = true;
         } else if (dt >= VELOCITY_MIN_SAMPLE_MS) {
           this.velocity = ((scrollOffset - this.lastSampleOffset) / dt) * 1000;
           sampled = true;
@@ -524,8 +530,15 @@ export class LayoutCoreMirror {
         let candidate = 0;
         if (Math.abs(this.velocity) >= DIRECTIONAL_MIN_VELOCITY) {
           candidate = this.velocity > 0 ? 1 : -1;
+        } else if (this.regime !== 0 && this.velocity * this.regime >= DIRECTIONAL_HOLD_VELOCITY) {
+          candidate = this.regime;
         }
+        const slowInRegime = candidate === 0 && this.regime !== 0 && !stale && this.velocity * this.regime >= 0;
+        this.slowSamples = slowInRegime ? this.slowSamples + 1 : 0;
         if (candidate === this.regime) {
+          this.pendingRegime = 0;
+          this.pendingRegimeCount = 0;
+        } else if (slowInRegime && this.slowSamples < REGIME_EXIT_SAMPLES) {
           this.pendingRegime = 0;
           this.pendingRegimeCount = 0;
         } else if (candidate === 0 || this.regime !== 0) {

@@ -631,6 +631,45 @@ static void testDirectionalBuffers() {
   CHECK(off.end == 62);
 }
 
+static void testStalledSlowScrollKeepsRegime() {
+  LayoutCore core;
+  core.setEstimate(64.0);
+  core.setItemCount(1000);
+  core.setClockForTesting(&fakeClock);
+  core.setDirectionalBuffers(true);
+  const double viewport = 800.0;
+  const double draw = 500.0;
+  const double frameMs = 1000.0 / 60.0;
+  const double step = 700.0 / 60.0;
+  gFakeNowMs = 10000.0;
+  double offset = 0.0;
+  int32_t lastStart = -1;
+  int32_t lastEnd = -1;
+  int32_t retreats = 0;
+  for (int sample = 0; sample < 90; sample++) {
+    const bool stalled = sample % 6 == 5;
+    gFakeNowMs += stalled ? 3.0 * frameMs : frameMs;
+    const int burst = stalled ? 3 : 1;
+    for (int event = 0; event < burst; event++) {
+      offset += step;
+      if (event > 0) gFakeNowMs += 0.1;
+      const LayoutCore::EngagedRange range = core.getEngagedRange(offset, viewport, draw);
+      if (sample >= 6 && (range.start < lastStart || range.end < lastEnd)) retreats++;
+      lastStart = range.start;
+      lastEnd = range.end;
+    }
+  }
+  CHECK(retreats == 0);
+
+  gFakeNowMs += frameMs;
+  const LayoutCore::EngagedRange reversed = core.getEngagedRange(offset - 40.0, viewport, draw);
+  const LayoutCore::EngagedRange symmetric = LayoutCore::EngagedRange{
+      static_cast<int32_t>((offset - 40.0 - draw) / 64.0),
+      static_cast<int32_t>((offset - 40.0 + viewport + draw) / 64.0), 0};
+  CHECK(reversed.start == symmetric.start);
+  CHECK(reversed.end == symmetric.end);
+}
+
 static void testEstimatesFrozen() {
   LayoutCore core;
   core.setTypeAverages(true);
@@ -1460,6 +1499,7 @@ int main(int argc, char** argv) {
   testFillLayoutSlab();
   testReadLayout();
   testDirectionalBuffers();
+  testStalledSlowScrollKeepsRegime();
   testEstimatesFrozen();
   testResetScrollVelocity();
   testFillTypeStats();
