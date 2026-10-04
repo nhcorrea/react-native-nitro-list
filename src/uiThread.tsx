@@ -1,4 +1,5 @@
 import React from 'react';
+import 'react-native-nitro-modules';
 import {StyleSheet, type LayoutChangeEvent} from 'react-native';
 import Animated, {
   makeMutable,

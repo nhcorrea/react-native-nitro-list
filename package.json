@@ -159,6 +159,7 @@
     ],
     "moduleNameMapper": {
       "^react-native-nitro-modules$": "<rootDir>/src/__tests__/helpers/mockNitroModules.ts",
+      "^react-native-nitro-modules/lib/module/NitroModules$": "<rootDir>/src/__tests__/helpers/mockNitroModules.ts",
       "^react-native-worklets$": "<rootDir>/src/__tests__/helpers/mockWorklets.ts",
       "^react-native-reanimated$": "<rootDir>/src/__tests__/helpers/mockReanimated.tsx",
       "NitroListHost$": "<rootDir>/src/__tests__/helpers/mockNitroListHost.tsx"

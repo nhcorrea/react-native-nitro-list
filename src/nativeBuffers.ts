@@ -1,4 +1,4 @@
-import {NitroModules} from 'react-native-nitro-modules';
+import {NitroModules} from './nitroModules';
 
 export function nativeFloat64Array(length: number): Float64Array<ArrayBuffer> {
   const array = new Float64Array(NitroModules.createNativeArrayBuffer(Math.max(1, length) * 8));

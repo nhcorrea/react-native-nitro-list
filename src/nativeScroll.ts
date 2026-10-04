@@ -1,5 +1,5 @@
 import {Platform, type ScrollView} from 'react-native';
-import {NitroModules} from 'react-native-nitro-modules';
+import {NitroModules} from './nitroModules';
 import type {NitroListScrollView} from './NitroListScrollView.nitro';
 
 let androidScrollView: NitroListScrollView | undefined;

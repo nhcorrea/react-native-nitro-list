@@ -1,4 +1,4 @@
-import {NitroModules} from 'react-native-nitro-modules';
+import {NitroModules} from './nitroModules';
 
 import type {NitroListEngine} from './NitroListEngine.nitro';
 
