@@ -11,7 +11,6 @@ updates:
   - package-ecosystem: 'gradle'
     directories:
       - '/android/'
-      - '/example/android/'
     schedule:
       interval: 'daily'
     labels:
@@ -20,17 +19,8 @@ updates:
       - 'dependencies'
       - 'kotlin'
 
-  - package-ecosystem: 'bundler'
-    directory: '/example/'
-    schedule:
-      interval: 'daily'
-    labels:
-      - 'dependencies'
-      - 'ruby'
-
   - package-ecosystem: 'npm'
     directories:
-      - '/example/'
       - '/'
     schedule:
       interval: 'daily'
