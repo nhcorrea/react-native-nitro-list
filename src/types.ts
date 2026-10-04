@@ -162,6 +162,7 @@ export interface NitroListProps<T> {
   itemsAreEqual?: (prev: T, next: T, index: number) => boolean;
   dataVersion?: unknown;
   drawDistance?: number;
+  recycleItems?: boolean;
   horizontal?: boolean;
   numColumns?: number;
   overrideItemLayout?: (layout: {span: number}, item: T, index: number) => void;

@@ -80,7 +80,7 @@ export class NitroListHarness<T = string> {
   get observedNativeOffset(): number {
     return this.nativeOffset;
   }
-  private readonly measuredCells = new WeakSet<ReactTestInstance>();
+  private readonly measuredCells = new WeakMap<ReactTestInstance, number>();
   private readonly fakeScrollRef = {
     scrollTo: ({x, y, animated}: {x?: number; y?: number; animated?: boolean}) => {
       const target = (this.horizontal ? x : y) ?? 0;
@@ -255,7 +255,8 @@ export class NitroListHarness<T = string> {
         node.props != null &&
         typeof node.props.index === 'number' &&
         typeof node.props.top === 'number' &&
-        node.props.enqueueItemSize != null,
+        node.props.enqueueItemSize != null &&
+        node.props.parked !== true,
     )) {
       cells.set(instance.props.index as number, instance);
     }
@@ -361,8 +362,8 @@ export class NitroListHarness<T = string> {
   measureUnmeasuredCells(heightForIndex: (index: number) => number): number {
     const targets: Array<{index: number; onLayout: (event: LayoutChangeEvent) => void}> = [];
     for (const [index, cell] of this.cellInstances()) {
-      if (this.measuredCells.has(cell)) continue;
-      this.measuredCells.add(cell);
+      if (this.measuredCells.get(cell) === index) continue;
+      this.measuredCells.set(cell, index);
       const target = cell.findAll(
         (node) => node.type === View && node.props.onLayout != null,
       )[0];

@@ -159,6 +159,7 @@ describe('maintainVisibleContentPosition integration', () => {
       maintainVisibleContentPosition: true,
     });
     harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.frame();
     measureRendered(items);
     await harness.settle(50);
     harness.scroll(400);

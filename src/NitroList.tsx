@@ -183,6 +183,7 @@ const EMPTY: readonly never[] = Object.freeze([]);
 const NO_STICKY: readonly number[] = Object.freeze([]);
 const MVCP_SCROLL_VIEW_CONFIG = Object.freeze({minIndexForVisible: 0});
 const INITIAL_DRAW_DISTANCE_DP = 50;
+const FIRST_PAINT_ITEMS = 3;
 const ZERO_VIEWPORT_WARNING_FRAMES = 10;
 const PROGRAMMATIC_ANIMATED_SETTLE_FALLBACK_MS = 700;
 const SCROLL_READINESS_TIMEOUT_MS = 800;
@@ -293,6 +294,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     onViewableItemsChanged,
     alwaysRender,
     contentContainerStyle,
+    recycleItems,
   } = props;
 
   const resolvedRenderScrollComponent =
@@ -327,6 +329,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       renderMode: 'normal',
       endSpace: 0,
       mvcpAdjust: 0,
+      dataItems: null,
     });
   }
   const store = storeRef.current;
@@ -705,6 +708,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   pendingSizesRef.current ??= {buffer: nativeFloat64Array(32 * 2), count: 0, rafId: null};
   const cellBridgeRef = useRef<CellBridge>({
     awaitingLayout: 0,
+    followIndex: -1,
     cells: new Set(),
     onLayoutSettled: () => {},
     onAutoFixedMismatch: () => {},
@@ -984,6 +988,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const maintainAtEndRef = useRef<{threshold: number; animated: boolean} | null>(null);
   commitBindings.push(() => {
+    cellBridgeRef.current.followIndex =
+      maintainScrollAtEnd && anchoredEndSpace == null ? itemCount - 1 : -1;
     maintainAtEndRef.current = maintainScrollAtEnd
       ? {
           threshold:
@@ -1013,10 +1019,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     stick.pending = false;
     stick.regrow = false;
   });
+  const stickImmediateRef = useRef(false);
   const scheduleStickToEnd = useStableCallback(stableCallbacks, (animated: boolean) => {
     const stick = stickToEndRef.current;
     stick.pending = true;
-    requestAnimationFrame(() => {
+    const follow = () => {
       const current = stickToEndRef.current;
       const activity = scrollActivityRef.current;
       if (hybridRef.current == null || !current.wasAtEnd || activity.dragging || activity.momentum) {
@@ -1034,7 +1041,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           }
         }
       });
-    });
+    };
+    if (stickImmediateRef.current && !animated) follow();
+    else requestAnimationFrame(follow);
   });
 
   const itemCountRef = useRef(itemCount);
@@ -2450,7 +2459,18 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const lastCommittedLayoutVersionRef = useRef(-1);
   const handleCellsCommit = useStableCallback(
     stableCallbacks,
-    (range: RangeState, _prewarmRange: RangeState | null, phase: 'layout' | 'passive') => {
+    (range: RangeState, _prewarmRange: RangeState | null, phase: 'measure' | 'layout' | 'passive') => {
+      if (phase === 'measure') {
+        const applied = dataChangeCtxRef.current!;
+        if (
+          pendingSizesRef.current.count > 0 &&
+          previousItemsRef.current === applied.items &&
+          Object.is(previousDataVersionRef.current, applied.dataVersion)
+        ) {
+          flushPendingItemSizes();
+        }
+        return;
+      }
       const layoutWaiter = NitroListDevFlags.stiLayoutEffectWaiter;
       if (phase === 'layout') {
         if (layoutWaiter) bumpCommitCounter();
@@ -2568,7 +2588,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       itemTypes.forgetSent();
     }
     // The data handler remaps old sources before a shrinking count is applied.
-    onDataMaybeChanged();
+    const follows = !first && cellBridgeRef.current.followIndex >= 0 && stickToEndRef.current.wasAtEnd;
+    stickImmediateRef.current = follows;
+    try {
+      onDataMaybeChanged();
+      if (pendingSizesRef.current.count > 0) flushPendingItemSizes();
+      store.set('dataItems', items as ReadonlyArray<unknown>);
+    } finally {
+      stickImmediateRef.current = false;
+    }
     if (first) {
       attachEngineRef.current(engine);
       rearmMountedCells(0);
@@ -2627,6 +2655,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
         <ListContainer store={store} horizontal={isHorizontal}>
           <NitroListCells
+            firstPaintLimit={
+              !drawDistanceExpanded &&
+              getFixedItemSize == null &&
+              initialTargetRef.current?.index == null &&
+              initialTargetRef.current?.offset === 0
+                ? FIRST_PAINT_ITEMS
+                : 0
+            }
             measurementRevision={measurementRevision}
             measurementGeometry={measurementGeometry}
             store={store}
@@ -2646,6 +2682,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
             mainAxisGap={mainAxisGap}
             crossAxisGap={crossAxisGap}
             renderItem={renderItem as NitroListRenderItem<unknown>}
+            recycleItems={recycleItems === true}
             ItemSeparatorComponent={
               ItemSeparatorComponent as React.ComponentType<{leadingItem: unknown}> | undefined
             }

@@ -168,6 +168,7 @@ describe('callback identity (fronteira 1.1)', () => {
     };
     harness = renderNitroList(props, {typeAverages: false});
     harness.layout(400, 4000);
+    harness.frame();
     harness.measureAllCells(() => 64);
     await harness.settle(50);
     const cells = harness.cellInstances();

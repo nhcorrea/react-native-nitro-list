@@ -120,7 +120,8 @@ Cells are keyed by item key. A new function identity never remounts a cell or di
 
 | Prop | Type | Description |
 | --- | --- | --- |
-| `drawDistance` | `number` | How far beyond the viewport to render, in dp. Default `250`. Higher means fewer chances of blank space during fast scrolls at the cost of more mounted cells. |
+| `drawDistance` | `number` | How far beyond the viewport to render, in dp. Default `250`. Higher means fewer chances of blank space during fast scrolls at the cost of more mounted cells. At the top or bottom edge, the share that has nowhere to go on one side is rendered on the other. A list that mounts at the top without `getFixedItemSize` commits its first three items alone and fills the window on the next frame, so the first frame with content arrives sooner. |
+| `recycleItems` | `boolean` | Reuse mounted cells for items of the same type (`getItemType`) instead of unmounting the cell that left the window and mounting a new one. Default `false`. Scrolling creates far fewer native views. State held inside the component returned by `renderItem` survives when the cell moves to another item: derive it from `item`, or reset it with a `key` on that component. |
 | `horizontal` | `boolean` | Row layout: offsets, measurements, sticky headers and viewability all run on the x axis (cells report their width). |
 | `numColumns` | `number` | Grid layout. Rows advance by their tallest cell. Changing the value re-measures everything, since cell width changed. Ignored when `horizontal`. |
 | `overrideItemLayout` | `(layout: { span }, item, index) => void` | Set a per-item column span by mutating `layout.span`. |

@@ -34,6 +34,7 @@ describe('maintainVisibleContentPosition {data, size} config (T34)', () => {
       maintainVisibleContentPosition: mvcp,
     });
     harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.frame();
     harness.measureAllCells(() => 100);
     await harness.settle(50);
     harness.scroll(500);

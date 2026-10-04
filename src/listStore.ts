@@ -1,4 +1,4 @@
-import {useCallback, useSyncExternalStore} from 'react';
+import {useCallback, useRef, useSyncExternalStore} from 'react';
 
 export type RangeState = {start: number; end: number; layoutVersion: number};
 
@@ -11,6 +11,7 @@ export interface ListStoreState {
   renderMode: 'normal' | 'fast';
   endSpace: number;
   mvcpAdjust: number;
+  dataItems: ReadonlyArray<unknown> | null;
 }
 
 export type ListStoreKey = keyof ListStoreState;
@@ -59,4 +60,57 @@ export function useStoreValue<K extends ListStoreKey>(store: ListStore, key: K):
   );
   const read = useCallback(() => store.get(key), [store, key]);
   return useSyncExternalStore(subscribe, read, read);
+}
+
+type StoreSelection<K extends ListStoreKey> = {
+  store: ListStore;
+  keys: readonly K[];
+  subscribe: (listener: Listener) => () => void;
+  read: () => Pick<ListStoreState, K>;
+};
+
+function createStoreSelection<K extends ListStoreKey>(
+  store: ListStore,
+  keys: readonly K[],
+): StoreSelection<K> {
+  let cached: Pick<ListStoreState, K> | null = null;
+  return {
+    store,
+    keys,
+    subscribe(listener) {
+      const unsubscribes = keys.map((key) => store.subscribe(key, listener));
+      return () => {
+        for (const unsubscribe of unsubscribes) unsubscribe();
+      };
+    },
+    read() {
+      if (cached != null) {
+        let same = true;
+        for (const key of keys) {
+          if (!Object.is(cached[key], store.get(key))) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return cached;
+      }
+      const next = {} as Pick<ListStoreState, K>;
+      for (const key of keys) next[key] = store.get(key);
+      cached = next;
+      return next;
+    },
+  };
+}
+
+export function useStoreValues<K extends ListStoreKey>(
+  store: ListStore,
+  keys: readonly K[],
+): Pick<ListStoreState, K> {
+  const selectionRef = useRef<StoreSelection<K> | null>(null);
+  let selection = selectionRef.current;
+  if (selection == null || selection.store !== store || selection.keys !== keys) {
+    selection = createStoreSelection(store, keys);
+    selectionRef.current = selection;
+  }
+  return useSyncExternalStore(selection.subscribe, selection.read, selection.read);
 }
