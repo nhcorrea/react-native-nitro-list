@@ -55,6 +55,7 @@ namespace margelo::nitro::nitrolist {
   public:
     // Methods
     void scrollTo(double viewTag, double x, double y, bool animated) override;
+    void setEagerMount(bool enabled) override;
 
   private:
     jni::global_ref<JHybridNitroListScrollViewSpec::JavaPart> _javaPart;

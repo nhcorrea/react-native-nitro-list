@@ -22,7 +22,7 @@ import {
 } from 'react-native';
 
 import {createNitroListEngine, reportEngineMemory, type NitroListEngine} from './NitroListHost';
-import {scrollToNativeOffset} from './nativeScroll';
+import {scrollToNativeOffset, setNativeEagerMount} from './nativeScroll';
 import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {
@@ -295,7 +295,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     alwaysRender,
     contentContainerStyle,
     recycleItems,
+    experimentalEagerMount,
   } = props;
+
+  useEffect(() => {
+    if (experimentalEagerMount !== true) return;
+    setNativeEagerMount(true);
+    return () => setNativeEagerMount(false);
+  }, [experimentalEagerMount]);
 
   const resolvedRenderScrollComponent =
     renderScrollComponent ??

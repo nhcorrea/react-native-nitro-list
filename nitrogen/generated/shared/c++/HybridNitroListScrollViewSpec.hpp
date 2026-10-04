@@ -49,6 +49,7 @@ namespace margelo::nitro::nitrolist {
     public:
       // Methods
       virtual void scrollTo(double viewTag, double x, double y, bool animated) = 0;
+      virtual void setEagerMount(bool enabled) = 0;
 
     protected:
       // Hybrid Setup

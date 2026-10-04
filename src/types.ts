@@ -163,6 +163,7 @@ export interface NitroListProps<T> {
   dataVersion?: unknown;
   drawDistance?: number;
   recycleItems?: boolean;
+  experimentalEagerMount?: boolean;
   horizontal?: boolean;
   numColumns?: number;
   overrideItemLayout?: (layout: {span: number}, item: T, index: number) => void;

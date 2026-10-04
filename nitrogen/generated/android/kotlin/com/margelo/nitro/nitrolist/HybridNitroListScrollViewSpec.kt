@@ -32,6 +32,10 @@ abstract class HybridNitroListScrollViewSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun scrollTo(viewTag: Double, x: Double, y: Double, animated: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setEagerMount(enabled: Boolean): Unit
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

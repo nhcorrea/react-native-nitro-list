@@ -22,10 +22,19 @@ export function registerNativeScrollViewForTests(tag: number, command: NativeScr
   };
 }
 
+let eagerMountHolders = 0;
+
+export function nativeEagerMountHoldersForTests(): number {
+  return eagerMountHolders;
+}
+
 const nativeScrollView = {
   scrollTo(tag: number, x: number, y: number, animated: boolean): void {
     // Model a single UI queue, resolving the view when the command executes.
     setTimeout(() => scrollViews.get(tag)?.(x, y, animated), 0);
+  },
+  setEagerMount(enabled: boolean): void {
+    eagerMountHolders += enabled ? 1 : -1;
   },
 };
 

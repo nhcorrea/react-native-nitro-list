@@ -23,3 +23,9 @@ export function scrollToNativeOffset(
   }
   view.scrollTo({x, y, animated});
 }
+
+export function setNativeEagerMount(enabled: boolean): void {
+  if (Platform.OS !== 'android') return;
+  androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
+  androidScrollView.setEagerMount(enabled);
+}

@@ -48,5 +48,9 @@ namespace margelo::nitro::nitrolist {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* viewTag */, double /* x */, double /* y */, jboolean /* animated */)>("scrollTo");
     method(_javaPart, viewTag, x, y, animated);
   }
+  void JHybridNitroListScrollViewSpec::setEagerMount(bool enabled) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jboolean /* enabled */)>("setEagerMount");
+    method(_javaPart, enabled);
+  }
 
 } // namespace margelo::nitro::nitrolist

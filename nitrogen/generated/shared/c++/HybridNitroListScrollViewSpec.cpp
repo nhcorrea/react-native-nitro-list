@@ -15,6 +15,7 @@ namespace margelo::nitro::nitrolist {
     // load custom methods/properties
     registerHybrids(this, [](Prototype& prototype) {
       prototype.registerHybridMethod("scrollTo", &HybridNitroListScrollViewSpec::scrollTo);
+      prototype.registerHybridMethod("setEagerMount", &HybridNitroListScrollViewSpec::setEagerMount);
     });
   }
 
