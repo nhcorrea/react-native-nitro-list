@@ -661,7 +661,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
       : [styles.absoluteRow, {top}, visibility];
   }, [horizontal, top, columnLeft, columnWidth, crossAxisGap, hidden]);
   return (
-    <View collapsable={false} pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
+    <View pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
       <View
         onLayout={fixedSize != null && !IS_DEV ? undefined : handleLayout}
         style={styles.cellMeasure}

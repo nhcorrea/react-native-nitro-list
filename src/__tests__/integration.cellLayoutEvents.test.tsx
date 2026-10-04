@@ -25,7 +25,7 @@ function measuringView(cell: ReactTestInstance): ReactTestInstance {
 }
 
 function positionedView(cell: ReactTestInstance): ReactTestInstance {
-  return cell.findAll((node) => node.type === View && node.props.collapsable === false)[0];
+  return cell.findAll((node) => node.type === View)[0];
 }
 
 describe('cell layout events (fronteira 1.5)', () => {

@@ -269,9 +269,7 @@ export class NitroListHarness<T = string> {
   cellHidden(index: number): boolean {
     const cell = this.cellInstances().get(index);
     if (cell == null) throw new Error(`cell ${index} is not rendered`);
-    const container = cell.findAll(
-      (node) => node.type === View && node.props.collapsable === false,
-    )[0];
+    const container = cell.findAll((node) => node.type === View)[0];
     if (container == null) throw new Error(`cell ${index} has no container View`);
     const flat = StyleSheet.flatten(container.props.style) as {opacity?: number} | undefined;
     return flat?.opacity === 0 && container.props.pointerEvents === 'none';
