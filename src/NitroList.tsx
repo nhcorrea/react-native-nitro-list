@@ -1245,6 +1245,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
   });
   const isEngineAttached = useStableCallback(stableCallbacks, () => hybridRef.current != null);
+  const countUnmeasured = useStableCallback(stableCallbacks, (from: number, to: number) => {
+    const hybrid = hybridRef.current;
+    if (hybrid == null) return to - from;
+    if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
+    return hybrid.countUnmeasured(from, to);
+  });
   const releaseEstimateFreeze = useStableCallback(stableCallbacks, () => {
     if (
       estimateFreezeDepthRef.current > 0 &&
@@ -2333,6 +2339,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       acquireEstimateFreeze,
       releaseEstimateFreeze,
       isEngineAttached,
+      countUnmeasured,
     } satisfies ScrollToIndexCtx);
   });
   const stiRef = useRef<ScrollToIndexApi | null>(null);
@@ -2344,9 +2351,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const computeIndexScrollOffset = sti.computeIndexScrollOffset;
   const scrollToIndexPrecisely = sti.precisely;
   const scrollToEndPrecisely = sti.toEnd;
+  const followEnd = sti.followEnd;
   useEffect(() => {
-    scrollToEndForMaintainRef.current = scrollToEndPrecisely;
-  }, [scrollToEndPrecisely]);
+    scrollToEndForMaintainRef.current = followEnd;
+  }, [followEnd]);
 
 
   const initialRevealCtxRef = useRef<InitialRevealCtx | null>(null);

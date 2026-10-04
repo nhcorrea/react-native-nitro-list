@@ -58,6 +58,7 @@ export interface ScrollToIndexCtx {
   acquireEstimateFreeze: () => void;
   releaseEstimateFreeze: () => void;
   isEngineAttached: () => boolean;
+  countUnmeasured: (from: number, to: number) => number;
 }
 
 export interface ScrollToIndexApi {
@@ -71,6 +72,7 @@ export interface ScrollToIndexApi {
   converge: (params: ScrollToIndexParams, releaseEstimates?: () => void) => Promise<void>;
   precisely: (params: ScrollToIndexParams) => Promise<void>;
   toEnd: (animated: boolean) => Promise<void>;
+  followEnd: (animated: boolean) => Promise<void>;
 }
 
 export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
@@ -350,6 +352,19 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     });
   };
 
+  const followEnd = (animated: boolean): Promise<void> => {
+    if (!animated && ctx.itemCount > 0 && ctx.isEngineAttached()) {
+      const max = ctx.getMaxScrollOffset();
+      const firstAtEnd = ctx.indexAtOffset(Math.max(0, max - ctx.effectivePaddingStartRef.current));
+      if (ctx.countUnmeasured(firstAtEnd, ctx.itemCount) === 0) {
+        ctx.beginScrollCommand();
+        ctx.scrollToAbsoluteOffset(max, false);
+        return Promise.resolve();
+      }
+    }
+    return toEnd(animated);
+  };
+
   return {
     prewarmRenderWindow,
     computeIndexScrollOffset,
@@ -357,5 +372,6 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
     converge,
     precisely,
     toEnd,
+    followEnd,
   };
 }
