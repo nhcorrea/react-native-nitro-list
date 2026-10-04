@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace margelo::nitro::nitrolist {
@@ -29,7 +30,8 @@ public:
 
   bool resetItemSizes();
 
-  void invalidateItemSizesFrom(int32_t start, bool clearPriors);
+  void invalidateItemSizesFrom(int32_t start, bool clearPriors, const double* keptPairs = nullptr,
+                               int32_t keptCount = 0);
 
   bool remapItemSizes(const double* pairs, int32_t pairCount);
 
@@ -92,6 +94,9 @@ private:
   void updateTypeMeanLocked(int32_t index, bool wasMeasured, float prevSize, float newSize);
 
   bool applyTypeMeansLocked();
+  void recordMeasurementLocked(int32_t index, float size);
+  void pruneFrozenLocked();
+  void remapFrozenLocked(const double* pairs, int32_t pairCount);
 
   bool assignTypesLocked(int32_t start, const uint16_t* types, int32_t count, bool replaceAll);
 
@@ -115,6 +120,7 @@ private:
   std::vector<uint16_t> spans_;
   std::vector<float> remapSizes_;
   std::vector<uint8_t> remapMeasured_;
+  std::unordered_map<int32_t, float> frozen_;
 
   int32_t columnCount_ = 1;
   std::vector<int32_t> rowStart_;

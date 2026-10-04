@@ -18,6 +18,9 @@ function typeMeanSweepBar(appliedMean: number): number {
   return Math.max(TYPE_MEAN_SWEEP_THRESHOLD, Math.abs(appliedMean) * TYPE_MEAN_SWEEP_RELATIVE);
 }
 const MAX_TYPE_STATS = 4096;
+const MEASURED_ONCE = 1;
+const MEASURED_RESIZED = 2;
+const MEASURED_UNSTABLE = 3;
 const NOTHING_DIRTY = Number.MAX_SAFE_INTEGER;
 
 function roundToOctave(value: number): number {
@@ -54,6 +57,7 @@ export class LayoutCoreMirror {
   private typeAverages = false;
   private estimatesFrozen = false;
   private typeStats: TypeStats[] = [];
+  private frozen = new Map<number, number>();
   private itemCount = 0;
 
   getItemCount(): number {
@@ -122,6 +126,7 @@ export class LayoutCoreMirror {
     const shrank = count < this.itemCount;
     this.itemCount = count;
     if (shrank) {
+      this.pruneFrozen();
       this.rebuildTypeObservations();
       this.applyTypeMeans();
     }
@@ -134,6 +139,7 @@ export class LayoutCoreMirror {
     if (clamped === this.columnCount) return;
     this.columnCount = clamped;
     this.typeStats = [];
+    this.frozen.clear();
     for (let i = 0; i < this.itemCount; i++) {
       this.measured[i] = 0;
       this.geometryChanged = this.geometryChanged || this.sizes[i] !== this.estimate;
@@ -215,10 +221,9 @@ export class LayoutCoreMirror {
     if (this.measured[index] !== 0 && Math.abs(this.sizes[index] - rounded) <= this.measurementEpsilon) {
       return false;
     }
-    this.updateTypeMean(index, this.measured[index] !== 0, this.sizes[index], rounded);
+    this.recordMeasurement(index, rounded);
     this.geometryChanged = this.geometryChanged || this.sizes[index] !== rounded;
     this.sizes[index] = rounded;
-    this.measured[index] = 1;
     this.minDirtyIndex = Math.min(this.minDirtyIndex, index);
     this.applyTypeMeans();
     return true;
@@ -234,10 +239,9 @@ export class LayoutCoreMirror {
       if (this.measured[idx] !== 0 && Math.abs(this.sizes[idx] - rounded) <= this.measurementEpsilon) {
         continue;
       }
-      this.updateTypeMean(idx, this.measured[idx] !== 0, this.sizes[idx], rounded);
+      this.recordMeasurement(idx, rounded);
       this.geometryChanged = this.geometryChanged || this.sizes[idx] !== rounded;
       this.sizes[idx] = rounded;
-      this.measured[idx] = 1;
       this.minDirtyIndex = Math.min(this.minDirtyIndex, idx);
       anyChanged = true;
     }
@@ -265,6 +269,7 @@ export class LayoutCoreMirror {
 
   resetItemSizes(): boolean {
     this.resetTypeObservations();
+    this.frozen.clear();
     let anyChanged = false;
     for (let i = 0; i < this.itemCount; i++) {
       if (this.measured[i] !== 0) {
@@ -282,13 +287,24 @@ export class LayoutCoreMirror {
     return anyChanged;
   }
 
-  invalidateItemSizesFrom(start: number, clearPriors: boolean): void {
+  invalidateItemSizesFrom(
+    start: number,
+    clearPriors: boolean,
+    keptPairs?: ArrayLike<number>,
+    keptCount = 0,
+  ): void {
     if (clearPriors) this.typeStats = [];
+    const kept = new Set<number>();
+    if (!clearPriors && keptPairs != null) {
+      for (let p = 0; p < keptCount; p++) kept.add(keptPairs[p * 2]);
+    }
     for (let i = Math.max(0, start); i < this.itemCount; ++i) {
+      if (kept.has(i) && this.measured[i] !== 0) continue;
       this.measured[i] = 0;
       this.geometryChanged = this.geometryChanged || this.sizes[i] !== this.estimateForType(this.types[i]);
       this.sizes[i] = this.estimateForType(this.types[i]);
     }
+    this.pruneFrozen();
     this.rebuildTypeObservations();
     this.minDirtyIndex = Math.min(this.minDirtyIndex, start);
   }
@@ -312,7 +328,7 @@ export class LayoutCoreMirror {
       if (oldIdx >= sourceLimit || newIdx >= this.itemCount) continue;
       if (this.measured[oldIdx] === 0) continue;
       newSizes[newIdx] = this.sizes[oldIdx];
-      newMeasured[newIdx] = 1;
+      newMeasured[newIdx] = this.measured[oldIdx];
     }
     let anyChanged = false;
     for (let i = 0; i < this.itemCount; i++) {
@@ -327,6 +343,18 @@ export class LayoutCoreMirror {
         this.minDirtyIndex = Math.min(this.minDirtyIndex, i);
       }
     }
+    if (this.frozen.size > 0) {
+      const moved = new Map<number, number>();
+      for (let p = 0; p < pairCount; p++) {
+        const oldRaw = pairs[p * 2];
+        const newRaw = pairs[p * 2 + 1];
+        if (!(oldRaw >= 0) || !(newRaw >= 0) || oldRaw > 2000000000 || newRaw > 2000000000) continue;
+        const value = this.frozen.get(Math.trunc(oldRaw));
+        if (value !== undefined) moved.set(Math.trunc(newRaw), value);
+      }
+      this.frozen = moved;
+    }
+    this.pruneFrozen();
     this.rebuildTypeObservations();
     return this.applyTypeMeans() || anyChanged;
   }
@@ -678,6 +706,24 @@ export class LayoutCoreMirror {
     if (anyChanged) this.layoutVersion++;
   }
 
+  private recordMeasurement(index: number, size: number): void {
+    const state = this.measured[index];
+    if (state === MEASURED_UNSTABLE) return;
+    if (state === MEASURED_RESIZED && size > 0 && this.sizes[index] > 0) {
+      if (this.typeAverages) this.frozen.set(index, this.sizes[index]);
+      this.measured[index] = MEASURED_UNSTABLE;
+      return;
+    }
+    this.updateTypeMean(index, state !== 0, this.sizes[index], size);
+    this.measured[index] = state === 0 ? MEASURED_ONCE : MEASURED_RESIZED;
+  }
+
+  private pruneFrozen(): void {
+    for (const index of Array.from(this.frozen.keys())) {
+      if (index >= this.itemCount || this.measured[index] !== MEASURED_UNSTABLE) this.frozen.delete(index);
+    }
+  }
+
   private updateTypeMean(index: number, wasMeasured: boolean, prevSize: number, newSize: number): void {
     if (!this.typeAverages) return;
     const type = index < this.types.length ? this.types[index] : 0;
@@ -712,7 +758,13 @@ export class LayoutCoreMirror {
     if (!this.typeAverages) return;
     this.resetTypeObservations(false);
     for (let i = 0; i < this.itemCount; i++) {
-      if (this.measured[i] !== 0) this.updateTypeMean(i, false, 0, this.sizes[i]);
+      if (this.measured[i] === 0) continue;
+      if (this.measured[i] !== MEASURED_UNSTABLE) {
+        this.updateTypeMean(i, false, 0, this.sizes[i]);
+        continue;
+      }
+      const frozen = this.frozen.get(i);
+      if (frozen !== undefined) this.updateTypeMean(i, false, 0, frozen);
     }
   }
 
@@ -860,7 +912,7 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     if (count > this.dataItemCount) this.core.setItemCount(count);
     if (c[7] !== 0) this.core.invalidateItemSizesFrom(0, true);
     else if (c[13] > 0) this.core.remapItemSizes(new Float64Array(remap), c[13]);
-    else if (c[9] >= 0) this.core.invalidateItemSizesFrom(c[9], false);
+    else if (c[9] >= 0) this.core.invalidateItemSizesFrom(c[9], false, new Float64Array(fixedSizes), c[12]);
     this.core.setItemCount(count);
     this.dataItemCount = count;
     this.core.setColumnCount(c[5]);

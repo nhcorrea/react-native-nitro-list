@@ -1202,25 +1202,70 @@ static int runReplay(const char* path) {
   return 0;
 }
 
+static void testRepeatedlyResizedItemFreezesItsTypeMeanContribution() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(100);
+  core.setItemCount(100);
+  for (int i = 0; i < 10; i++) core.setItemSize(i, 100);
+  core.setItemSize(9, 130);
+  CHECK_EQ_F(core.getSize(50), 103.0f);
+  double tail = 130;
+  for (int step = 0; step < 30; step++) {
+    tail += 400;
+    core.setItemSize(9, tail);
+    CHECK_EQ_F(core.getSize(50), 103.0f);
+    CHECK_EQ_F(core.getTotalSize(), 900.0 + tail + 90 * 103.0);
+  }
+  core.setItemCount(9);
+  core.setItemCount(100);
+  CHECK_EQ_F(core.getSize(50), 100.0f);
+}
+
+static void testFrozenContributionFollowsRemapAndInvalidation() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(100);
+  core.setItemCount(20);
+  for (int i = 0; i < 10; i++) core.setItemSize(i, 100);
+  core.setItemSize(9, 130);
+  core.setItemSize(9, 900);
+  CHECK_EQ_F(core.getSize(15), 103.0f);
+  const double shift[] = {9, 10};
+  core.remapItemSizes(shift, 1);
+  CHECK_EQ_F(core.getSize(10), 900.0f);
+  CHECK_EQ_F(core.getSize(15), 130.0f);
+  core.invalidateItemSizesFrom(10, false);
+  CHECK_EQ_F(core.getSize(15), 130.0f);
+  core.setItemSize(0, 100);
+  CHECK(core.getSize(10) == core.getSize(15));
+}
+
+static float roundToOctaveForTest(double value) {
+  return static_cast<float>(std::round(value * 8.0) / 8.0);
+}
+
 static void testIndependentTypeDrift() {
   for (bool reverse : {false, true}) {
     LayoutCore core;
     core.setTypeAverages(true);
     core.setEstimate(100);
-    core.setItemCount(4);
-    const uint16_t types[] = {1, 2, 1, 2};
-    core.setItemTypes(types, 4);
-    const double initial[] = {0, 100, 1, 100};
-    core.setItemSizes(initial, 2, 1);
+    core.setItemCount(44);
+    uint16_t types[44];
+    for (int i = 0; i < 44; i++) types[i] = i % 2 == 0 ? 1 : 2;
+    core.setItemTypes(types, 44);
+    double slowSum = 0;
     double applied = 100;
-    for (int step = 1; step <= 20; step++) {
-      const double slow = 100 + step;
-      const double fast = 100 + 5 * step;
-      const double pairs[] = {reverse ? 1.0 : 0.0, reverse ? fast : slow,
-                              reverse ? 0.0 : 1.0, reverse ? slow : fast};
+    for (int step = 0; step < 20; step++) {
+      const double slow = 100 + 3 * step;
+      const double fast = 100 + 20 * step;
+      slowSum += slow;
+      const double pairs[] = {reverse ? 2.0 * step + 1 : 2.0 * step, reverse ? fast : slow,
+                              reverse ? 2.0 * step : 2.0 * step + 1, reverse ? slow : fast};
       core.setItemSizes(pairs, 2, 1);
-      if (slow - applied > std::max(0.5, 0.02 * applied)) applied = slow;
-      CHECK_EQ_F(core.getSize(2), applied);
+      const double mean = slowSum / (step + 1);
+      if (std::abs(mean - applied) > std::max(0.5, 0.02 * applied)) applied = mean;
+      CHECK_EQ_F(core.getSize(42), roundToOctaveForTest(applied));
     }
   }
 }
@@ -1490,6 +1535,8 @@ int main(int argc, char** argv) {
   testSmallMeanDriftDoesNotSweep();
   testDataChangesKeepPublishedTypeEstimate();
   testIndependentTypeDrift();
+  testRepeatedlyResizedItemFreezesItsTypeMeanContribution();
+  testFrozenContributionFollowsRemapAndInvalidation();
   testPartialTypesAtZero();
   testCurrentTypeObservations();
   testAllocatedGeometryMemory();

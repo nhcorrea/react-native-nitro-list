@@ -26,6 +26,9 @@ inline double typeMeanSweepBar(double appliedMean) {
 }
 constexpr int32_t kMaxTypeStats = 4096;
 constexpr int32_t kCapacityFloorItems = 4096;
+constexpr uint8_t kMeasuredOnce = 1;
+constexpr uint8_t kMeasuredResized = 2;
+constexpr uint8_t kMeasuredUnstable = 3;
 
 template <typename T>
 void truncateCapacity(std::vector<T>& values, size_t keep) {
@@ -76,6 +79,7 @@ bool LayoutCore::setItemCount(int32_t count) {
   itemCount_ = count;
   if (shrank) {
     releaseCapacityLocked();
+    pruneFrozenLocked();
     rebuildTypeObservationsLocked();
     applyTypeMeansLocked();
   }
@@ -167,10 +171,9 @@ bool LayoutCore::setItemSize(int32_t index, double size) {
   if (measured_[index] != 0 && std::abs(sizes_[index] - rounded) <= measurementEpsilon_) {
     return false;
   }
-  updateTypeMeanLocked(index, measured_[index] != 0, sizes_[index], rounded);
+  recordMeasurementLocked(index, rounded);
   geometryChanged_ = geometryChanged_ || sizes_[index] != rounded;
   sizes_[index] = rounded;
-  measured_[index] = 1;
   minDirtyIndex_ = std::min(minDirtyIndex_, index);
   applyTypeMeansLocked();
   return true;
@@ -215,10 +218,9 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
     if (measured_[idx] != 0 && std::abs(sizes_[idx] - rounded) <= measurementEpsilon_) {
       continue;
     }
-    updateTypeMeanLocked(idx, measured_[idx] != 0, sizes_[idx], rounded);
+    recordMeasurementLocked(idx, rounded);
     geometryChanged_ = geometryChanged_ || sizes_[idx] != rounded;
     sizes_[idx] = rounded;
-    measured_[idx] = 1;
     minDirtyIndex_ = std::min(minDirtyIndex_, idx);
     anyChanged = true;
   }
@@ -232,6 +234,7 @@ bool LayoutCore::resetItemSizes() {
   std::lock_guard<std::mutex> guard(mutex_);
   // Keep the previous mean only as an estimate, never as current observations.
   resetTypeObservationsLocked();
+  frozen_.clear();
   bool anyChanged = false;
   for (int32_t i = 0; i < itemCount_; i++) {
     if (measured_[i] != 0) {
@@ -252,17 +255,29 @@ bool LayoutCore::resetItemSizes() {
   return anyChanged;
 }
 
-void LayoutCore::invalidateItemSizesFrom(int32_t start, bool clearPriors) {
+void LayoutCore::invalidateItemSizesFrom(int32_t start, bool clearPriors, const double* keptPairs,
+                                         int32_t keptCount) {
   std::lock_guard<std::mutex> guard(mutex_);
   start = std::clamp(start, 0, itemCount_);
   if (clearPriors) typeStats_.clear();
+  std::vector<bool> kept;
+  if (!clearPriors && keptPairs != nullptr && keptCount > 0 && start < itemCount_) {
+    kept.assign(static_cast<size_t>(itemCount_ - start), false);
+    for (int32_t p = 0; p < keptCount; ++p) {
+      const double raw = keptPairs[p * 2];
+      if (!std::isfinite(raw) || raw < start || raw >= itemCount_ || raw != std::floor(raw)) continue;
+      kept[static_cast<size_t>(raw) - start] = true;
+    }
+  }
   bool removedObservation = false;
   for (int32_t i = start; i < itemCount_; ++i) {
+    if (!kept.empty() && kept[i - start] && measured_[i] != 0) continue;
     removedObservation = removedObservation || measured_[i] != 0;
     measured_[i] = 0;
     geometryChanged_ = geometryChanged_ || sizes_[i] != estimateForTypeLocked(types_[i]);
     sizes_[i] = estimateForTypeLocked(types_[i]);
   }
+  pruneFrozenLocked();
   if (removedObservation || clearPriors) rebuildTypeObservationsLocked();
   minDirtyIndex_ = std::min(minDirtyIndex_, start);
   hasRangeWindow_ = false;
@@ -308,8 +323,8 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
     const auto move = [&](int32_t i) {
       const bool mapped = i >= newStart && i - newStart < pairCount;
       const int32_t source = mapped ? oldStart + (i - newStart) : 0;
-      const bool measured = mapped && measured_[source] != 0;
-      assign(i, measured ? sizes_[source] : estimateForTypeLocked(types_[i]), measured ? 1 : 0);
+      const uint8_t measured = mapped ? measured_[source] : 0;
+      assign(i, measured != 0 ? sizes_[source] : estimateForTypeLocked(types_[i]), measured);
     };
     // Traverse in the direction that reads overlapping sources before overwriting
     // them, including when resetting destinations outside the surviving run.
@@ -338,7 +353,7 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
         continue;
       }
       newSizes[newIdx] = sizes_[oldIdx];
-      newMeasured[newIdx] = 1;
+      newMeasured[newIdx] = measured_[oldIdx];
     }
     for (int32_t i = 0; i < itemCount_; i++) {
       assign(i, newSizes[i], newMeasured[i]);
@@ -347,6 +362,8 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   if (anyChanged) {
     hasRangeWindow_ = false;
   }
+  remapFrozenLocked(pairs, pairCount);
+  pruneFrozenLocked();
   rebuildTypeObservationsLocked();
   return applyTypeMeansLocked() || anyChanged;
 }
@@ -760,6 +777,7 @@ void LayoutCore::setColumnCount(int32_t columns) {
   }
   columnCount_ = clamped;
   typeStats_.clear();
+  frozen_.clear();
   for (int32_t i = 0; i < itemCount_; i++) {
     measured_[i] = 0;
     geometryChanged_ = geometryChanged_ || sizes_[i] != estimate_;
@@ -886,6 +904,43 @@ void LayoutCore::ensureClean() {
   }
 }
 
+void LayoutCore::recordMeasurementLocked(int32_t index, float size) {
+  const uint8_t state = measured_[index];
+  if (state == kMeasuredUnstable) {
+    return;
+  }
+  if (state == kMeasuredResized && size > 0.0f && sizes_[index] > 0.0f) {
+    if (typeAverages_) frozen_[index] = sizes_[index];
+    measured_[index] = kMeasuredUnstable;
+    return;
+  }
+  updateTypeMeanLocked(index, state != 0, sizes_[index], size);
+  measured_[index] = state == 0 ? kMeasuredOnce : kMeasuredResized;
+}
+
+void LayoutCore::pruneFrozenLocked() {
+  for (auto it = frozen_.begin(); it != frozen_.end();) {
+    if (it->first >= itemCount_ || measured_[it->first] != kMeasuredUnstable) {
+      it = frozen_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void LayoutCore::remapFrozenLocked(const double* pairs, int32_t pairCount) {
+  if (frozen_.empty()) return;
+  std::unordered_map<int32_t, float> moved;
+  for (int32_t p = 0; p < pairCount; ++p) {
+    const double oldRaw = pairs[p * 2];
+    const double newRaw = pairs[p * 2 + 1];
+    if (!(oldRaw >= 0.0) || !(newRaw >= 0.0) || oldRaw > 2000000000.0 || newRaw > 2000000000.0) continue;
+    const auto found = frozen_.find(static_cast<int32_t>(oldRaw));
+    if (found != frozen_.end()) moved[static_cast<int32_t>(newRaw)] = found->second;
+  }
+  frozen_.swap(moved);
+}
+
 float LayoutCore::roundToOctave(double value) {
   return static_cast<float>(std::round(value * 8.0) / 8.0);
 }
@@ -934,7 +989,13 @@ void LayoutCore::rebuildTypeObservationsLocked() {
   if (!typeAverages_) return;
   resetTypeObservationsLocked(false);
   for (int32_t i = 0; i < itemCount_; i++) {
-    if (measured_[i] != 0) updateTypeMeanLocked(i, false, 0.0f, sizes_[i]);
+    if (measured_[i] == 0) continue;
+    if (measured_[i] != kMeasuredUnstable) {
+      updateTypeMeanLocked(i, false, 0.0f, sizes_[i]);
+      continue;
+    }
+    const auto frozen = frozen_.find(i);
+    if (frozen != frozen_.end()) updateTypeMeanLocked(i, false, 0.0f, frozen->second);
   }
 }
 

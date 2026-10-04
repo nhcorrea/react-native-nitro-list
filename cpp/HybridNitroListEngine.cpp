@@ -134,7 +134,7 @@ void HybridNitroListEngine::updateData(const std::shared_ptr<ArrayBuffer>& confi
     if (count > itemCount_) core_.setItemCount(count);
     if (c[7] != 0) core_.invalidateItemSizesFrom(0, true);
     else if (remapCount > 0) core_.remapItemSizes(r, remapCount);
-    else if (c[9] >= 0) core_.invalidateItemSizesFrom(toIndex(c[9]), false);
+    else if (c[9] >= 0) core_.invalidateItemSizesFrom(toIndex(c[9]), false, f, fixedCount);
     core_.setItemCount(count);
     if (count < itemCount_) std::vector<double>().swap(pendingSnapshot_);
     itemCount_ = count;
