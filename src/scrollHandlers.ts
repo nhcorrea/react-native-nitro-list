@@ -34,7 +34,7 @@ export interface ScrollHandlersCtx {
   onMomentumScrollBegin?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onMomentumScrollEnd?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
   scrollOffsetSharedValue?: SharedValue<number> | null;
-  uiScrollOffsetSv: SharedValue<number>;
+  uiValuesRef: {current: {scrollOffset: SharedValue<number>} | null};
   applyMvcpCorrectionRef: Ref<(diff: number) => void>;
   captureMvcpAnchorRef: Ref<(engineOffset: number) => void>;
   checkEdgeCallbacksRef: Ref<() => void>;
@@ -114,7 +114,8 @@ export interface ScrollHandlersApi {
 export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi {
   const settleScrollPosition = (target: number, engineOffset: number): void => {
     ctx.lastScrollOffsetRef.current = target;
-    ctx.uiScrollOffsetSv.value = engineOffset;
+    const uiValues = ctx.uiValuesRef.current;
+    if (uiValues != null) uiValues.scrollOffset.value = engineOffset;
     ctx.applyScrollOffsetSync(engineOffset);
     ctx.updateSticky(engineOffset);
     ctx.evaluateViewabilityRef.current();

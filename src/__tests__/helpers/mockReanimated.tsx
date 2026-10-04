@@ -46,6 +46,12 @@ function createCountingSharedValue<T>(initial: T): SharedValue<T> {
   };
 }
 
+export function makeMutable<T>(initial: T): SharedValue<T> {
+  const value = createCountingSharedValue(initial);
+  createdSharedValues.push(value as SharedValue<unknown>);
+  return value;
+}
+
 export function useSharedValue<T>(initial: T): SharedValue<T> {
   const ref = useRef<SharedValue<T> | null>(null);
   if (ref.current == null) {

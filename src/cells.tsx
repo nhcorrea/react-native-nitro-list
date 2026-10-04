@@ -6,7 +6,6 @@ import React, {
   useInsertionEffect,
 } from 'react';
 import {PixelRatio, StyleSheet, View, type LayoutChangeEvent} from 'react-native';
-import Animated, {useAnimatedStyle, type SharedValue} from 'react-native-reanimated';
 
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, type RangeState} from './listStore';
@@ -442,41 +441,6 @@ export function EndSpaceSpacer({store, horizontal}: {store: ListStore; horizonta
   return <View style={horizontal ? {width: endSpace} : {height: endSpace}} />;
 }
 
-export function StickyHeaderSlot({
-  store,
-  items,
-  itemCount,
-  renderItem,
-  adaptiveRenderMode,
-  translateY,
-  horizontal,
-  onLayout,
-}: {
-  store: ListStore;
-  items: ReadonlyArray<unknown>;
-  itemCount: number;
-  renderItem: NitroListRenderItem<unknown>;
-  adaptiveRenderMode: boolean;
-  translateY: SharedValue<number>;
-  horizontal: boolean;
-  onLayout: (event: LayoutChangeEvent) => void;
-}) {
-  const stickyIndex = useStoreValue(store, 'stickyIndex');
-  const renderMode = useStoreValue(store, 'renderMode');
-  const stickyItem = stickyIndex >= 0 && stickyIndex < itemCount ? items[stickyIndex] : undefined;
-  if (stickyItem === undefined) return null;
-  return (
-    <StickyOverlay translateY={translateY} horizontal={horizontal} onLayout={onLayout}>
-      {renderItem({
-        item: stickyItem,
-        index: stickyIndex,
-        target: 'StickyHeader',
-        renderMode: adaptiveRenderMode ? renderMode : 'normal',
-      })}
-    </StickyOverlay>
-  );
-}
-
 export interface NitroListItemContainerProps {
   measurementRevision: MeasurementRevision;
   measurementGeometry: number;
@@ -733,34 +697,6 @@ export const MvcpAdjustAnchor = React.memo(function MvcpAdjustAnchor({
     [horizontal, top],
   );
   return <View collapsable={false} style={style} />;
-});
-
-export interface StickyOverlayProps {
-  translateY: SharedValue<number>;
-  horizontal: boolean;
-  onLayout: (event: LayoutChangeEvent) => void;
-  children: React.ReactNode;
-}
-
-export const StickyOverlay = React.memo(function StickyOverlay({
-  translateY,
-  horizontal,
-  onLayout,
-  children,
-}: StickyOverlayProps) {
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: horizontal ? [{translateX: translateY.value}] : [{translateY: translateY.value}],
-  }));
-  return (
-    <Animated.View
-      pointerEvents="box-none"
-      collapsable={false}
-      onLayout={onLayout}
-      style={[horizontal ? styles.stickyOverlayHorizontal : styles.stickyOverlay, animatedStyle]}
-    >
-      {children}
-    </Animated.View>
-  );
 });
 
 export const styles = StyleSheet.create({

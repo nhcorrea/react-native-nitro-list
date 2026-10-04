@@ -20,8 +20,6 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import Animated, {useAnimatedScrollHandler, useSharedValue} from 'react-native-reanimated';
-import {scheduleOnUI} from 'react-native-worklets';
 
 import {createNitroListEngine, reportEngineMemory, type NitroListEngine} from './NitroListHost';
 import {scrollToNativeOffset} from './nativeScroll';
@@ -54,7 +52,6 @@ import {
   MEASUREMENT_NOISE_EPSILON_DP,
   MvcpAdjustAnchorSlot,
   NitroListCells,
-  StickyHeaderSlot,
   markCellSupplied,
   resupplyCellSize,
   type CellBridge,
@@ -67,7 +64,7 @@ import {
   type EdgeCallbacksCtx,
   type EdgeLatchState,
 } from './edges';
-import {computeSticky, createStickyResult, driveStickyOnUi} from './sticky';
+import type {StickyComputeResult} from './sticky';
 import {createViewability, type ViewabilityCtx} from './viewability';
 import {flushWaiters, waitForNextFrame} from './scrollCommands';
 import {createMeasurement, type MeasurementApi, type MeasurementCtx} from './measurement';
@@ -104,13 +101,16 @@ import {
 } from './itemTypes';
 import {extractAxisPadding, renderSlot} from './listUtils';
 import {publishStableCallbacks, useStableCallback, type StableCallbackBindings} from './stableCallbacks';
-import {createUiScrollHandlers, type UiScrollContext} from './uiScrollHandlers';
+import type {UiScrollHandlerInputs} from './uiScrollHandlers';
+import type {UiThreadValues} from './uiThread';
+import {loadUiThread} from './uiThreadLoader';
 import type {
   NitroListHandle,
   NitroListProps,
   NitroListRenderItem,
   NitroListRenderMode,
   NitroListRenderScrollComponent,
+  NitroListRenderScrollComponentProps,
   NitroListViewToken,
 } from './types';
 import {createVelocityRing, resetVelocityRing} from './scrollVelocity';
@@ -177,41 +177,6 @@ const defaultRenderScrollComponent: NitroListRenderScrollComponent = ({
     scrollEventThrottle={scrollEventThrottle}>
     {children}
   </ScrollView>
-);
-
-const defaultAnimatedRenderScrollComponent: NitroListRenderScrollComponent = ({
-  ref,
-  horizontal,
-  snapToOffsets,
-  onScroll,
-  onScrollBeginDrag,
-  onScrollEndDrag,
-  onMomentumScrollBegin,
-  onMomentumScrollEnd,
-  onLayout,
-  scrollEventThrottle,
-  contentContainerStyle,
-  contentOffset,
-  maintainVisibleContentPosition,
-  children,
-}) => (
-  <Animated.ScrollView
-    ref={ref as unknown as React.ComponentProps<typeof Animated.ScrollView>['ref']}
-    horizontal={horizontal}
-    snapToOffsets={snapToOffsets}
-    style={StyleSheet.absoluteFill}
-    contentContainerStyle={contentContainerStyle}
-    contentOffset={contentOffset}
-    maintainVisibleContentPosition={maintainVisibleContentPosition}
-    onScroll={onScroll}
-    onScrollBeginDrag={onScrollBeginDrag}
-    onScrollEndDrag={onScrollEndDrag}
-    onMomentumScrollBegin={onMomentumScrollBegin}
-    onMomentumScrollEnd={onMomentumScrollEnd}
-    onLayout={onLayout}
-    scrollEventThrottle={scrollEventThrottle}>
-    {children}
-  </Animated.ScrollView>
 );
 
 const EMPTY: readonly never[] = Object.freeze([]);
@@ -333,7 +298,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const resolvedRenderScrollComponent =
     renderScrollComponent ??
     (experimentalUiThreadScroll === true
-      ? defaultAnimatedRenderScrollComponent
+      ? loadUiThread().defaultAnimatedRenderScrollComponent
       : defaultRenderScrollComponent);
 
   const items = (data ?? EMPTY) as ReadonlyArray<T>;
@@ -548,13 +513,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const hybridRef = useRef<NitroListEngine | null>(null);
   const engineRef = useRef<NitroListEngine | null>(null);
 
-  const stickyTranslateYSv = useSharedValue(stickyOffset);
-  const uiStickyIndexSv = useSharedValue(-1);
-  const stickyOverlaySizeSv = useSharedValue(stickySize ?? 0);
   const stickyOverlaySizeRef = useRef(stickySize ?? 0);
   const lastJsStickyTyRef = useRef<number | null>(null);
   const lastJsStickyIndexRef = useRef<number | null>(null);
-  const stickyResultRef = useRef(createStickyResult());
+  const stickyResultRef = useRef<StickyComputeResult>({index: -1, translateY: 0, height: 0});
 
   const layoutCacheCtxRef = useRef<LayoutCacheCtx | null>(null);
   if (layoutCacheCtxRef.current == null) {
@@ -1307,13 +1269,18 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     uiThreadDriverActiveRef.current = uiThreadDriverActive;
   });
 
-  const uiPaddingTopSv = useSharedValue(0);
+  const uiValuesRef = useRef<UiThreadValues | null>(null);
+  if (uiValuesRef.current == null && (experimentalUiThreadScroll === true || stickyIndices.length > 0)) {
+    uiValuesRef.current = loadUiThread().createUiThreadValues({
+      stickyTranslateY: stickyOffset,
+      stickyOverlaySize: stickySize ?? 0,
+      scrollOffset: (initialTargetRef.current?.offset ?? 0) - paddingStart,
+    });
+  }
+  const uiValues = uiValuesRef.current;
   useEffect(() => {
-    uiPaddingTopSv.value = effectivePaddingStart;
-  }, [effectivePaddingStart, uiPaddingTopSv]);
-  const uiScrollOffsetSv = useSharedValue(
-    (initialTargetRef.current?.offset ?? 0) - paddingStart,
-  );
+    if (uiValues != null) uiValues.paddingTop.value = effectivePaddingStart;
+  }, [effectivePaddingStart, uiValues]);
   useEffect(() => {
     lastJsStickyTyRef.current = null;
     lastJsStickyIndexRef.current = null;
@@ -1460,13 +1427,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const scheduleStickyRecomputeOnUi = useStableCallback(stableCallbacks, () => {
     const hybrid = attachedHybrid;
-    if (hybrid == null || stickyIndices.length === 0) return;
+    const values = uiValuesRef.current;
+    if (hybrid == null || stickyIndices.length === 0 || values == null) return;
+    const {scheduleOnUI, driveStickyOnUi} = loadUiThread();
     const indices = stickyIndices;
     const bar = stickyOffset;
-    const offsetSv = uiScrollOffsetSv;
-    const translateYSv = stickyTranslateYSv;
-    const activeIndexSv = uiStickyIndexSv;
-    const overlaySizeSv = stickyOverlaySizeSv;
+    const offsetSv = values.scrollOffset;
+    const translateYSv = values.stickyTranslateY;
+    const activeIndexSv = values.stickyIndex;
+    const overlaySizeSv = values.stickyOverlaySize;
     const notify = applyStickyIndex;
     scheduleOnUI(() => {
       'worklet';
@@ -1486,10 +1455,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const updateSticky = useStableCallback(
     stableCallbacks,
     (offset: number) => {
-      if (stickyIndices.length === 0 || !hybridRef.current) {
+      const values = uiValuesRef.current;
+      if (stickyIndices.length === 0 || !hybridRef.current || values == null) {
         if (lastJsStickyIndexRef.current !== -1) {
           lastJsStickyIndexRef.current = -1;
-          uiStickyIndexSv.value = -1;
+          if (values != null) values.stickyIndex.value = -1;
         }
         applyStickyIndex(-1);
         return;
@@ -1499,7 +1469,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         scheduleStickyRecomputeOnUi();
         return;
       }
-      const result = computeSticky(
+      const result = loadUiThread().computeSticky(
         offset,
         stickyIndices,
         stickyOffset,
@@ -1510,7 +1480,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       applyStickyIndex(result.index);
       if (lastJsStickyTyRef.current !== result.translateY) {
         lastJsStickyTyRef.current = result.translateY;
-        stickyTranslateYSv.value = result.translateY;
+        values.stickyTranslateY.value = result.translateY;
       }
     },
   );
@@ -1526,7 +1496,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (!(size > 0)) return;
       if (Math.abs(stickyOverlaySizeRef.current - size) <= MEASUREMENT_NOISE_EPSILON_DP) return;
       stickyOverlaySizeRef.current = size;
-      stickyOverlaySizeSv.value = size;
+      if (uiValuesRef.current != null) uiValuesRef.current.stickyOverlaySize.value = size;
       updateStickyRef.current(lastScrollOffsetRef.current - effectivePaddingStartRef.current);
     },
   );
@@ -1902,27 +1872,28 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     userOnScrollRef.current = userOnScroll;
   });
 
-  const uiThreadScrollHandler = useAnimatedScrollHandler<UiScrollContext>(
-    createUiScrollHandlers({
-      isHorizontal,
-      engine: attachedHybrid,
-      paddingTopSv: uiPaddingTopSv,
-      scrollOffsetSv: uiScrollOffsetSv,
-      userScrollOffsetSv: scrollOffsetSharedValue,
-      stickyIndices,
-      stickyOffset,
-      stickyTranslateYSv,
-      stickyIndexSv: uiStickyIndexSv,
-      stickyOverlaySizeSv,
-      applyStickyIndex,
-      hasViewabilityWakeups: onViewableItemsChanged != null && viewabilityConfig != null,
-      settleViewabilityTick: scrollHandlers.settleUiViewabilityTick,
-      onScrollWorklet,
-      hasUserOnScroll: userOnScroll != null,
-      emitUserScroll: scrollHandlers.emitUserScrollFromUi,
-      settleEndDrag: scrollHandlers.settleUiEndDrag,
-    }),
-  );
+  const uiScrollInputs: UiScrollHandlerInputs | null =
+    experimentalUiThreadScroll === true && uiValues != null
+      ? {
+          isHorizontal,
+          engine: attachedHybrid,
+          paddingTopSv: uiValues.paddingTop,
+          scrollOffsetSv: uiValues.scrollOffset,
+          userScrollOffsetSv: scrollOffsetSharedValue,
+          stickyIndices,
+          stickyOffset,
+          stickyTranslateYSv: uiValues.stickyTranslateY,
+          stickyIndexSv: uiValues.stickyIndex,
+          stickyOverlaySizeSv: uiValues.stickyOverlaySize,
+          applyStickyIndex,
+          hasViewabilityWakeups: onViewableItemsChanged != null && viewabilityConfig != null,
+          settleViewabilityTick: scrollHandlers.settleUiViewabilityTick,
+          onScrollWorklet,
+          hasUserOnScroll: userOnScroll != null,
+          emitUserScroll: scrollHandlers.emitUserScrollFromUi,
+          settleEndDrag: scrollHandlers.settleUiEndDrag,
+        }
+      : null;
 
   const contentInsetBottomRef = useRef(0);
 
@@ -2127,7 +2098,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     resetVelocityRing(velocityRingRef.current);
     hybridRef.current?.resetScrollVelocity();
     if (NITRO_LIST_PERF_COMPILED && hybridRef.current) NitroListPerfMonitor.recordJsiCall();
-    uiScrollOffsetSv.value = engineOffset;
+    if (uiValuesRef.current != null) uiValuesRef.current.scrollOffset.value = engineOffset;
     applyScrollOffsetSync(engineOffset);
     updateSticky(engineOffset);
     evaluateViewabilityRef.current();
@@ -2243,7 +2214,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       onMomentumScrollBegin,
       onMomentumScrollEnd,
       scrollOffsetSharedValue,
-      uiScrollOffsetSv,
+      uiValuesRef,
       applyMvcpCorrectionRef,
       captureMvcpAnchorRef,
       checkEdgeCallbacksRef,
@@ -2626,6 +2597,73 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const anchoredEndSpaceAnchor =
     anchoredEndSpace != null ? Math.trunc(anchoredEndSpace.anchorIndex) : null;
+  const UiThread = uiValues != null ? loadUiThread() : null;
+  const scrollProps: NitroListRenderScrollComponentProps = {
+    ref: scrollRef,
+    horizontal: isHorizontal,
+    snapToOffsets: snapOffsets,
+    onScroll: handleOuterScroll,
+    onScrollBeginDrag: handleScrollBeginDrag,
+    onScrollEndDrag: handleScrollEndDrag,
+    onMomentumScrollBegin: handleMomentumScrollBegin,
+    onMomentumScrollEnd: handleMomentumScrollEnd,
+    onLayout: handleOuterLayout,
+    scrollEventThrottle:
+      experimentalUiThreadScroll === true || NitroListDevFlags.jsScrollEventThrottle1 ? 1 : 16,
+    contentContainerStyle,
+    contentOffset: scrollMountOffset,
+    maintainVisibleContentPosition: mvcpEnabled ? MVCP_SCROLL_VIEW_CONFIG : undefined,
+    children: (
+      <>
+        {mvcpEnabled ? (
+          <MvcpAdjustAnchorSlot store={store} horizontal={isHorizontal} />
+        ) : null}
+        {alignPad > 0 ? (
+          <View style={isHorizontal ? {width: alignPad} : {height: alignPad}} />
+        ) : null}
+        {ListHeaderComponent != null ? (
+          <View onLayout={handleHeaderLayout}>{renderSlot(ListHeaderComponent)}</View>
+        ) : null}
+        {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
+        <ListContainer store={store} horizontal={isHorizontal}>
+          <NitroListCells
+            measurementRevision={measurementRevision}
+            measurementGeometry={measurementGeometry}
+            store={store}
+            items={items as ReadonlyArray<unknown>}
+            itemCount={itemCount}
+            keyExtractor={keyExtractor as NitroListCellsProps['keyExtractor']}
+            getItemType={getItemType as NitroListCellsProps['getItemType']}
+            getFixedItemSize={getFixedItemSize as NitroListCellsProps['getFixedItemSize']}
+            alwaysRender={alwaysRender}
+            alwaysRenderKeyIndices={alwaysRenderKeyIndices}
+            anchoredEndSpaceAnchor={anchoredEndSpaceAnchor}
+            adaptiveRenderMode={adaptiveRenderMode === true}
+            hideRelatedCell={hideRelatedCell}
+            horizontal={isHorizontal}
+            columnLayout={columnLayout}
+            resolvedColumns={resolvedColumns}
+            mainAxisGap={mainAxisGap}
+            crossAxisGap={crossAxisGap}
+            renderItem={renderItem as NitroListRenderItem<unknown>}
+            ItemSeparatorComponent={
+              ItemSeparatorComponent as React.ComponentType<{leadingItem: unknown}> | undefined
+            }
+            enqueueItemSize={enqueueItemSize}
+            cellBridge={cellBridgeRef.current}
+            itemsAreEqual={itemsAreEqual as ItemsAreEqualFn | undefined}
+            readItemOffset={readItemOffset}
+            ensureLayout={ensureLayout}
+            onCommit={handleCellsCommit}
+          />
+        </ListContainer>
+        {ListFooterComponent != null ? (
+          <View onLayout={handleFooterLayout}>{renderSlot(ListFooterComponent)}</View>
+        ) : null}
+        <EndSpaceSpacer store={store} horizontal={isHorizontal} />
+      </>
+    ),
+  };
 
   return (
     <View
@@ -2634,82 +2672,28 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         style,
         initialRevealPending ? orchestratorStyles.hiddenUntilReveal : null,
       ]}>
-      {React.cloneElement(resolvedRenderScrollComponent({
-        ref: scrollRef,
-        horizontal: isHorizontal,
-        snapToOffsets: snapOffsets,
-        onScroll: experimentalUiThreadScroll === true ? uiThreadScrollHandler : handleOuterScroll,
-        onScrollBeginDrag: handleScrollBeginDrag,
-        onScrollEndDrag: handleScrollEndDrag,
-        onMomentumScrollBegin: handleMomentumScrollBegin,
-        onMomentumScrollEnd: handleMomentumScrollEnd,
-        onLayout: handleOuterLayout,
-        scrollEventThrottle:
-          experimentalUiThreadScroll === true || NitroListDevFlags.jsScrollEventThrottle1 ? 1 : 16,
-        contentContainerStyle,
-        contentOffset: scrollMountOffset,
-        maintainVisibleContentPosition: mvcpEnabled ? MVCP_SCROLL_VIEW_CONFIG : undefined,
-        children: (
-          <>
-            {mvcpEnabled ? (
-              <MvcpAdjustAnchorSlot store={store} horizontal={isHorizontal} />
-            ) : null}
-            {alignPad > 0 ? (
-              <View style={isHorizontal ? {width: alignPad} : {height: alignPad}} />
-            ) : null}
-            {ListHeaderComponent != null ? (
-              <View onLayout={handleHeaderLayout}>{renderSlot(ListHeaderComponent)}</View>
-            ) : null}
-            {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
-            <ListContainer store={store} horizontal={isHorizontal}>
-              <NitroListCells
-                measurementRevision={measurementRevision}
-                measurementGeometry={measurementGeometry}
-                store={store}
-                items={items as ReadonlyArray<unknown>}
-                itemCount={itemCount}
-                keyExtractor={keyExtractor as NitroListCellsProps['keyExtractor']}
-                getItemType={getItemType as NitroListCellsProps['getItemType']}
-                getFixedItemSize={getFixedItemSize as NitroListCellsProps['getFixedItemSize']}
-                alwaysRender={alwaysRender}
-                alwaysRenderKeyIndices={alwaysRenderKeyIndices}
-                anchoredEndSpaceAnchor={anchoredEndSpaceAnchor}
-                adaptiveRenderMode={adaptiveRenderMode === true}
-                hideRelatedCell={hideRelatedCell}
-                horizontal={isHorizontal}
-                columnLayout={columnLayout}
-                resolvedColumns={resolvedColumns}
-                mainAxisGap={mainAxisGap}
-                crossAxisGap={crossAxisGap}
-                renderItem={renderItem as NitroListRenderItem<unknown>}
-                ItemSeparatorComponent={
-                  ItemSeparatorComponent as React.ComponentType<{leadingItem: unknown}> | undefined
-                }
-                enqueueItemSize={enqueueItemSize}
-                cellBridge={cellBridgeRef.current}
-                itemsAreEqual={itemsAreEqual as ItemsAreEqualFn | undefined}
-                readItemOffset={readItemOffset}
-                ensureLayout={ensureLayout}
-                onCommit={handleCellsCommit}
-              />
-            </ListContainer>
-            {ListFooterComponent != null ? (
-              <View onLayout={handleFooterLayout}>{renderSlot(ListFooterComponent)}</View>
-            ) : null}
-            <EndSpaceSpacer store={store} horizontal={isHorizontal} />
-          </>
-        ),
-      }), {key: scrollDriverKey})}
-      <StickyHeaderSlot
-        store={store}
-        items={items as ReadonlyArray<unknown>}
-        itemCount={itemCount}
-        renderItem={renderItem as NitroListRenderItem<unknown>}
-        adaptiveRenderMode={adaptiveRenderMode === true}
-        translateY={stickyTranslateYSv}
-        horizontal={isHorizontal}
-        onLayout={handleStickyOverlayLayout}
-      />
+      {UiThread != null && uiScrollInputs != null ? (
+        <UiThread.UiThreadScroll
+          key={scrollDriverKey}
+          render={resolvedRenderScrollComponent}
+          props={scrollProps}
+          inputs={uiScrollInputs}
+        />
+      ) : (
+        React.cloneElement(resolvedRenderScrollComponent(scrollProps), {key: scrollDriverKey})
+      )}
+      {UiThread != null && uiValues != null && stickyIndices.length > 0 ? (
+        <UiThread.StickyHeaderSlot
+          store={store}
+          items={items as ReadonlyArray<unknown>}
+          itemCount={itemCount}
+          renderItem={renderItem as NitroListRenderItem<unknown>}
+          adaptiveRenderMode={adaptiveRenderMode === true}
+          translateY={uiValues.stickyTranslateY}
+          horizontal={isHorizontal}
+          onLayout={handleStickyOverlayLayout}
+        />
+      ) : null}
     </View>
   );
 }
