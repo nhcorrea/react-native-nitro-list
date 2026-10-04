@@ -24,3 +24,19 @@ export function stabilizeRange(
   if (start === next.start && end === next.end) return next;
   return {start, end};
 }
+
+export const RANGE_TRAILING_SLACK_ITEMS = 2;
+
+export function deferTrailingEdge(
+  next: IndexRange,
+  committed: IndexRange,
+  itemCount: number,
+  maxSlack: number = RANGE_TRAILING_SLACK_ITEMS,
+): IndexRange {
+  if (next.end < next.start || committed.end < committed.start) return next;
+  if (committed.end > itemCount - 1) return next;
+  if (next.start < committed.start || next.end > committed.end) return next;
+  if (next.start - committed.start > maxSlack || committed.end - next.end > maxSlack) return next;
+  return committed;
+}
+

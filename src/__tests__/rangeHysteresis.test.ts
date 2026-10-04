@@ -1,6 +1,11 @@
 import {describe, expect, it} from '@jest/globals';
 
-import {RANGE_EDGE_HYSTERESIS_ITEMS, stabilizeRange} from '../rangeHysteresis';
+import {
+  RANGE_EDGE_HYSTERESIS_ITEMS,
+  RANGE_TRAILING_SLACK_ITEMS,
+  deferTrailingEdge,
+  stabilizeRange,
+} from '../rangeHysteresis';
 
 describe('stabilizeRange', () => {
   const prev = {start: 10, end: 30};
@@ -49,3 +54,37 @@ describe('stabilizeRange', () => {
     });
   });
 });
+
+describe('deferTrailingEdge', () => {
+  const committed = {start: 10, end: 30};
+
+  it('keeps the committed window while it still covers the next one', () => {
+    expect(deferTrailingEdge({start: 11, end: 30}, committed, 1000)).toBe(committed);
+    expect(deferTrailingEdge({start: 10, end: 29}, committed, 1000)).toBe(committed);
+  });
+
+  it('commits as soon as the next window needs an item outside the committed one', () => {
+    const next = {start: 11, end: 31};
+    expect(deferTrailingEdge(next, committed, 1000)).toBe(next);
+    const before = {start: 9, end: 29};
+    expect(deferTrailingEdge(before, committed, 1000)).toBe(before);
+  });
+
+  it('commits when the extra items exceed the slack', () => {
+    const next = {start: 10 + RANGE_TRAILING_SLACK_ITEMS + 1, end: 30};
+    expect(deferTrailingEdge(next, committed, 1000)).toBe(next);
+  });
+
+  it('commits when the committed window runs past the item count', () => {
+    const next = {start: 10, end: 24};
+    expect(deferTrailingEdge(next, committed, 25)).toBe(next);
+  });
+
+  it('commits empty windows as they are', () => {
+    const empty = {start: 0, end: -1};
+    expect(deferTrailingEdge(empty, committed, 1000)).toBe(empty);
+    const next = {start: 0, end: 5};
+    expect(deferTrailingEdge(next, empty, 1000)).toBe(next);
+  });
+});
+

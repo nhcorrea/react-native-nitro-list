@@ -12,7 +12,7 @@ import {
   rangeCovers,
   type AdmissionRange,
 } from './prewarmAdmission';
-import {stabilizeRange} from './rangeHysteresis';
+import {deferTrailingEdge, stabilizeRange} from './rangeHysteresis';
 import {flushWaiters, waitForEventOrLayoutPass, waitForLayoutPass} from './scrollCommands';
 
 type Ref<V> = {current: V};
@@ -174,6 +174,7 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       stable = NitroListDevFlags.rangeEdgeHysteresis
         ? stabilizeRange(raw, latest, direction, ctx.itemCountRef.current)
         : raw;
+      stable = deferTrailingEdge(stable, latest, ctx.itemCountRef.current);
       ctx.latestRangeRef.current = stable;
     }
     const tracked = ctx.store.get('range');
