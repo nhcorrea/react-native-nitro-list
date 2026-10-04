@@ -298,12 +298,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     experimentalEagerMount,
   } = props;
 
-  useEffect(() => {
-    if (experimentalEagerMount !== true) return;
-    setNativeEagerMount(true);
-    return () => setNativeEagerMount(false);
-  }, [experimentalEagerMount]);
-
   const resolvedRenderScrollComponent =
     renderScrollComponent ??
     (experimentalUiThreadScroll === true
@@ -510,6 +504,18 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     capInitialDrawRef.current = initialTargetRef.current?.settled === true;
   }
   const [drawDistanceExpanded, setDrawDistanceExpanded] = useState(false);
+  useEffect(() => {
+    if (experimentalEagerMount !== true || !drawDistanceExpanded) return;
+    let held = false;
+    const frame = requestAnimationFrame(() => {
+      held = true;
+      setNativeEagerMount(true);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (held) setNativeEagerMount(false);
+    };
+  }, [experimentalEagerMount, drawDistanceExpanded]);
   const effectiveDrawDistance =
     drawDistanceExpanded || !capInitialDrawRef.current
       ? drawDistance

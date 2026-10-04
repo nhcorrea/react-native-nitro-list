@@ -21,6 +21,7 @@ describe('experimentalEagerMount', () => {
       keyExtractor: itemKey,
       ...props,
     });
+    harness.layout(400, 600);
   }
 
   beforeEach(() => {
@@ -38,24 +39,32 @@ describe('experimentalEagerMount', () => {
     jest.restoreAllMocks();
   });
 
-  it('holds the native eager mount while an Android list with the prop is mounted', () => {
+  it('holds the native eager mount once the initial window expanded and until unmount', async () => {
     Platform.OS = 'android';
     render({experimentalEagerMount: true});
+    expect(nativeEagerMountHoldersForTests()).toBe(0);
+    await harness?.settle();
+    expect(nativeEagerMountHoldersForTests()).toBe(0);
+    harness?.frame();
     expect(nativeEagerMountHoldersForTests()).toBe(1);
     harness?.unmount();
     harness = null;
     expect(nativeEagerMountHoldersForTests()).toBe(0);
   });
 
-  it('stays off by default on Android', () => {
+  it('stays off by default on Android', async () => {
     Platform.OS = 'android';
     render({});
+    await harness?.settle();
+    harness?.frame();
     expect(nativeEagerMountHoldersForTests()).toBe(0);
   });
 
-  it('never reaches the native object on iOS', () => {
+  it('never reaches the native object on iOS', async () => {
     Platform.OS = 'ios';
     render({experimentalEagerMount: true});
+    await harness?.settle();
+    harness?.frame();
     expect(nativeEagerMountHoldersForTests()).toBe(0);
   });
 });
