@@ -453,15 +453,6 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 | `maintainVisibleContentPosition` does nothing | A custom `renderScrollComponent` isn't forwarding the prop, or has `removeClippedSubviews` on. |
 | Animations stutter while scrolling | See the Reanimated feature flags noted in [UI-thread scroll mode](#ui-thread-scroll-mode-experimental). |
 
-## Example app
-
-```sh
-npm install
-cd example
-npm run pod   # iOS
-npm run ios   # or: npm run android
-```
-
 ## Development
 
 - `npm run codegen` — regenerate Nitro bindings (`nitrogen/generated`) after touching `src/NitroListEngine.nitro.ts`, then build.
