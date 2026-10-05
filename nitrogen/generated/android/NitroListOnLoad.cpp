@@ -16,6 +16,7 @@
 #include <NitroModules/HybridObjectRegistry.hpp>
 
 #include "JHybridNitroListScrollViewSpec.hpp"
+#include "JFunc_void_double_double.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 #include "HybridNitroListEngine.hpp"
 
@@ -42,6 +43,7 @@ void registerAllNatives() {
 
   // Register native JNI methods
   margelo::nitro::nitrolist::JHybridNitroListScrollViewSpec::CxxPart::registerNatives();
+  margelo::nitro::nitrolist::JFunc_void_double_double_cxx::registerNatives();
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(

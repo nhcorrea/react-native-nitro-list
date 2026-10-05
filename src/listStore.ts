@@ -12,6 +12,7 @@ export interface ListStoreState {
   endSpace: number;
   mvcpAdjust: number;
   dataItems: ReadonlyArray<unknown> | null;
+  mountSeq: number;
 }
 
 export type ListStoreKey = keyof ListStoreState;

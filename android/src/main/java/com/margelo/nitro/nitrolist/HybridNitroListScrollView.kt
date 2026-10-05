@@ -8,6 +8,7 @@ import com.facebook.proguard.annotations.DoNotStrip
 import com.facebook.react.bridge.UIManager
 import com.facebook.react.bridge.UIManagerListener
 import com.facebook.react.bridge.UiThreadUtil
+import com.facebook.react.R
 import com.facebook.react.common.annotations.UnstableReactNativeAPI
 import com.facebook.react.uimanager.IllegalViewOperationException
 import com.facebook.react.uimanager.PixelUtil
@@ -17,7 +18,9 @@ import com.facebook.react.views.scroll.ReactHorizontalScrollView
 import com.facebook.react.views.scroll.ReactScrollView
 import com.margelo.nitro.NitroModules
 import java.lang.reflect.InvocationTargetException
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 @Keep
@@ -68,6 +71,82 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
 
   override fun setEagerMount(enabled: Boolean) {
     EagerMount.set(enabled)
+  }
+
+  override fun observeMounts(markerTag: Double, onMounted: (sequence: Double, mountMs: Double) -> Unit): Double {
+    if (!markerTag.isFinite() || markerTag <= 0 || markerTag > Int.MAX_VALUE) return -1.0
+    return MountObserver.observe(markerTag.toInt(), onMounted).toDouble()
+  }
+
+  override fun unobserveMounts(id: Double) {
+    if (id.isFinite() && id > 0) MountObserver.unobserve(id.toInt())
+  }
+}
+
+@OptIn(UnstableReactNativeAPI::class)
+private object MountObserver {
+  private class Watch(val tag: Int, val callback: (Double, Double) -> Unit) {
+    var view: WeakReference<View>? = null
+    var last = Double.NaN
+  }
+
+  private val watches = ConcurrentHashMap<Int, Watch>()
+  private var nextId = 1
+  private var manager: UIManager? = null
+  private var mountStartNs = 0L
+
+  private val listener = object : UIManagerListener {
+    override fun willDispatchViewUpdates(uiManager: UIManager) {}
+
+    override fun willMountItems(uiManager: UIManager) {
+      mountStartNs = System.nanoTime()
+    }
+
+    override fun didMountItems(uiManager: UIManager) {
+      if (watches.isEmpty()) return
+      val mountMs = if (mountStartNs > 0L) (System.nanoTime() - mountStartNs) / 1e6 else 0.0
+      for (watch in watches.values) {
+        val view = watch.view?.get() ?: resolve(uiManager, watch.tag)?.also { watch.view = WeakReference(it) } ?: continue
+        val sequence = (view.getTag(R.id.react_test_id) as? String)?.toDoubleOrNull() ?: continue
+        if (sequence == watch.last) continue
+        watch.last = sequence
+        watch.callback(sequence, mountMs)
+      }
+    }
+
+    override fun didDispatchMountItems(uiManager: UIManager) {}
+
+    override fun didScheduleMountItems(uiManager: UIManager) {}
+  }
+
+  private fun resolve(uiManager: UIManager, tag: Int): View? = try {
+    uiManager.resolveView(tag)
+  } catch (_: IllegalViewOperationException) {
+    null
+  }
+
+  @Synchronized
+  fun observe(tag: Int, callback: (Double, Double) -> Unit): Int {
+    val context = NitroModules.applicationContext ?: return -1
+    val current = UIManagerHelper.getUIManager(context, UIManagerType.FABRIC) ?: return -1
+    if (current !== manager) {
+      manager?.removeUIManagerEventListener(listener)
+      watches.clear()
+      current.addUIManagerEventListener(listener)
+      manager = current
+    }
+    val id = nextId++
+    watches[id] = Watch(tag, callback)
+    return id
+  }
+
+  @Synchronized
+  fun unobserve(id: Int) {
+    watches.remove(id)
+    if (watches.isEmpty()) {
+      manager?.removeUIManagerEventListener(listener)
+      manager = null
+    }
   }
 }
 

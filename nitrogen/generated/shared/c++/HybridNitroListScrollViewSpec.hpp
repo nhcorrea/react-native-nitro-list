@@ -15,7 +15,7 @@
 
 
 
-
+#include <functional>
 
 namespace margelo::nitro::nitrolist {
 
@@ -50,6 +50,8 @@ namespace margelo::nitro::nitrolist {
       // Methods
       virtual void scrollTo(double viewTag, double x, double y, bool animated) = 0;
       virtual void setEagerMount(bool enabled) = 0;
+      virtual double observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) = 0;
+      virtual void unobserveMounts(double id) = 0;
 
     protected:
       // Hybrid Setup

@@ -1094,6 +1094,11 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   );
 }, areItemContainerPropsEqual);
 
+export function MountMarkerSlot({store, onMarker}: {store: ListStore; onMarker: (view: View | null) => void}) {
+  const sequence = useStoreValue(store, 'mountSeq');
+  return <View ref={onMarker} testID={String(sequence)} collapsable={false} pointerEvents="none" style={styles.mountMarker} />;
+}
+
 export function MvcpAdjustAnchorSlot({store, horizontal}: {store: ListStore; horizontal: boolean}) {
   const mvcpAdjust = useStoreValue(store, 'mvcpAdjust');
   return <MvcpAdjustAnchor top={MVCP_ANCHOR_BASE + mvcpAdjust} horizontal={horizontal} />;
@@ -1156,5 +1161,12 @@ export const styles = StyleSheet.create({
     top: 0,
     width: 1,
     height: 1,
+  },
+  mountMarker: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 0,
+    height: 0,
   },
 });

@@ -29,3 +29,17 @@ export function setNativeEagerMount(enabled: boolean): void {
   androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
   androidScrollView.setEagerMount(enabled);
 }
+
+export function observeNativeMounts(
+  markerTag: number,
+  onMounted: (sequence: number, mountMs: number) => void,
+): number {
+  if (Platform.OS !== 'android' || !Number.isInteger(markerTag) || markerTag <= 0) return -1;
+  androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
+  return androidScrollView.observeMounts(markerTag, onMounted);
+}
+
+export function unobserveNativeMounts(id: number): void {
+  if (Platform.OS !== 'android' || id <= 0) return;
+  androidScrollView?.unobserveMounts(id);
+}

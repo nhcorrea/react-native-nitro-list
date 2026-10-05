@@ -12,6 +12,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  findNodeHandle,
   PixelRatio,
   Platform,
   ScrollView,
@@ -22,7 +23,13 @@ import {
 } from 'react-native';
 
 import {createNitroListEngine, reportEngineMemory, type NitroListEngine} from './NitroListHost';
-import {scrollToNativeOffset, setNativeEagerMount} from './nativeScroll';
+import {
+  observeNativeMounts,
+  scrollToNativeOffset,
+  setNativeEagerMount,
+  unobserveNativeMounts,
+} from './nativeScroll';
+import {MountGate, nextSliceSize} from './mountAdmission';
 import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {
@@ -50,6 +57,7 @@ import {
   IS_DEV,
   ListContainer,
   MEASUREMENT_NOISE_EPSILON_DP,
+  MountMarkerSlot,
   MvcpAdjustAnchorSlot,
   NitroListCells,
   markCellSupplied,
@@ -331,9 +339,13 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       endSpace: 0,
       mvcpAdjust: 0,
       dataItems: null,
+      mountSeq: 0,
     });
   }
   const store = storeRef.current;
+  const mountGateRef = useRef<MountGate | null>(null);
+  if (mountGateRef.current == null) mountGateRef.current = new MountGate(store);
+  const mountObservationRef = useRef(-1);
   const stickyIndicesKey = stickyHeaderIndices != null ? stickyHeaderIndices.join(',') : '';
   const stickyIndices = useMemo<readonly number[]>(() => {
     const latest = stickyHeaderIndices;
@@ -684,6 +696,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     admitted: AdmissionRange | null;
     direction: 1 | -1;
     rafId: number | null;
+    cancelAck: (() => void) | null;
   } | null>(null);
   const prewarmAdmissionRef = useRef<{
     target: AdmissionRange;
@@ -708,6 +721,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const admission = flingAdmissionRef.current;
     if (admission != null) {
       if (admission.rafId != null) cancelAnimationFrame(admission.rafId);
+      admission.cancelAck?.();
       flingAdmissionRef.current = null;
     }
   });
@@ -2131,6 +2145,20 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     applyMvcpCorrectionRef.current = applyMvcpCorrection;
   }, [applyMvcpCorrection]);
 
+  const handleMountMarker = useStableCallback(stableCallbacks, (view: View | null) => {
+    const gate = mountGateRef.current!;
+    if (mountObservationRef.current > 0) unobserveNativeMounts(mountObservationRef.current);
+    mountObservationRef.current = -1;
+    gate.available = false;
+    gate.reset();
+    if (view == null) return;
+    const tag = findNodeHandle(view);
+    if (tag == null) return;
+    const id = observeNativeMounts(tag, gate.mounted);
+    mountObservationRef.current = id;
+    gate.available = id > 0;
+  });
+
   const prewarmFlingDestination = useStableCallback(stableCallbacks, () => {
     if (itemCount === 0 || isPrewarmingRangeRef.current) return;
     const viewportH = mainViewportRef.current;
@@ -2161,15 +2189,20 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       admitted: null,
       direction: travel >= 0 ? 1 : -1,
       rafId: null,
+      cancelAck: null,
     };
     flingAdmissionRef.current = admission;
+    const gate = mountGateRef.current!;
     const admitSlice = () => {
       if (flingAdmissionRef.current !== admission) return;
+      admission.rafId = null;
+      admission.cancelAck = null;
+      const before = admission.admitted;
       admission.admitted = growAdmittedRange(
         admission.target,
         admission.focus,
         admission.admitted,
-        PREWARM_ADMISSION_BUDGET_ITEMS,
+        gate.available ? nextSliceSize(gate.costPerItemMs) : PREWARM_ADMISSION_BUDGET_ITEMS,
         admission.direction,
       );
       setPrewarmRangeTracked({
@@ -2177,11 +2210,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         end: admission.admitted.end,
         layoutVersion: lastSeenLayoutVersionRef.current,
       });
-      if (rangeCovers(admission.admitted, admission.target)) {
-        admission.rafId = null;
+      const covered = rangeCovers(admission.admitted, admission.target);
+      if (gate.available) {
+        const added =
+          admission.admitted.end - admission.admitted.start + 1 -
+          (before == null ? 0 : before.end - before.start + 1);
+        const sequence = gate.publish(added);
+        if (!covered) admission.cancelAck = gate.afterMount(sequence, admitSlice);
         return;
       }
-      admission.rafId = requestAnimationFrame(admitSlice);
+      if (!covered) admission.rafId = requestAnimationFrame(admitSlice);
     };
     admitSlice();
   });
@@ -2667,6 +2705,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         ) : null}
         {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
         <ListContainer store={store} horizontal={isHorizontal}>
+          {Platform.OS === 'android' ? (
+            <MountMarkerSlot store={store} onMarker={handleMountMarker} />
+          ) : null}
           <NitroListCells
             firstPaintLimit={
               !drawDistanceExpanded &&

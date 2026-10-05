@@ -9,7 +9,9 @@
 
 
 
-
+#include <functional>
+#include "JFunc_void_double_double.hpp"
+#include <NitroModules/JNICallable.hpp>
 
 namespace margelo::nitro::nitrolist {
 
@@ -51,6 +53,15 @@ namespace margelo::nitro::nitrolist {
   void JHybridNitroListScrollViewSpec::setEagerMount(bool enabled) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jboolean /* enabled */)>("setEagerMount");
     method(_javaPart, enabled);
+  }
+  double JHybridNitroListScrollViewSpec::observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<double(double /* markerTag */, jni::alias_ref<JFunc_void_double_double::javaobject> /* onMounted */)>("observeMounts_cxx");
+    auto __result = method(_javaPart, markerTag, JFunc_void_double_double_cxx::fromCpp(onMounted));
+    return __result;
+  }
+  void JHybridNitroListScrollViewSpec::unobserveMounts(double id) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("unobserveMounts");
+    method(_javaPart, id);
   }
 
 } // namespace margelo::nitro::nitrolist

@@ -36,6 +36,19 @@ abstract class HybridNitroListScrollViewSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun setEagerMount(enabled: Boolean): Unit
+  
+  abstract fun observeMounts(markerTag: Double, onMounted: (sequence: Double, mountMs: Double) -> Unit): Double
+  
+  @DoNotStrip
+  @Keep
+  private fun observeMounts_cxx(markerTag: Double, onMounted: Func_void_double_double): Double {
+    val __result = observeMounts(markerTag, onMounted)
+    return __result
+  }
+  
+  @DoNotStrip
+  @Keep
+  abstract fun unobserveMounts(id: Double): Unit
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

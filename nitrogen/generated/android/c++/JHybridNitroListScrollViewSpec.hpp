@@ -56,6 +56,8 @@ namespace margelo::nitro::nitrolist {
     // Methods
     void scrollTo(double viewTag, double x, double y, bool animated) override;
     void setEagerMount(bool enabled) override;
+    double observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) override;
+    void unobserveMounts(double id) override;
 
   private:
     jni::global_ref<JHybridNitroListScrollViewSpec::JavaPart> _javaPart;
