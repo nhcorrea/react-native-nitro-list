@@ -228,15 +228,17 @@ export function mergeRenderRanges(ranges: RenderRange[]): RenderRange[] {
 
 export type ItemsAreEqualFn = (prev: unknown, next: unknown, index: number) => boolean;
 
-type CellPool = {
+export type CellPool = {
   slots: Map<string, number>;
   types: Map<number, string>;
   elements: Map<number, React.ReactElement>;
   lastKeys: Map<number, string>;
+  order: number[];
+  demand: Map<string, number>;
   next: number;
 };
 
-const MAX_PARKED_CELLS = 32;
+export const MAX_PARKED_CELLS = 32;
 const CELLS_STORE_KEYS = [
   'range',
   'prewarmRange',
@@ -246,44 +248,87 @@ const CELLS_STORE_KEYS = [
   'renderMode',
 ] as const;
 
-function emptyCellPool(): CellPool {
-  return {slots: new Map(), types: new Map(), elements: new Map(), lastKeys: new Map(), next: 0};
+export function emptyCellPool(): CellPool {
+  return {
+    slots: new Map(),
+    types: new Map(),
+    elements: new Map(),
+    lastKeys: new Map(),
+    order: [],
+    demand: new Map(),
+    next: 0,
+  };
 }
 
-function assignCellSlots(
+function selectParkedSlots(
+  free: ReadonlyMap<string, number[]>,
+  demand: ReadonlyMap<string, number>,
+  canPark: (slot: number) => boolean,
+): Set<number> {
+  const parked = new Set<number>();
+  const candidates: Array<{slots: number[]; quota: number; cursor: number}> = [];
+  for (const [typeKey, list] of free) {
+    const quota = Math.min(list.length, demand.get(typeKey) ?? 0);
+    if (quota > 0) candidates.push({slots: list, quota, cursor: 0});
+  }
+  let progressed = true;
+  while (parked.size < MAX_PARKED_CELLS && progressed) {
+    progressed = false;
+    for (const candidate of candidates) {
+      if (parked.size >= MAX_PARKED_CELLS) break;
+      while (candidate.quota > 0 && candidate.cursor < candidate.slots.length) {
+        const slot = candidate.slots[candidate.cursor++];
+        if (!canPark(slot)) continue;
+        parked.add(slot);
+        candidate.quota--;
+        progressed = true;
+        break;
+      }
+    }
+  }
+  return parked;
+}
+
+export function assignCellSlots(
   previous: CellPool,
   entries: ReadonlyArray<CellEntry>,
+  canPark: (slot: number) => boolean,
 ): {pool: CellPool; slots: number[]; parked: number[]} {
   const pool: CellPool = {
     slots: new Map(),
     types: new Map(),
     elements: new Map(),
-    lastKeys: new Map(previous.lastKeys),
+    lastKeys: new Map(),
+    order: [],
+    demand: new Map(),
     next: previous.next,
   };
-  const taken = new Uint8Array(previous.next);
   const slots = new Array<number>(entries.length);
+  const active = new Set<number>();
   const pending: number[] = [];
+  const windowDemand = new Map<string, number>();
   for (let position = 0; position < entries.length; position++) {
     const {reactKey, typeKey} = entries[position].metadata;
+    windowDemand.set(typeKey, (windowDemand.get(typeKey) ?? 0) + 1);
     const kept = previous.slots.get(reactKey);
     if (kept == null) {
       pending.push(position);
       continue;
     }
-    taken[kept] = 1;
+    active.add(kept);
     slots[position] = kept;
     pool.slots.set(reactKey, kept);
     pool.types.set(kept, typeKey);
   }
   const free = new Map<string, number[]>();
-  for (const slot of previous.slots.values()) {
-    if (taken[slot] === 1) continue;
+  for (const slot of previous.order) {
+    if (active.has(slot)) continue;
     const typeKey = previous.types.get(slot)!;
     const list = free.get(typeKey);
     if (list == null) free.set(typeKey, [slot]);
     else list.push(slot);
   }
+  const created: number[] = [];
   if (pending.length > 0) {
     const freeByLastKey = new Map<string, number>();
     for (const list of free.values()) {
@@ -304,7 +349,14 @@ function assignCellSlots(
       } else {
         reused = list?.pop();
       }
-      const slot = reused ?? pool.next++;
+      let slot: number;
+      if (reused != null) {
+        slot = reused;
+      } else {
+        slot = pool.next++;
+        created.push(slot);
+      }
+      active.add(slot);
       slots[position] = slot;
       pool.slots.set(reactKey, slot);
       pool.types.set(slot, typeKey);
@@ -313,16 +365,35 @@ function assignCellSlots(
   for (let position = 0; position < entries.length; position++) {
     pool.lastKeys.set(slots[position], entries[position].metadata.reactKey);
   }
+  for (const [typeKey, count] of windowDemand) pool.demand.set(typeKey, count);
+  for (const [typeKey, count] of previous.demand) {
+    if (free.has(typeKey) && count > (pool.demand.get(typeKey) ?? 0)) pool.demand.set(typeKey, count);
+  }
+  const parkedSet = selectParkedSlots(free, pool.demand, canPark);
   const parked: number[] = [];
-  for (const list of free.values()) {
-    for (const slot of list) {
-      if (parked.length >= MAX_PARKED_CELLS || !previous.elements.has(slot)) continue;
+  for (const slot of previous.order) {
+    if (active.has(slot)) {
+      pool.order.push(slot);
+    } else if (parkedSet.has(slot)) {
+      pool.order.push(slot);
       parked.push(slot);
       pool.types.set(slot, previous.types.get(slot)!);
-      pool.slots.set(`parked-${slot}`, slot);
+      const lastKey = previous.lastKeys.get(slot);
+      if (lastKey != null) pool.lastKeys.set(slot, lastKey);
+    }
+  }
+  for (const slot of created) pool.order.push(slot);
+  for (const typeKey of pool.demand.keys()) {
+    if (!windowDemand.has(typeKey) && !parkedHasType(parked, pool.types, typeKey)) {
+      pool.demand.delete(typeKey);
     }
   }
   return {pool, slots, parked};
+}
+
+function parkedHasType(parked: ReadonlyArray<number>, types: ReadonlyMap<number, string>, typeKey: string): boolean {
+  for (const slot of parked) if (types.get(slot) === typeKey) return true;
+  return false;
 }
 
 function rangeKeysMoved(
@@ -694,36 +765,33 @@ export const NitroListCells = React.memo(function NitroListCells({
     recycleItems,
   };
   if (recycleItems) {
-    const assigned = assignCellSlots(poolRef.current, entries);
+    const previousPool = poolRef.current;
+    const assigned = assignCellSlots(previousPool, entries, (slot) => {
+      const element = previousPool.elements.get(slot) as
+        | React.ReactElement<NitroListItemContainerProps>
+        | undefined;
+      return (
+        element != null &&
+        element.props.item === items[element.props.index] &&
+        element.props.measurementRevision === measurementRevision
+      );
+    });
     nextPool = assigned.pool;
-    const bySlot = new Array<React.ReactElement | undefined>(nextPool.next);
     for (let position = 0; position < entries.length; position++) {
       const slot = assigned.slots[position];
-      const element = buildCellElement(entries[position], `slot-${slot}`, build);
-      nextPool.elements.set(slot, element);
-      bySlot[slot] = element;
+      nextPool.elements.set(slot, buildCellElement(entries[position], `slot-${slot}`, build));
     }
     for (const slot of assigned.parked) {
-      const element = poolRef.current.elements.get(slot)! as React.ReactElement<NitroListItemContainerProps>;
-      if (
-        element.props.item !== items[element.props.index] ||
-        element.props.measurementRevision !== measurementRevision
-      ) {
-        nextPool.slots.delete(`parked-${slot}`);
-        nextPool.types.delete(slot);
-        continue;
-      }
+      const element = previousPool.elements.get(slot)! as React.ReactElement<NitroListItemContainerProps>;
       const near = element.props.top >= firstTop && element.props.top <= lastTop;
       const parkedElement = element.props.parked && (!near || element.props.hidden)
         ? element
         : React.cloneElement(element, near ? {parked: true, hidden: true} : {parked: true});
       nextPool.elements.set(slot, parkedElement);
-      bySlot[slot] = parkedElement;
     }
-    const children: React.ReactElement[] = [];
-    for (let slot = 0; slot < bySlot.length; slot++) {
-      const element = bySlot[slot];
-      if (element !== undefined) children.push(element);
+    const children = new Array<React.ReactElement>(nextPool.order.length);
+    for (let position = 0; position < nextPool.order.length; position++) {
+      children[position] = nextPool.elements.get(nextPool.order[position])!;
     }
     build.previous = null;
     renderedOutput = <>{children}</>;
