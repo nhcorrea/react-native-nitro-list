@@ -782,6 +782,114 @@ static void testSubFrameEchoDoesNotEngageRegime() {
   CHECK(moving.getOffset(last.start) > top - draw);
 }
 
+
+static void oracleRange(const std::vector<float>& sizes, double scroll, double viewportH, double draw,
+                        int32_t& outStart, int32_t& outEnd) {
+  const auto count = static_cast<int32_t>(sizes.size());
+  std::vector<double> offs(sizes.size());
+  double total = 0.0;
+  for (int32_t i = 0; i < count; i++) {
+    offs[i] = total;
+    total += sizes[i];
+  }
+  double topBuffer = draw, bottomBuffer = draw;
+  const bool inside = scroll < total;
+  const double unusedTop = inside ? std::max(0.0, topBuffer - scroll) : 0.0;
+  const double unusedBottom = inside ? std::max(0.0, scroll + viewportH + bottomBuffer - total) : 0.0;
+  topBuffer += unusedBottom;
+  bottomBuffer += unusedTop;
+  if (count == 0 || viewportH <= 0.0) {
+    outStart = 0;
+    outEnd = -1;
+    return;
+  }
+  const double top = std::max(0.0, scroll - topBuffer);
+  const double bottom = std::min(total, scroll + viewportH + bottomBuffer);
+  if (total <= top) {
+    outStart = count - 1;
+    outEnd = count - 1;
+    return;
+  }
+  const auto startIt = std::upper_bound(offs.begin() + 1, offs.begin() + count, top);
+  const int32_t start = static_cast<int32_t>(startIt - offs.begin()) - 1;
+  const auto endIt = std::lower_bound(offs.begin() + start, offs.begin() + count, bottom);
+  int32_t end = static_cast<int32_t>(endIt - offs.begin()) - 1;
+  outStart = start;
+  outEnd = std::clamp(end, start, count - 1);
+}
+
+static void testBlockedOffsetsLargeDifferential() {
+  std::mt19937 rng(20261005);
+  std::uniform_real_distribution<float> sizeDist(8.0f, 400.0f);
+  std::uniform_int_distribution<int32_t> opDist(0, 99);
+  LayoutCore core;
+  ReferenceModel ref;
+  core.setMeasurementEpsilon(0.0);
+  ref.epsilon = 0.0f;
+  core.setEstimate(120.0f);
+  ref.setEstimate(120.0f);
+  int32_t count = 5000;
+  core.setItemCount(count);
+  ref.setItemCount(count);
+  for (int step = 0; step < 3000; step++) {
+    const int32_t op = opDist(rng);
+    std::uniform_int_distribution<int32_t> idxDist(0, count > 0 ? count - 1 : 0);
+    if (op < 45) {
+      double pairs[40];
+      const int32_t n = 1 + static_cast<int32_t>(rng() % 20);
+      for (int p = 0; p < n; p++) {
+        int32_t idx = idxDist(rng);
+        if (rng() % 7 == 0) idx = std::min(count - 1, ((idx >> 7) << 7) + (rng() % 2 == 0 ? 0 : 127));
+        const float size = rng() % 11 == 0 ? 0.0f : sizeDist(rng);
+        pairs[p * 2] = idx;
+        pairs[p * 2 + 1] = size;
+        ref.setItemSize(idx, size);
+      }
+      core.setItemSizes(pairs, n, 1.0);
+    } else if (op < 70) {
+      const int32_t idx = idxDist(rng);
+      const float size = sizeDist(rng);
+      core.setItemSize(idx, size);
+      ref.setItemSize(idx, size);
+    } else if (op < 74) {
+      count = 3000 + static_cast<int32_t>(rng() % 3000);
+      core.setItemCount(count);
+      ref.setItemCount(count);
+    } else if (op < 76) {
+      core.setColumnCount(2);
+      core.setColumnCount(1);
+      ref.resetItemSizes();
+    } else if (op < 77) {
+      const float estimate = sizeDist(rng);
+      core.setEstimate(estimate);
+      ref.setEstimate(estimate);
+    }
+    const double scroll = std::uniform_real_distribution<double>(-200.0, ref.totalSize() + 200.0)(rng);
+    int32_t wantStart = 0, wantEnd = -1;
+    oracleRange(ref.sizes, scroll, 800.0, 250.0, wantStart, wantEnd);
+    const auto got = core.getEngagedRange(scroll, 800.0, 250.0);
+    if (got.start != wantStart || got.end != wantEnd || std::abs(core.getTotalSize() - ref.totalSize()) > 1e-6) {
+      std::printf("FAIL blocked differential step %d: range (%d,%d) want (%d,%d) total %f want %f\n", step,
+                  got.start, got.end, wantStart, wantEnd, core.getTotalSize(), ref.totalSize());
+      failures++;
+      return;
+    }
+    std::uniform_int_distribution<int32_t> checkDist(0, count - 1);
+    for (int k = 0; k < 4; k++) {
+      const int32_t idx = checkDist(rng);
+      if (std::abs(core.getOffset(idx) - ref.offsetOf(idx)) > 1e-6) {
+        std::printf("FAIL blocked differential step %d: offset[%d] %f want %f\n", step, idx, core.getOffset(idx), ref.offsetOf(idx));
+        failures++;
+        return;
+      }
+    }
+  }
+  double out[4 + 2 * 300];
+  const int32_t first = count / 2 - 150;
+  CHECK(core.readLayout(first, 300, out, 4 + 2 * 300) == 300);
+  for (int32_t k = 0; k < 300; k++) CHECK(std::abs(out[4 + k * 2] - ref.offsetOf(first + k)) < 1e-6);
+}
+
 static void testRandomizedDifferential() {
   std::mt19937 rng(20260702);
   std::uniform_real_distribution<float> sizeDist(8.0f, 400.0f);
@@ -1560,6 +1668,7 @@ int main(int argc, char** argv) {
   testTypesRangeAndUnmeasured();
   testSubFrameEchoDoesNotEngageRegime();
   testRandomizedDifferential();
+  testBlockedOffsetsLargeDifferential();
   if (failures == 0) {
     std::printf("OK — all LayoutCore tests passed\n");
     return 0;

@@ -29,6 +29,12 @@ constexpr int32_t kCapacityFloorItems = 4096;
 constexpr uint8_t kMeasuredOnce = 1;
 constexpr uint8_t kMeasuredResized = 2;
 constexpr uint8_t kMeasuredUnstable = 3;
+constexpr int32_t kBlockShift = 7;
+constexpr int32_t kBlockSize = 1 << kBlockShift;
+
+inline int32_t blockCountFor(int32_t items) {
+  return items <= 0 ? 0 : ((items - 1) >> kBlockShift) + 1;
+}
 
 template <typename T>
 void truncateCapacity(std::vector<T>& values, size_t keep) {
@@ -83,7 +89,13 @@ bool LayoutCore::setItemCount(int32_t count) {
     rebuildTypeObservationsLocked();
     applyTypeMeansLocked();
   }
-  minDirtyIndex_ = std::min(minDirtyIndex_, dirtyStart);
+  const auto blocks = static_cast<size_t>(blockCountFor(count));
+  if (blockBase_.size() < blocks) {
+    blockBase_.resize(blocks, 0.0);
+    blockSum_.resize(blocks, 0.0);
+    blockDirty_.resize(blocks, 0);
+  }
+  markWideDirtyLocked(dirtyStart);
   hasRangeWindow_ = false;
   return true;
 }
@@ -151,7 +163,7 @@ bool LayoutCore::setEstimate(double value) {
       geometryChanged_ = geometryChanged_ || sizes_[i] != rounded;
       sizes_[i] = rounded;
       anyChanged = true;
-      minDirtyIndex_ = std::min(minDirtyIndex_, i);
+      markItemDirtyLocked(i);
     }
   }
   return anyChanged;
@@ -174,7 +186,7 @@ bool LayoutCore::setItemSize(int32_t index, double size) {
   recordMeasurementLocked(index, rounded);
   geometryChanged_ = geometryChanged_ || sizes_[index] != rounded;
   sizes_[index] = rounded;
-  minDirtyIndex_ = std::min(minDirtyIndex_, index);
+  markItemDirtyLocked(index);
   applyTypeMeansLocked();
   return true;
 }
@@ -191,14 +203,14 @@ double LayoutCore::setItemSizesAnchored(const double* pairs, int32_t pairCount, 
   double before = 0.0;
   if (anchorValid) {
     ensureClean();
-    before = offsets_[anchorIndex];
+    before = offsetAtLocked(anchorIndex);
   }
   const bool anyChanged = applyItemSizesLocked(pairs, pairCount, scale);
   if (!anchorValid || !anyChanged) {
     return 0.0;
   }
   ensureClean();
-  return offsets_[anchorIndex] - before;
+  return offsetAtLocked(anchorIndex) - before;
 }
 
 bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, double scale) {
@@ -221,7 +233,7 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
     recordMeasurementLocked(idx, rounded);
     geometryChanged_ = geometryChanged_ || sizes_[idx] != rounded;
     sizes_[idx] = rounded;
-    minDirtyIndex_ = std::min(minDirtyIndex_, idx);
+    markItemDirtyLocked(idx);
     anyChanged = true;
   }
   if (anyChanged) {
@@ -249,7 +261,7 @@ bool LayoutCore::resetItemSizes() {
     }
   }
   if (anyChanged) {
-    minDirtyIndex_ = 0;
+    markWideDirtyLocked(0);
     hasRangeWindow_ = false;
   }
   return anyChanged;
@@ -279,7 +291,7 @@ void LayoutCore::invalidateItemSizesFrom(int32_t start, bool clearPriors, const 
   }
   pruneFrozenLocked();
   if (removedObservation || clearPriors) rebuildTypeObservationsLocked();
-  minDirtyIndex_ = std::min(minDirtyIndex_, start);
+  markWideDirtyLocked(start);
   hasRangeWindow_ = false;
 }
 
@@ -316,7 +328,7 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
       geometryChanged_ = true;
       sizes_[i] = size;
       anyChanged = true;
-      minDirtyIndex_ = std::min(minDirtyIndex_, i);
+      markItemDirtyLocked(i);
     }
   };
   if (contiguous) {
@@ -378,6 +390,10 @@ void LayoutCore::releaseCapacityLocked() {
   truncateCapacity(types_, keep);
   truncateCapacity(spans_, keep);
   truncateCapacity(rowStart_, keep);
+  const auto blocks = static_cast<size_t>(blockCountFor(itemCount_));
+  truncateCapacity(blockBase_, blocks);
+  truncateCapacity(blockSum_, blocks);
+  truncateCapacity(blockDirty_, blocks);
   std::vector<float>().swap(remapSizes_);
   std::vector<uint8_t>().swap(remapMeasured_);
 }
@@ -399,6 +415,11 @@ void LayoutCore::resetAll() {
   totalSize_ = 0.0;
   estimatesFrozen_ = false;
   minDirtyIndex_ = INT32_MAX;
+  wideDirtyIndex_ = INT32_MAX;
+  std::vector<double>().swap(blockBase_);
+  std::vector<double>().swap(blockSum_);
+  std::vector<uint8_t>().swap(blockDirty_);
+  std::vector<int32_t>().swap(dirtyBlocks_);
   layoutVersion_ = 0;
   geometryChanged_ = false;
   hasRangeWindow_ = false;
@@ -425,7 +446,9 @@ size_t LayoutCore::getMemoryFootprint() {
          measured_.capacity() * sizeof(uint8_t) + types_.capacity() * sizeof(uint16_t) +
          spans_.capacity() * sizeof(uint16_t) + rowStart_.capacity() * sizeof(int32_t) +
          typeStats_.capacity() * sizeof(TypeStats) + remapSizes_.capacity() * sizeof(float) +
-         remapMeasured_.capacity() * sizeof(uint8_t);
+         remapMeasured_.capacity() * sizeof(uint8_t) + blockBase_.capacity() * sizeof(double) +
+         blockSum_.capacity() * sizeof(double) + blockDirty_.capacity() * sizeof(uint8_t) +
+         dirtyBlocks_.capacity() * sizeof(int32_t);
 }
 
 bool LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {
@@ -466,7 +489,7 @@ bool LayoutCore::assignTypesLocked(int32_t start, const uint16_t* types, int32_t
     if (sizes_[i] != target) {
       geometryChanged_ = geometryChanged_ || sizes_[i] != target;
       sizes_[i] = target;
-      minDirtyIndex_ = std::min(minDirtyIndex_, i);
+      markItemDirtyLocked(i);
     }
   }
   if (measuredTypeChanged) applyTypeMeansLocked();
@@ -523,7 +546,7 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double sc
       geometryChanged_ = geometryChanged_ || sizes_[i] != target;
       sizes_[i] = target;
       anyChanged = true;
-      minDirtyIndex_ = std::min(minDirtyIndex_, i);
+      markItemDirtyLocked(i);
     }
   }
   return anyChanged;
@@ -578,7 +601,7 @@ double LayoutCore::getOffset(int32_t index) {
     return 0.0;
   }
   ensureClean();
-  return offsets_[index];
+  return offsetAtLocked(index);
 }
 
 double LayoutCore::getSize(int32_t index) {
@@ -613,7 +636,7 @@ int32_t LayoutCore::readLayout(int32_t start, int32_t count, double* out, int32_
   }
   double* cursor = out + 4;
   for (int32_t i = first; i < first + available; i++) {
-    *cursor++ = offsets_[i];
+    *cursor++ = offsetAtLocked(i);
     *cursor++ = static_cast<double>(sizes_[i]);
   }
   return available;
@@ -644,7 +667,7 @@ int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, double 
   out[3] = range.end;
   double* cursor = out + 4;
   for (int32_t i = range.start; i < range.start + count; i++) {
-    *cursor++ = offsets_[i] * outputScale;
+    *cursor++ = offsetAtLocked(i) * outputScale;
     *cursor++ = static_cast<double>(sizes_[i]) * outputScale;
   }
   return count;
@@ -741,12 +764,8 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
         columnCount_ > 1 && !rowStart_.empty() ? rowStart_[itemCount_ - 1] : itemCount_ - 1;
     return EngagedRange{lastStart, itemCount_ - 1, layoutVersion_};
   }
-  const auto beginIt = offsets_.begin() + 1;
-  const auto endIt = offsets_.begin() + itemCount_;
-  const auto startIt = std::upper_bound(beginIt, endIt, top);
-  auto start = static_cast<int32_t>(startIt - offsets_.begin()) - 1;
-  const auto endSearchIt = std::lower_bound(offsets_.begin() + start, endIt, bottom);
-  int32_t end = static_cast<int32_t>(endSearchIt - offsets_.begin()) - 1;
+  auto start = lastIndexAtOrBelowLocked(top);
+  int32_t end = lastIndexBelowLocked(bottom, start);
   end = std::clamp(end, start, itemCount_ - 1);
   if (columnCount_ > 1) {
     start = rowStart_[start];
@@ -757,13 +776,13 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
     hasRangeWindow_ = false;
     return EngagedRange{start, end, layoutVersion_};
   }
-  double lower = offsets_[end] - viewportHeight - bottomBuffer;
+  double lower = offsetAtLocked(end) - viewportHeight - bottomBuffer;
   if (start > 0) {
-    lower = std::max(lower, offsets_[start - 1] + sizes_[start - 1] + topBuffer);
+    lower = std::max(lower, offsetAtLocked(start - 1) + sizes_[start - 1] + topBuffer);
   }
-  double upper = offsets_[start] + sizes_[start] + topBuffer;
+  double upper = offsetAtLocked(start) + sizes_[start] + topBuffer;
   if (end < itemCount_ - 1) {
-    upper = std::min(upper, offsets_[end + 1] - viewportHeight - bottomBuffer);
+    upper = std::min(upper, offsetAtLocked(end + 1) - viewportHeight - bottomBuffer);
   }
   cachedStart_ = start;
   cachedEnd_ = end;
@@ -791,7 +810,7 @@ void LayoutCore::setColumnCount(int32_t columns) {
     geometryChanged_ = geometryChanged_ || sizes_[i] != estimate_;
     sizes_[i] = estimate_;
   }
-  minDirtyIndex_ = 0;
+  markWideDirtyLocked(0);
   hasRangeWindow_ = false;
 }
 
@@ -807,7 +826,7 @@ bool LayoutCore::setItemSpans(const uint16_t* spans, int32_t count) {
     if (spans_[i] != next) {
       spans_[i] = next;
       anyChanged = true;
-      minDirtyIndex_ = std::min(minDirtyIndex_, std::max(0, i - 1));
+      markWideDirtyLocked(std::max(0, i - 1));
     }
   }
   if (anyChanged) {
@@ -825,7 +844,7 @@ bool LayoutCore::setItemSpansRange(int32_t start, const uint16_t* spans, int32_t
     const uint16_t next = std::max<uint16_t>(1, spans[i - start]);
     if (spans_[i] == next) continue;
     spans_[i] = next;
-    minDirtyIndex_ = std::min(minDirtyIndex_, std::max(0, i - 1));
+    markWideDirtyLocked(std::max(0, i - 1));
     changed = true;
   }
   if (changed) hasRangeWindow_ = false;
@@ -840,6 +859,103 @@ int32_t LayoutCore::spanAtLocked(int32_t index) const {
   return std::min(span, columnCount_);
 }
 
+void LayoutCore::markItemDirtyLocked(int32_t index) {
+  minDirtyIndex_ = std::min(minDirtyIndex_, index);
+  if (columnCount_ > 1 || index < 0) return;
+  const int32_t block = index >> kBlockShift;
+  if (block >= static_cast<int32_t>(blockDirty_.size()) || blockDirty_[block] != 0) return;
+  blockDirty_[block] = 1;
+  dirtyBlocks_.push_back(block);
+}
+
+void LayoutCore::markWideDirtyLocked(int32_t index) {
+  minDirtyIndex_ = std::min(minDirtyIndex_, index);
+  wideDirtyIndex_ = std::min(wideDirtyIndex_, index);
+}
+
+void LayoutCore::rebuildBlockLocked(int32_t block, bool& anyChanged) {
+  const int32_t first = block << kBlockShift;
+  const int32_t last = std::min(itemCount_, first + kBlockSize);
+  double local = 0.0;
+  for (int32_t i = first; i < last; i++) {
+    if (offsets_[i] != local) {
+      offsets_[i] = local;
+      anyChanged = true;
+    }
+    local += sizes_[i];
+  }
+  blockSum_[block] = local;
+}
+
+void LayoutCore::ensureCleanBlocksLocked(bool& anyChanged) {
+  const int32_t blocks = blockCountFor(itemCount_);
+  int32_t rebase = INT32_MAX;
+  int32_t wideFrom = INT32_MAX;
+  if (wideDirtyIndex_ != INT32_MAX) {
+    wideFrom = std::min(wideDirtyIndex_, std::max(0, itemCount_ - 1)) >> kBlockShift;
+    for (int32_t block = wideFrom; block < blocks; block++) rebuildBlockLocked(block, anyChanged);
+    rebase = wideFrom;
+  }
+  for (const int32_t block : dirtyBlocks_) {
+    if (block >= static_cast<int32_t>(blockDirty_.size())) continue;
+    blockDirty_[block] = 0;
+    if (block >= blocks || block >= wideFrom) continue;
+    rebuildBlockLocked(block, anyChanged);
+    rebase = std::min(rebase, block);
+  }
+  dirtyBlocks_.clear();
+  if (rebase == INT32_MAX) rebase = blocks;
+  double base = rebase == 0 || blocks == 0 ? 0.0 : blockBase_[rebase - 1] + blockSum_[rebase - 1];
+  for (int32_t block = rebase; block < blocks; block++) {
+    if (blockBase_[block] != base) {
+      blockBase_[block] = base;
+      anyChanged = true;
+    }
+    base += blockSum_[block];
+  }
+  const double total = blocks == 0 ? 0.0 : blockBase_[blocks - 1] + blockSum_[blocks - 1];
+  if (totalSize_ != total) {
+    totalSize_ = total;
+    anyChanged = true;
+  }
+}
+
+double LayoutCore::offsetAtLocked(int32_t index) const {
+  if (columnCount_ > 1) return offsets_[index];
+  return blockBase_[index >> kBlockShift] + offsets_[index];
+}
+
+int32_t LayoutCore::lastIndexAtOrBelowLocked(double value) const {
+  if (itemCount_ <= 0) return 0;
+  if (columnCount_ > 1) {
+    const auto it = std::upper_bound(offsets_.begin() + 1, offsets_.begin() + itemCount_, value);
+    return static_cast<int32_t>(it - offsets_.begin()) - 1;
+  }
+  const int32_t blocks = blockCountFor(itemCount_);
+  const auto blockIt = std::upper_bound(blockBase_.begin() + 1, blockBase_.begin() + blocks, value);
+  const int32_t block = static_cast<int32_t>(blockIt - blockBase_.begin()) - 1;
+  const int32_t first = block << kBlockShift;
+  const int32_t last = std::min(itemCount_, first + kBlockSize);
+  const auto it = std::upper_bound(offsets_.begin() + first + 1, offsets_.begin() + last, value - blockBase_[block]);
+  return static_cast<int32_t>(it - offsets_.begin()) - 1;
+}
+
+int32_t LayoutCore::lastIndexBelowLocked(double value, int32_t from) const {
+  if (columnCount_ > 1) {
+    const auto it = std::lower_bound(offsets_.begin() + from, offsets_.begin() + itemCount_, value);
+    return static_cast<int32_t>(it - offsets_.begin()) - 1;
+  }
+  const int32_t blocks = blockCountFor(itemCount_);
+  const int32_t fromBlock = from >> kBlockShift;
+  const auto blockIt = std::lower_bound(blockBase_.begin() + fromBlock, blockBase_.begin() + blocks, value);
+  int32_t block = static_cast<int32_t>(blockIt - blockBase_.begin()) - 1;
+  if (block < fromBlock) return from - 1;
+  const int32_t first = std::max(from, block << kBlockShift);
+  const int32_t last = std::min(itemCount_, (block << kBlockShift) + kBlockSize);
+  const auto it = std::lower_bound(offsets_.begin() + first, offsets_.begin() + last, value - blockBase_[block]);
+  return static_cast<int32_t>(it - offsets_.begin()) - 1;
+}
+
 void LayoutCore::ensureClean() {
   if (minDirtyIndex_ == INT32_MAX) {
     return;
@@ -847,19 +963,7 @@ void LayoutCore::ensureClean() {
   bool anyChanged = geometryChanged_;
   geometryChanged_ = false;
   if (columnCount_ <= 1) {
-    double off =
-        minDirtyIndex_ == 0 ? 0.0 : offsets_[minDirtyIndex_ - 1] + sizes_[minDirtyIndex_ - 1];
-    for (int32_t i = minDirtyIndex_; i < itemCount_; i++) {
-      if (offsets_[i] != off) {
-        offsets_[i] = off;
-        anyChanged = true;
-      }
-      off += sizes_[i];
-    }
-    if (totalSize_ != off) {
-      totalSize_ = off;
-      anyChanged = true;
-    }
+    ensureCleanBlocksLocked(anyChanged);
   } else {
     if (static_cast<int32_t>(rowStart_.size()) < itemCount_) {
       rowStart_.resize(itemCount_, 0);
@@ -907,6 +1011,11 @@ void LayoutCore::ensureClean() {
     }
   }
   minDirtyIndex_ = INT32_MAX;
+  wideDirtyIndex_ = INT32_MAX;
+  for (const int32_t block : dirtyBlocks_) {
+    if (block < static_cast<int32_t>(blockDirty_.size())) blockDirty_[block] = 0;
+  }
+  dirtyBlocks_.clear();
   if (anyChanged) {
     layoutVersion_++;
   }
@@ -1039,7 +1148,7 @@ bool LayoutCore::applyTypeMeansLocked() {
       geometryChanged_ = geometryChanged_ || sizes_[i] != rounded;
       sizes_[i] = rounded;
       anyChanged = true;
-      minDirtyIndex_ = std::min(minDirtyIndex_, i);
+      markItemDirtyLocked(i);
     }
   }
   for (TypeStats& stats : typeStats_) {

@@ -85,6 +85,13 @@ private:
   };
 
   void ensureClean();
+  void ensureCleanBlocksLocked(bool& anyChanged);
+  void rebuildBlockLocked(int32_t block, bool& anyChanged);
+  void markItemDirtyLocked(int32_t index);
+  void markWideDirtyLocked(int32_t index);
+  double offsetAtLocked(int32_t index) const;
+  int32_t lastIndexAtOrBelowLocked(double value) const;
+  int32_t lastIndexBelowLocked(double value, int32_t from) const;
 
   EngagedRange computeEngagedRangeLocked(double scrollOffset, double viewportHeight,
                                          double drawDistance);
@@ -135,6 +142,11 @@ private:
   double measurementEpsilon_ = 0.0;
 
   int32_t minDirtyIndex_ = INT32_MAX;
+  int32_t wideDirtyIndex_ = INT32_MAX;
+  std::vector<double> blockBase_;
+  std::vector<double> blockSum_;
+  std::vector<uint8_t> blockDirty_;
+  std::vector<int32_t> dirtyBlocks_;
 
   int32_t layoutVersion_ = 0;
   bool geometryChanged_ = false;
