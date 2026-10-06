@@ -426,6 +426,13 @@ function rangeKeysMoved(
   return false;
 }
 
+export const CELL_ORIGIN_SEGMENT = 65536;
+
+export function nextCellOrigin(previous: number, anchorTop: number): number {
+  if (anchorTop >= previous && anchorTop < previous + 2 * CELL_ORIGIN_SEGMENT) return previous;
+  return anchorTop < CELL_ORIGIN_SEGMENT ? 0 : Math.floor(anchorTop / CELL_ORIGIN_SEGMENT) * CELL_ORIGIN_SEGMENT;
+}
+
 type CellEntry = {
   index: number;
   item: unknown;
@@ -472,6 +479,7 @@ type CellBuildContext = {
   columnLayout: {colOf: ArrayLike<number>; spans: ArrayLike<number>} | null | undefined;
   resolvedColumns: number;
   recycleItems: boolean;
+  origin: number;
 };
 
 function buildCellElement(
@@ -499,6 +507,7 @@ function buildCellElement(
       props.item === item &&
       props.index === i &&
       props.top === top &&
+      props.origin === build.origin &&
       props.hidden === hidden &&
       props.isLastItem === isLastItem &&
       props.fixedSize === explicitFixedSize &&
@@ -519,6 +528,7 @@ function buildCellElement(
       occupant={occupant}
       index={i}
       top={top}
+      origin={build.origin}
       hidden={hidden}
       columnLeft={columnLeft}
       columnWidth={columnWidth}
@@ -625,6 +635,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     CELLS_STORE_KEYS,
   );
   const heldOutputRef = useRef<React.ReactElement | null>(null);
+  const originRef = useRef(0);
   useLayoutEffect(() => {
     onCommit(range, prewarmRange, 'measure');
   });
@@ -719,7 +730,9 @@ export const NitroListCells = React.memo(function NitroListCells({
     if (nextPool != null) poolRef.current = nextPool;
     elementCacheRef.current = {shared, elements: nextElements};
     heldOutputRef.current = renderedOutput;
+    originRef.current = origin;
   });
+  let origin = originRef.current;
   if (holding) return heldOutputRef.current;
   const previousElements = sameCellSharedProps(elementCacheRef.current.shared, shared)
     ? elementCacheRef.current.elements
@@ -771,6 +784,12 @@ export const NitroListCells = React.memo(function NitroListCells({
     }
   }
 
+  const anchorTop =
+    range != null && range.end >= range.start && range.start < itemCount
+      ? readItemOffset(Math.max(0, range.start))
+      : firstTop;
+  if (Number.isFinite(anchorTop)) origin = nextCellOrigin(origin, anchorTop);
+  const originStyle = horizontal ? [styles.cellOriginHorizontal, {left: origin}] : [styles.cellOrigin, {top: origin}];
   const build: CellBuildContext = {
     shared,
     previous: previousElements,
@@ -781,6 +800,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     columnLayout,
     resolvedColumns,
     recycleItems,
+    origin,
   };
   if (recycleItems) {
     const previousPool = poolRef.current;
@@ -802,9 +822,10 @@ export const NitroListCells = React.memo(function NitroListCells({
     for (const slot of assigned.parked) {
       const element = previousPool.elements.get(slot)! as React.ReactElement<NitroListItemContainerProps>;
       const near = element.props.top >= firstTop && element.props.top <= lastTop;
-      const parkedElement = element.props.parked && (!near || element.props.hidden)
-        ? element
-        : React.cloneElement(element, near ? {parked: true, hidden: true} : {parked: true});
+      const parkedElement =
+        element.props.parked && (!near || element.props.hidden) && element.props.origin === origin
+          ? element
+          : React.cloneElement(element, near ? {parked: true, hidden: true, origin} : {parked: true, origin});
       nextPool.elements.set(slot, parkedElement);
     }
     const children = new Array<React.ReactElement>(nextPool.order.length);
@@ -812,7 +833,11 @@ export const NitroListCells = React.memo(function NitroListCells({
       children[position] = nextPool.elements.get(nextPool.order[position])!;
     }
     build.previous = null;
-    renderedOutput = <>{children}</>;
+    renderedOutput = (
+      <View collapsable={false} style={originStyle}>
+        {children}
+      </View>
+    );
     return renderedOutput;
   }
   const renderedChildren = new Array<React.ReactElement>(entries.length);
@@ -820,7 +845,11 @@ export const NitroListCells = React.memo(function NitroListCells({
     renderedChildren[k] = buildCellElement(entries[k], entries[k].metadata.reactKey, build);
   }
   build.previous = null;
-  renderedOutput = <>{renderedChildren}</>;
+  renderedOutput = (
+    <View collapsable={false} style={originStyle}>
+      {renderedChildren}
+    </View>
+  );
   return renderedOutput;
 }, areCellsPropsEqual);
 
@@ -855,6 +884,7 @@ export interface NitroListItemContainerProps {
   measurementGeometry: number;
   index: number;
   top: number;
+  origin: number;
   horizontal: boolean;
   hidden: boolean;
   columnLeft?: string;
@@ -894,6 +924,7 @@ export function areItemContainerPropsEqual(
     prev.measurementRevision === next.measurementRevision &&
     prev.measurementGeometry === next.measurementGeometry &&
     prev.top === next.top &&
+    prev.origin === next.origin &&
     prev.horizontal === next.horizontal &&
     prev.hidden === next.hidden &&
     prev.columnLeft === next.columnLeft &&
@@ -966,6 +997,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   measurementGeometry,
   index,
   top,
+  origin,
   horizontal,
   hidden,
   columnLeft,
@@ -1074,11 +1106,12 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   );
   const containerStyle = useMemo(() => {
     const visibility = hidden ? styles.hiddenCell : null;
+    const position = top - origin;
     if (columnLeft != null && columnWidth != null) {
       return [
         styles.absoluteCell,
         {
-          top,
+          top: position,
           left: columnLeft as unknown as number,
           width: columnWidth as unknown as number,
           paddingLeft: crossAxisGap / 2,
@@ -1088,9 +1121,9 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
       ];
     }
     return horizontal
-      ? [styles.absoluteColumn, {left: top}, visibility]
-      : [styles.absoluteRow, {top}, visibility];
-  }, [horizontal, top, columnLeft, columnWidth, crossAxisGap, hidden]);
+      ? [styles.absoluteColumn, {left: position}, visibility]
+      : [styles.absoluteRow, {top: position}, visibility];
+  }, [horizontal, top, origin, columnLeft, columnWidth, crossAxisGap, hidden]);
   return (
     <View pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
       <View
@@ -1147,6 +1180,18 @@ export const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
+    right: 0,
+  },
+  cellOrigin: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  cellOriginHorizontal: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
     right: 0,
   },
   absoluteRow: {
