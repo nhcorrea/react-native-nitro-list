@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
-import {PixelRatio} from 'react-native';
+import {PixelRatio, Platform} from 'react-native';
 import {act} from 'react-test-renderer';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
@@ -324,6 +324,43 @@ describe('maintainVisibleContentPosition integration', () => {
     const swept = frozenTotal - harness.handle.getItemOffset(1999);
     expect(swept).toBeGreaterThan(measuredShrink * 10);
     expect(harness.lastScrollTop() - scrollDuring).toBeCloseTo(mvcpAnchorTop() - anchorDuring, 3);
+  });
+
+  it('moves the native anchor only by what the Android end clamp leaves when content shrinks under the offset', async () => {
+    const originalPlatform = Platform.OS;
+    Platform.OS = 'android';
+    try {
+      const items = makeItems(60);
+      harness = renderNitroList({
+        data: items,
+        renderItem: () => null,
+        estimatedItemSize: 120,
+        keyExtractor: itemKey,
+        maintainVisibleContentPosition: true,
+      });
+      harness.layout(VIEWPORT_W, VIEWPORT_H);
+      for (const index of harness.renderedIndices()) harness.measureCell(index, 120);
+      await harness.settle(50);
+      for (let round = 0; round < 4; round++) {
+        harness.scroll(harness.handle.getTotalSize() - VIEWPORT_H);
+        await harness.settle(50);
+        for (const index of harness.renderedIndices()) harness.measureCell(index, 120);
+        await harness.settle(50);
+      }
+      const atEnd = harness.lastScrollTop();
+      expect(atEnd).toBeCloseTo(harness.handle.getTotalSize() - VIEWPORT_H, 3);
+      const anchorBefore = mvcpAnchorTop();
+      const above = harness.renderedIndices().find((index) => harness.handle.getItemOffset(index) + 120 <= atEnd)!;
+      harness.measureCell(above, 101);
+      await harness.settle(50);
+      const maxAfter = harness.handle.getTotalSize() - VIEWPORT_H;
+      expect(maxAfter).toBeCloseTo(atEnd - 19, 3);
+      expect(harness.lastScrollTop()).toBeCloseTo(atEnd - 19, 3);
+      const nativeAfterClamp = Math.min(atEnd, maxAfter);
+      expect(nativeAfterClamp + (mvcpAnchorTop() - anchorBefore)).toBeCloseTo(atEnd - 19, 3);
+    } finally {
+      Platform.OS = originalPlatform;
+    }
   });
 
   it('shouldRestorePosition vetoes optimistic anchors so removal-during-prepend still corrects (T24)', async () => {

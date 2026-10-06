@@ -2180,8 +2180,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       return;
     }
     const from = lastScrollOffsetRef.current;
-    const executable = computeExecutableMvcpDelta(from, diff, getMaxScrollOffset(), 1 / PixelRatio.get());
+    const maxScrollOffset = getMaxScrollOffset();
+    const executable = computeExecutableMvcpDelta(from, diff, maxScrollOffset, 1 / PixelRatio.get());
     if (executable === 0) return;
+    const nativeClamp =
+      Platform.OS === 'android' && executable < 0 ? Math.max(executable, Math.min(0, maxScrollOffset - from)) : 0;
     const to = from + executable;
     lastScrollOffsetRef.current = to;
     const engineOffset = to - effectivePaddingStartRef.current;
@@ -2210,7 +2213,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         createdAt: Date.now(),
       });
     }
-    store.set('mvcpAdjust', store.get('mvcpAdjust') + executable);
+    store.set('mvcpAdjust', store.get('mvcpAdjust') + executable - nativeClamp);
   });
   const readCorrectionMountedAt = useStableCallback(stableCallbacks, (sequence: number) =>
     nativeMountedAt(mountObservationRef.current, sequence),
