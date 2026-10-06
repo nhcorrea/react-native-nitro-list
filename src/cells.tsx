@@ -5,7 +5,7 @@ import React, {
   useRef,
   useInsertionEffect,
 } from 'react';
-import {PixelRatio, StyleSheet, View, type LayoutChangeEvent} from 'react-native';
+import {PixelRatio, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
 
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
@@ -197,6 +197,20 @@ export function markCellSupplied(record: CellRecord, cellBridge: CellBridge): vo
   record.awaiting = false;
   cellBridge.awaitingLayout--;
   if (cellBridge.awaitingLayout === 0) cellBridge.onLayoutSettled();
+}
+
+type ContainsHost = {contains?: (node: unknown) => boolean};
+
+export function focusedCellIndex(cellBridge: CellBridge): number {
+  const focused = TextInput.State?.currentlyFocusedInput?.();
+  if (focused == null) return -1;
+  for (const record of cellBridge.cells) {
+    const identity = record.identity;
+    if (identity == null || !identity.active) continue;
+    const host = record.host as unknown as ContainsHost | null;
+    if (typeof host?.contains === 'function' && host.contains(focused)) return identity.index;
+  }
+  return -1;
 }
 
 export function pushRenderRange(
@@ -645,6 +659,10 @@ export const NitroListCells = React.memo(function NitroListCells({
         pushRenderRange(renderRanges, {start: index, end: index}, itemCount);
       }
     }
+  }
+  const focusedIndex = focusedCellIndex(cellBridge);
+  if (focusedIndex >= 0 && focusedIndex < itemCount) {
+    pushRenderRange(renderRanges, {start: focusedIndex, end: focusedIndex}, itemCount);
   }
   if (anchoredEndSpaceAnchor != null && itemCount > 0) {
     pushRenderRange(
