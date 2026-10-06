@@ -1,4 +1,5 @@
 export const MVCP_ANCHOR_BASE = 10_000_000;
+export const MVCP_ANCHOR_BASES: ReadonlyArray<number> = [2 ** 17, 2 ** 20, MVCP_ANCHOR_BASE];
 
 export function computeExecutableMvcpDelta(
   currentOffset: number,

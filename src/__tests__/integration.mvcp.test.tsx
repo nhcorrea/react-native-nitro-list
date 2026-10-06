@@ -3,7 +3,8 @@ import {PixelRatio} from 'react-native';
 import {act} from 'react-test-renderer';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
-import {MVCP_ANCHOR_BASE} from '../mvcp';
+import {MvcpAdjustAnchor} from '../cells';
+import {MVCP_ANCHOR_BASE, MVCP_ANCHOR_BASES} from '../mvcp';
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
 
 const VIEWPORT_W = 400;
@@ -77,6 +78,39 @@ describe('maintainVisibleContentPosition integration', () => {
     expect(prependedExtent).toBeGreaterThan(0);
     expect(harness.lastScrollTop()).toBeCloseTo(scrollBefore + prependedExtent, 3);
     expect(mvcpAnchorTop()).toBeCloseTo(anchorBefore + prependedExtent, 3);
+  });
+
+  it('moves float-exact anchors near the offset by a fractional prepend extent', async () => {
+    const items = makeItems(3000);
+    harness = renderNitroList({
+      data: items,
+      renderItem: () => null,
+      estimatedItemSize: 64.25,
+      keyExtractor: itemKey,
+      maintainVisibleContentPosition: true,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureUnmeasuredCells(() => 64.25);
+    await harness.settle(50);
+    harness.scroll(100_000);
+    harness.measureUnmeasuredCells(() => 64.25);
+    await harness.settle(50);
+    const anchorTops = () =>
+      harness.renderer.root
+        .findAll((node) => node.type === (MvcpAdjustAnchor as unknown as {type: unknown}).type)
+        .map((node) => node.props.top as number);
+    const before = anchorTops();
+    expect(before).toHaveLength(MVCP_ANCHOR_BASES.length);
+    expect(before.map((top, k) => top - MVCP_ANCHOR_BASES[k])).toEqual(before.map(() => before[0] - MVCP_ANCHOR_BASES[0]));
+
+    harness.update({data: [...makeItems(50, 100_000), ...items]});
+    harness.measureUnmeasuredCells(() => 64.25);
+    await harness.settle(50);
+    const after = anchorTops();
+    expect(after.map((top, k) => top - before[k])).toEqual(before.map(() => 50 * 64.25));
+    expect(after[0]).toBeGreaterThan(harness.lastScrollTop());
+    expect(Math.fround(after[0])).toBe(after[0]);
+    expect(Math.fround(after[after.length - 1])).not.toBe(after[after.length - 1]);
   });
 
   it('prepend near the end keeps its anchor when Android clamps content before MVCP', async () => {

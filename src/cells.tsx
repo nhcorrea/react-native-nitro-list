@@ -9,7 +9,7 @@ import {PixelRatio, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'r
 
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
-import {MVCP_ANCHOR_BASE} from './mvcp';
+import {MVCP_ANCHOR_BASES} from './mvcp';
 import type {MeasurementIdentity, MeasurementRevision} from './measurementIdentity';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import type {
@@ -1152,7 +1152,13 @@ export function MountMarkerSlot({store, onMarker}: {store: ListStore; onMarker: 
 
 export function MvcpAdjustAnchorSlot({store, horizontal}: {store: ListStore; horizontal: boolean}) {
   const mvcpAdjust = useStoreValue(store, 'mvcpAdjust');
-  return <MvcpAdjustAnchor top={MVCP_ANCHOR_BASE + mvcpAdjust} horizontal={horizontal} />;
+  return (
+    <>
+      {MVCP_ANCHOR_BASES.map((base) => (
+        <MvcpAdjustAnchor key={base} top={base + mvcpAdjust} horizontal={horizontal} />
+      ))}
+    </>
+  );
 }
 
 export const MvcpAdjustAnchor = React.memo(function MvcpAdjustAnchor({
