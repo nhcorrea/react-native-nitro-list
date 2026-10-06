@@ -5,6 +5,7 @@ export type RangeState = {start: number; end: number; layoutVersion: number};
 export interface ListStoreState {
   range: RangeState;
   prewarmRange: RangeState | null;
+  reserveRange: RangeState | null;
   stickyIndex: number;
   containerSize: number;
   autoFixedTypes: ReadonlyMap<string | number, number> | null;

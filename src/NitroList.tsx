@@ -198,7 +198,6 @@ type FlingAdmission = {
   direction: 1 | -1;
   rafId: number | null;
   cancelAck: (() => void) | null;
-  reserve?: boolean;
 };
 
 const EMPTY: readonly never[] = Object.freeze([]);
@@ -351,6 +350,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     storeRef.current = new ListStore({
       range: {start: 0, end: -1, layoutVersion: 0},
       prewarmRange: null,
+      reserveRange: null,
       stickyIndex: -1,
       containerSize: Math.max(0, itemCount * estimatedItemSize),
       autoFixedTypes: null,
@@ -711,10 +711,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const prewarmFlingDestinationRef = useRef<() => void>(() => {});
   const recordFlingOutcomeRef = useRef<(finalAbsoluteY: number) => void>(() => {});
   const flingAdmissionRef = useRef<FlingAdmission | null>(null);
-  const idleReserveRef = useRef<{timer: ReturnType<typeof setTimeout> | null; attempts: number; running: boolean}>({
+  const idleReserveRef = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    attempts: number;
+    admission: {cancelAck: (() => void) | null} | null;
+  }>({
     timer: null,
     attempts: 0,
-    running: false,
+    admission: null,
   });
   const scheduleIdleReserveRef = useRef<() => void>(() => {});
   const prewarmAdmissionRef = useRef<{
@@ -742,7 +746,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (admission.rafId != null) cancelAnimationFrame(admission.rafId);
       admission.cancelAck?.();
       flingAdmissionRef.current = null;
-      if (admission.reserve === true) idleReserveRef.current.running = false;
+    }
+    const reserve = idleReserveRef.current.admission;
+    if (reserve != null) {
+      idleReserveRef.current.admission = null;
+      reserve.cancelAck?.();
+      store.set('reserveRange', null);
     }
   });
   useEffect(() => cancelFlingPrewarm, [cancelFlingPrewarm]);
@@ -2281,7 +2290,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       const before = admission.admitted;
       const sliceBudget = gate.available ? nextSliceSize(gate.costPerItemMs) : PREWARM_ADMISSION_BUDGET_ITEMS;
       const budget =
-        recycleItems === true
+        recycleItems === true && gate.available
           ? gestureSliceBudget(sliceBudget, cellBridgeRef.current.freeCells, LIVE_EDGE_FREE_CELLS)
           : sliceBudget;
       if (budget < 1) {
@@ -2317,7 +2326,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const admitIdleReserve = useStableCallback(stableCallbacks, () => {
     const reserve = idleReserveRef.current;
     reserve.timer = null;
-    if (reserve.running || recycleItems !== true || itemCount === 0) return;
+    if (reserve.admission != null || recycleItems !== true || itemCount === 0) return;
     const gate = mountGateRef.current!;
     if (!gate.available) return;
     const activity = scrollActivityRef.current;
@@ -2330,6 +2339,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       flingAdmissionRef.current != null ||
       prewarmAdmissionRef.current != null ||
       isPrewarmingRangeRef.current ||
+      store.get('prewarmRange') != null ||
       viewportH <= 0 ||
       live.end < live.start
     ) {
@@ -2343,48 +2353,33 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     if (planned == null) return;
     const {range: target, direction} = planned;
     if (cellBridgeRef.current.freeCells >= target.end - target.start + 1) return;
-    reserve.running = true;
-    const admission: FlingAdmission = {
-      target,
-      focus: target,
-      admitted: null,
-      direction,
-      rafId: null,
-      cancelAck: null,
-      reserve: true,
-    };
-    flingAdmissionRef.current = admission;
-    const owns = (): boolean => (flingAdmissionRef.current as unknown) === admission;
+    const admission: {cancelAck: (() => void) | null} = {cancelAck: null};
+    reserve.admission = admission;
+    let admitted: AdmissionRange | null = null;
     const release = () => {
-      if (!owns()) return;
-      flingAdmissionRef.current = null;
-      reserve.running = false;
-      setPrewarmRangeTracked(null);
+      if (reserve.admission !== admission) return;
+      reserve.admission = null;
+      store.set('reserveRange', null);
     };
     const admitSlice = () => {
-      if (!owns()) return;
+      if (reserve.admission !== admission) return;
       admission.cancelAck = null;
-      const before = admission.admitted;
-      admission.admitted = growAdmittedRange(target, target, before, nextSliceSize(gate.costPerItemMs), direction);
-      setPrewarmRangeTracked({
-        start: admission.admitted.start,
-        end: admission.admitted.end,
+      const before = admitted;
+      admitted = growAdmittedRange(target, target, before, nextSliceSize(gate.costPerItemMs), direction);
+      store.set('reserveRange', {
+        start: admitted.start,
+        end: admitted.end,
         layoutVersion: lastSeenLayoutVersionRef.current,
       });
-      const added =
-        admission.admitted.end - admission.admitted.start + 1 -
-        (before == null ? 0 : before.end - before.start + 1);
+      const added = admitted.end - admitted.start + 1 - (before == null ? 0 : before.end - before.start + 1);
       const sequence = gate.publish(added);
-      admission.cancelAck = gate.afterMount(
-        sequence,
-        rangeCovers(admission.admitted, target) ? release : admitSlice,
-      );
+      admission.cancelAck = gate.afterMount(sequence, rangeCovers(admitted, target) ? release : admitSlice);
     };
     admitSlice();
   });
   const scheduleIdleReserve = useStableCallback(stableCallbacks, () => {
     const reserve = idleReserveRef.current;
-    if (!drawDistanceExpanded || recycleItems !== true || reserve.running || reserve.timer != null) return;
+    if (!drawDistanceExpanded || recycleItems !== true || reserve.admission != null || reserve.timer != null) return;
     reserve.attempts = 0;
     reserve.timer = setTimeout(admitIdleReserve, IDLE_RESERVE_DELAY_MS);
   });

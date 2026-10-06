@@ -257,6 +257,7 @@ export const MAX_PARKED_CELLS = 32;
 const CELLS_STORE_KEYS = [
   'range',
   'prewarmRange',
+  'reserveRange',
   'dataItems',
   'stickyIndex',
   'autoFixedTypes',
@@ -674,7 +675,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   onCommit,
 }: NitroListCellsProps) {
   if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordCellsRender();
-  const {range, prewarmRange, dataItems, stickyIndex, autoFixedTypes, renderMode} = useStoreValues(
+  const {range, prewarmRange, reserveRange, dataItems, stickyIndex, autoFixedTypes, renderMode} = useStoreValues(
     store,
     CELLS_STORE_KEYS,
   );
@@ -693,6 +694,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   const renderRanges: RenderRange[] = [];
   pushRenderRange(renderRanges, range, itemCount);
   pushRenderRange(renderRanges, prewarmRange, itemCount);
+  pushRenderRange(renderRanges, reserveRange, itemCount);
   if (alwaysRender != null && itemCount > 0) {
     if (alwaysRender.top != null && alwaysRender.top > 0) {
       pushRenderRange(renderRanges, {start: 0, end: alwaysRender.top - 1}, itemCount);
