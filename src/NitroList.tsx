@@ -75,7 +75,7 @@ import {
 import type {StickyComputeResult} from './sticky';
 import {createViewability, type ViewabilityCtx} from './viewability';
 import {flushWaiters, waitForNextFrame} from './scrollCommands';
-import {createMeasurement, type MeasurementApi, type MeasurementCtx} from './measurement';
+import {createMeasurement, MVCP_POSITION_EPSILON, type MeasurementApi, type MeasurementCtx} from './measurement';
 import {createMeasurementRevision, isCurrentMeasurement, type MeasurementIdentity} from './measurementIdentity';
 import {
   createLayoutCache,
@@ -121,7 +121,7 @@ import type {
   NitroListRenderScrollComponentProps,
   NitroListViewToken,
 } from './types';
-import {createVelocityRing, resetVelocityRing} from './scrollVelocity';
+import {createVelocityRing, resetVelocityRing, shiftVelocityRing} from './scrollVelocity';
 import {
   maybeWarnJsOnScrollUnderUiDriver,
   maybeWarnZeroViewport,
@@ -200,6 +200,7 @@ const MEASUREMENT_EPSILON_DP = 1 / PixelRatio.get() + 0.01;
 const FLING_TRAVEL_FACTOR = Platform.OS === 'ios' ? 0.4995 : 0.3;
 const FLING_MAX_TRAVEL_VIEWPORTS = 4;
 const FLING_PREWARM_MAX_ITEMS = 80;
+const GESTURE_ESTIMATE_HOLD_MAX_MS = 6000;
 const ADAPTIVE_ENTER_DP_S = 3000;
 const ADAPTIVE_EXIT_DP_S = 1000;
 const ADAPTIVE_EXIT_DELAY_MS = 250;
@@ -1267,6 +1268,41 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     end: number;
     layoutVersion: number;
   } | null>(null);
+  const gestureEstimatesRef = useRef<{held: boolean; fallback: ReturnType<typeof setTimeout> | null}>({
+    held: false,
+    fallback: null,
+  });
+  const releaseGestureEstimates = useStableCallback(stableCallbacks, () => {
+    const gesture = gestureEstimatesRef.current;
+    if (gesture.fallback != null) clearTimeout(gesture.fallback);
+    gesture.fallback = null;
+    if (!gesture.held) return;
+    gesture.held = false;
+    const hybrid = hybridRef.current;
+    const anchor = mvcpResolvedRef.current.size ? mvcpStateRef.current.anchor : null;
+    const before =
+      hybrid != null && anchor != null && anchor.index >= 0 && anchor.index < itemCount
+        ? hybrid.getItemOffset(anchor.index)
+        : null;
+    releaseEstimateFreeze();
+    if (before == null || hybrid == null || anchor == null) return;
+    const diff = hybrid.getItemOffset(anchor.index) - before;
+    if (Math.abs(diff) > MVCP_POSITION_EPSILON) applyMvcpCorrectionRef.current(diff);
+  });
+  const holdGestureEstimates = useStableCallback(stableCallbacks, () => {
+    const gesture = gestureEstimatesRef.current;
+    if (gesture.fallback != null) clearTimeout(gesture.fallback);
+    gesture.fallback = setTimeout(releaseGestureEstimates, GESTURE_ESTIMATE_HOLD_MAX_MS);
+    if (gesture.held) return;
+    gesture.held = true;
+    acquireEstimateFreeze();
+  });
+  const clearGestureEstimateFallback = useStableCallback(stableCallbacks, () => {
+    const gesture = gestureEstimatesRef.current;
+    if (gesture.fallback != null) clearTimeout(gesture.fallback);
+    gesture.fallback = null;
+  });
+  useEffect(() => clearGestureEstimateFallback, [clearGestureEstimateFallback]);
 
   const attachEngine = useStableCallback(
     stableCallbacks,
@@ -2118,7 +2154,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       anchor.offset += diff;
     }
     const activity = scrollActivityRef.current;
-    if (activity.dragging || activity.momentum || activity.programmaticAnimated) {
+    if (activity.programmaticAnimated) {
       activity.pendingAdjust += diff;
       return;
     }
@@ -2129,9 +2165,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     lastScrollOffsetRef.current = to;
     const engineOffset = to - effectivePaddingStartRef.current;
     const velocitySample = scrollVelocityRef.current;
-    velocitySample.velocity = 0;
-    velocitySample.time = 0;
-    resetVelocityRing(velocityRingRef.current);
+    if (activity.dragging || activity.momentum) {
+      velocitySample.offset += executable;
+      shiftVelocityRing(velocityRingRef.current, executable);
+    } else {
+      velocitySample.velocity = 0;
+      velocitySample.time = 0;
+      resetVelocityRing(velocityRingRef.current);
+    }
     hybridRef.current?.resetScrollVelocity();
     if (NITRO_LIST_PERF_COMPILED && hybridRef.current) NitroListPerfMonitor.recordJsiCall();
     if (uiValuesRef.current != null) uiValuesRef.current.scrollOffset.value = engineOffset;
@@ -2310,6 +2351,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       beginScrollCommand,
       cancelFlingPrewarm,
       cancelPendingStickToEnd,
+      holdGestureEstimates,
+      releaseGestureEstimates,
       captureMvcpAnchor,
       endProgrammaticAnimatedScroll,
       flushPendingItemSizes,

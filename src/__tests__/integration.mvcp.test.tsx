@@ -183,6 +183,80 @@ describe('maintainVisibleContentPosition integration', () => {
     expect(harness.lastScrollTop()).toBeCloseTo(800 + 50, 3);
   });
 
+
+  it.each(['drag', 'momentum'] as const)('corrects a size change above the anchor during %s through the native anchor, with estimates frozen until rest', async (phase) => {
+    const items = makeItems(300);
+    harness = renderNitroList({
+      data: items,
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    measureRendered(items);
+    await harness.settle(50);
+    harness.scroll(1000);
+    await harness.settle(50);
+    measureRendered(items);
+    await harness.settle(50);
+
+    if (phase === 'drag') harness.beginDrag(1000);
+    else harness.momentumBegin(1000);
+    const anchorBefore = mvcpAnchorTop();
+    const scrollBefore = harness.lastScrollTop();
+    const above = harness.renderedIndices().find(
+      (index) => harness.handle.getItemOffset(index) + harness.handle.getItemSize(index) <= scrollBefore,
+    ) as number;
+    harness.measureCell(above, harness.handle.getItemSize(above) + 50);
+    harness.frame();
+    await harness.settle(20);
+    expect(harness.lastScrollTop() - scrollBefore).toBeCloseTo(50, 3);
+    expect(mvcpAnchorTop() - anchorBefore).toBeCloseTo(50, 3);
+
+    if (phase === 'drag') harness.endDrag(harness.lastScrollTop());
+    else harness.momentumEnd(harness.lastScrollTop());
+    await harness.settle(50);
+    expect(harness.lastScrollTop() - scrollBefore).toBeCloseTo(mvcpAnchorTop() - anchorBefore, 3);
+  });
+
+  it('estimates that drift during momentum are applied at rest through the anchor', async () => {
+    const items = makeItems(2000);
+    harness = renderNitroList({
+      data: items,
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+      getItemType: () => 'row',
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    measureRendered(items);
+    await harness.settle(50);
+    harness.scroll(150000);
+    await harness.settle(50);
+    measureRendered(items);
+    await harness.settle(50);
+    const start = harness.lastScrollTop();
+    harness.beginDrag(start);
+    harness.endDrag(start - 10);
+    harness.momentumBegin(start - 10);
+    const frozenTotal = harness.handle.getItemOffset(1999);
+    for (let k = 1; k <= 20; k++) {
+      harness.scroll(start - 10 - k * 60);
+      harness.frame();
+      for (const index of harness.renderedIndices()) harness.measureCell(index, 40);
+    }
+    const anchorDuring = mvcpAnchorTop();
+    const scrollDuring = harness.lastScrollTop();
+    const measuredShrink = frozenTotal - harness.handle.getItemOffset(1999);
+    expect(measuredShrink).toBeGreaterThan(0);
+    expect(measuredShrink).toBeLessThan(60 * 60);
+    harness.momentumEnd(scrollDuring);
+    await harness.settle(50);
+    const swept = frozenTotal - harness.handle.getItemOffset(1999);
+    expect(swept).toBeGreaterThan(measuredShrink * 10);
+    expect(harness.lastScrollTop() - scrollDuring).toBeCloseTo(mvcpAnchorTop() - anchorDuring, 3);
+  });
+
   it('shouldRestorePosition vetoes optimistic anchors so removal-during-prepend still corrects (T24)', async () => {
     const items = makeItems(100);
     const veto = new Set<string>();

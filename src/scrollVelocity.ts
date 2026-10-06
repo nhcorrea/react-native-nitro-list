@@ -23,6 +23,10 @@ export function resetVelocityRing(ring: VelocityRing): void {
   ring.next = 0;
 }
 
+export function shiftVelocityRing(ring: VelocityRing, delta: number): void {
+  for (let k = 0; k < ring.count; k++) ring.offsets[k] += delta;
+}
+
 export function pushVelocitySample(ring: VelocityRing, offset: number, timeMs: number): void {
   if (ring.count > 0) {
     const newest = (ring.next - 1 + VELOCITY_RING_CAPACITY) % VELOCITY_RING_CAPACITY;

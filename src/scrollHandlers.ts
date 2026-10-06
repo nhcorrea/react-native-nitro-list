@@ -78,6 +78,8 @@ export interface ScrollHandlersCtx {
   beginScrollCommand: () => number;
   cancelFlingPrewarm: () => void;
   cancelPendingStickToEnd: () => void;
+  holdGestureEstimates: () => void;
+  releaseGestureEstimates: () => void;
   captureMvcpAnchor: (engineOffset: number) => void;
   endProgrammaticAnimatedScroll: () => void;
   flushPendingItemSizes: (emitRange?: boolean) => void;
@@ -268,6 +270,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     const activity = ctx.scrollActivityRef.current;
     activity.dragging = true;
     activity.momentum = false;
+    ctx.holdGestureEstimates();
     ctx.cancelFlingPrewarm();
     if (ctx.uiThreadDriverActiveRef.current && ctx.isPrewarmingRangeRef.current) {
       ctx.isPrewarmingRangeRef.current = false;
@@ -298,6 +301,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
         ctx.prewarmFlingDestinationRef.current();
       } else {
         flushPendingMvcpAdjust();
+        ctx.releaseGestureEstimates();
       }
     }
     ctx.onScrollEndDrag?.(e);
@@ -305,6 +309,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
 
   const handleMomentumScrollBegin = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
     ctx.scrollActivityRef.current.momentum = true;
+    ctx.holdGestureEstimates();
     ctx.onMomentumScrollBegin?.(e);
   };
 
@@ -328,6 +333,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
       ctx.lastScrollOffsetRef.current = momentumOffset;
     }
     flushPendingMvcpAdjust();
+    ctx.releaseGestureEstimates();
     if (uiDriven) {
       const engineOffset = ctx.lastScrollOffsetRef.current - ctx.effectivePaddingStartRef.current;
       ctx.evaluateViewabilityRef.current();
@@ -352,6 +358,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
       ctx.prewarmFlingDestinationRef.current();
     } else {
       flushPendingMvcpAdjust();
+      ctx.releaseGestureEstimates();
     }
   };
 
