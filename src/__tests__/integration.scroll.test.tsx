@@ -246,6 +246,32 @@ describe('imperative scroll integration', () => {
     expect(harness.lastScrollTop()).toBe(9000);
   });
 
+  it('a touch during momentum keeps the fling prewarm already admitted', async () => {
+    harness = renderNitroList({
+      data: makeItems(400),
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureAllCells(() => 100);
+    await harness.settle(50);
+
+    harness.beginDrag(0);
+    for (let k = 1; k <= 6; k++) {
+      harness.frame(16);
+      harness.scroll(k * 100);
+    }
+    harness.endDrag(600);
+    harness.momentumBegin(600);
+    await harness.settle(200);
+    const prewarmed = harness.renderedIndices().filter((index) => index >= 20);
+    expect(prewarmed.length).toBeGreaterThan(0);
+
+    harness.beginDrag(700);
+    expect(harness.renderedIndices()).toEqual(expect.arrayContaining(prewarmed));
+  });
+
   it('replacing an animated command preserves the live viewport and releases the old destination', async () => {
     harness = renderNitroList({
       data: makeItems(400), renderItem: () => null, estimatedItemSize: 100,

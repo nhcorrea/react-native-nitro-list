@@ -262,6 +262,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   };
 
   const handleScrollBeginDrag = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
+    const interruptsCommand = ctx.scrollActivityRef.current.programmaticAnimated;
     ctx.endProgrammaticAnimatedScroll();
     ctx.pendingScrollCommandRef.current = null;
     flushPendingMvcpAdjust();
@@ -276,7 +277,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
       ctx.isPrewarmingRangeRef.current = false;
       ctx.lastPrewarmRangeRef.current = null;
     }
-    if (!ctx.isPrewarmingRangeRef.current) {
+    if (interruptsCommand && !ctx.isPrewarmingRangeRef.current) {
       ctx.setPrewarmRangeTracked(null);
     }
     if (!ctx.hasInteractedRef.current) {
