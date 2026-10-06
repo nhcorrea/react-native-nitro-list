@@ -51,4 +51,33 @@ describe('animated scrollToIndex approach', () => {
     const commands = await jumpTo(12);
     expect(commands[0].animated).toBe(true);
   });
+
+  it('lands a deep animated jump on the exact destination when float echoes hide a sub-dp drift', async () => {
+    const target = 60000;
+    harness = renderNitroList({data: makeItems(100000), renderItem: () => null, estimatedItemSize: 250, keyExtractor: itemKey});
+    harness.layout(400, VIEWPORT_H);
+    harness.measureUnmeasuredCells(() => 250.25);
+    await harness.settle(50);
+    harness.animatedScrollFrames = 8;
+    harness.echoQuantizer = Math.fround;
+    const before = harness.scrollCommands.length;
+    act(() => {
+      harness!.handle.scrollToIndex({index: target, animated: true});
+    });
+    let drifted = false;
+    for (let k = 0; k < 60; k++) {
+      await harness.settle(16);
+      harness.measureUnmeasuredCells(() => 250.25);
+      if (!drifted && harness.scrollCommands.slice(before).some((command) => command.animated)) {
+        harness.measureCell(target - 1, 251);
+        drifted = true;
+      }
+    }
+    await harness.settle(1000);
+    const destination = harness.handle.getItemOffset(target);
+    expect(destination).toBeGreaterThan(2 ** 23);
+    expect(drifted).toBe(true);
+    const commands = harness.scrollCommands.slice(before);
+    expect(commands[commands.length - 1].y).toBe(destination);
+  });
 });

@@ -1,3 +1,5 @@
+import {PixelRatio} from 'react-native';
+
 import {NitroListDevFlags} from './devFlags';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {interpolateOffset, waitForLayoutPass} from './scrollCommands';
@@ -18,6 +20,12 @@ export interface ScrollToIndexParams {
 }
 
 type ScrollRequest = ScrollToIndexParams & {resolveViewOffset?: () => number};
+
+function float32Spacing(value: number): number {
+  const magnitude = Math.abs(value);
+  if (!Number.isFinite(magnitude) || magnitude < 2 ** -126) return 0;
+  return 2 ** (Math.floor(Math.log2(magnitude)) - 23);
+}
 
 type Ref<V> = {current: V};
 type RangeState = {start: number; end: number; layoutVersion: number};
@@ -144,6 +152,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
       computeIndexScrollOffset(index, viewPosition, resolveViewOffset?.() ?? viewOffset);
     let finalOffset = destination();
     if (finalOffset == null) return;
+    let commandedOffset = finalOffset;
 
     if (animated) {
       const viewportH = ctx.mainViewportRef.current;
@@ -178,7 +187,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
           layoutVersion: ctx.lastSeenLayoutVersionRef.current,
         });
       }
-      ctx.scrollToAbsoluteOffset(finalOffset, true);
+      commandedOffset = ctx.scrollToAbsoluteOffset(finalOffset, true);
       await new Promise((resolve) => setTimeout(resolve, 300));
     } else {
       ctx.isPrewarmingRangeRef.current = true;
@@ -308,13 +317,14 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
         ctx.setPrewarmRangeTracked(null);
         return;
       }
+      const echoTolerance = SCROLL_TO_INDEX_TARGET_EPSILON + float32Spacing(correctedOffset);
       if (
-        Math.abs(correctedOffset - ctx.lastScrollOffsetRef.current) <=
-        SCROLL_TO_INDEX_TARGET_EPSILON
+        Math.abs(correctedOffset - commandedOffset) < 0.5 / PixelRatio.get() &&
+        Math.abs(correctedOffset - ctx.lastScrollOffsetRef.current) <= echoTolerance
       ) {
         break;
       }
-      ctx.scrollToAbsoluteOffset(correctedOffset, false);
+      commandedOffset = ctx.scrollToAbsoluteOffset(correctedOffset, false);
     }
     ctx.setPrewarmRangeTracked(null);
     if (NITRO_LIST_PERF_COMPILED) {

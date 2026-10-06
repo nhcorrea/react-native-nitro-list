@@ -41,8 +41,9 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
         // The list can unmount between the JS call and execution on the UI thread.
         return@runOnUiThread
       }
-      val destX = Math.round(PixelUtil.toPixelFromDIP(x))
-      val destY = Math.round(PixelUtil.toPixelFromDIP(y))
+      val density = PixelUtil.getDisplayMetricDensity().toDouble()
+      val destX = Math.round(x * density).toInt()
+      val destY = Math.round(y * density).toInt()
       if (view is ViewGroup) PendingDestinations.clear(view)
       when (view) {
         is ReactScrollView -> {

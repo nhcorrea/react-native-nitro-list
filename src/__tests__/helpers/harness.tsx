@@ -63,6 +63,7 @@ export class NitroListHarness<T = string> {
   echoProgrammaticScrolls = true;
   echoOffsetSkewDp = 0;
   echoDelayMs = 0;
+  echoQuantizer: ((offset: number) => number) | null = null;
   animatedScrollFrames = 0;
   animatedScrollFrameMs = 16;
   horizontal = false;
@@ -76,6 +77,10 @@ export class NitroListHarness<T = string> {
     for (const timer of this.animationTimers) clearTimeout(timer);
     this.animationTimers.clear();
   };
+
+  private echo(offset: number): number {
+    return this.echoQuantizer == null ? offset : this.echoQuantizer(offset);
+  }
 
   get observedNativeOffset(): number {
     return this.nativeOffset;
@@ -94,16 +99,16 @@ export class NitroListHarness<T = string> {
         const frames = this.animatedScrollFrames;
         for (let k = 1; k <= frames; k++) {
           this.animationTimers.add(setTimeout(() => {
-            this.dispatchScroll(from + ((target - from) * k) / frames);
+            this.dispatchScroll(this.echo(from + ((target - from) * k) / frames));
           }, k * this.animatedScrollFrameMs));
         }
         this.animationTimers.add(setTimeout(() => {
-          this.dispatchMomentumEnd(target);
+          this.dispatchMomentumEnd(this.echo(target));
         }, (frames + 1) * this.animatedScrollFrameMs));
         return;
       }
       setTimeout(() => {
-        this.dispatchScroll(target + this.echoOffsetSkewDp);
+        this.dispatchScroll(this.echo(target + this.echoOffsetSkewDp));
       }, this.echoDelayMs);
     },
     getScrollableNode: () => 42,
