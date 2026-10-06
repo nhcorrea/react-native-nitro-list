@@ -4,8 +4,9 @@ export function computeExecutableMvcpDelta(
   currentOffset: number,
   diff: number,
   maxScrollOffset: number,
+  startEpsilon = 0,
 ): number {
-  if (currentOffset <= 0) return 0;
+  if (currentOffset <= startEpsilon) return 0;
   const max = Math.max(0, maxScrollOffset);
   const target = Math.min(Math.max(0, currentOffset + diff), max);
   return target - currentOffset;

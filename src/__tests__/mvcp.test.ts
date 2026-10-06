@@ -27,6 +27,11 @@ describe('computeExecutableMvcpDelta', () => {
     expect(computeExecutableMvcpDelta(1500, -100, 1200)).toBe(-300);
   });
 
+  it('keeps an offset within one physical pixel of the start at the start', () => {
+    expect(computeExecutableMvcpDelta(0.5, 467, 10_000, 0.5)).toBe(0);
+    expect(computeExecutableMvcpDelta(0.75, 467, 10_000, 0.5)).toBe(467);
+  });
+
   it('treats a negative max scroll extent as zero', () => {
     expect(computeExecutableMvcpDelta(10, 50, -5)).toBe(-10);
   });

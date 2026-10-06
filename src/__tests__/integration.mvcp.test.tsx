@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
+import {PixelRatio} from 'react-native';
 import {act} from 'react-test-renderer';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
@@ -181,6 +182,40 @@ describe('maintainVisibleContentPosition integration', () => {
     harness.momentumEnd(800);
     await harness.settle(50);
     expect(harness.lastScrollTop()).toBeCloseTo(800 + 50, 3);
+  });
+
+  it('drops a deferred correction when the animated scroll to the start ends within one physical pixel of it', async () => {
+    const items = makeItems(100);
+    harness = renderNitroList({
+      data: items,
+      renderItem: () => null,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+      maintainVisibleContentPosition: true,
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.frame();
+    measureRendered(items);
+    await harness.settle(50);
+    harness.scroll(400);
+    await harness.settle(50);
+
+    const halfPixel = 0.5 / PixelRatio.get();
+    harness.animatedScrollFrames = 8;
+    harness.echoQuantizer = (offset) => (offset === 0 ? halfPixel : offset);
+    act(() => {
+      harness.handle.scrollToOffset({offset: 0, animated: true});
+    });
+    await harness.settle(20);
+    const firstRendered = harness.renderedIndices()[0];
+    harness.measureCell(firstRendered, harness.handle.getItemSize(firstRendered) + 50);
+    harness.frame();
+    const anchorBefore = mvcpAnchorTop();
+
+    await harness.settleAnimatedScroll();
+    await harness.settle(50);
+    expect(mvcpAnchorTop()).toBe(anchorBefore);
+    expect(harness.lastScrollTop()).toBeCloseTo(halfPixel, 6);
   });
 
 

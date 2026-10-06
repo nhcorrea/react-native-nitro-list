@@ -2159,7 +2159,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       return;
     }
     const from = lastScrollOffsetRef.current;
-    const executable = computeExecutableMvcpDelta(from, diff, getMaxScrollOffset());
+    const executable = computeExecutableMvcpDelta(from, diff, getMaxScrollOffset(), 1 / PixelRatio.get());
     if (executable === 0) return;
     const to = from + executable;
     lastScrollOffsetRef.current = to;
