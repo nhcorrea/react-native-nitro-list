@@ -36,7 +36,9 @@ import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {
   type AdmissionRange,
+  gestureSliceBudget,
   growAdmittedRange,
+  idleReserveRange,
   PREWARM_ADMISSION_BUDGET_ITEMS,
   rangeCovers,
 } from './prewarmAdmission';
@@ -189,6 +191,16 @@ const defaultRenderScrollComponent: NitroListRenderScrollComponent = ({
   </ScrollView>
 );
 
+type FlingAdmission = {
+  target: AdmissionRange;
+  focus: AdmissionRange;
+  admitted: AdmissionRange | null;
+  direction: 1 | -1;
+  rafId: number | null;
+  cancelAck: (() => void) | null;
+  reserve?: boolean;
+};
+
 const EMPTY: readonly never[] = Object.freeze([]);
 const NO_STICKY: readonly number[] = Object.freeze([]);
 const MVCP_SCROLL_VIEW_CONFIG = Object.freeze({minIndexForVisible: 0});
@@ -202,6 +214,10 @@ const MEASUREMENT_EPSILON_DP = 1 / PixelRatio.get() + 0.01;
 const FLING_TRAVEL_FACTOR = Platform.OS === 'ios' ? 0.4995 : 0.3;
 const FLING_MAX_TRAVEL_VIEWPORTS = 4;
 const FLING_PREWARM_MAX_ITEMS = 80;
+const LIVE_EDGE_FREE_CELLS = 2;
+const IDLE_RESERVE_DELAY_MS = 100;
+const IDLE_RESERVE_VIEWPORTS = 2;
+const IDLE_RESERVE_ATTEMPTS = 10;
 const GESTURE_ESTIMATE_HOLD_MAX_MS = 6000;
 const ADAPTIVE_ENTER_DP_S = 3000;
 const ADAPTIVE_EXIT_DP_S = 1000;
@@ -694,14 +710,13 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const suppressEdgeRearmRef = useRef(false);
   const prewarmFlingDestinationRef = useRef<() => void>(() => {});
   const recordFlingOutcomeRef = useRef<(finalAbsoluteY: number) => void>(() => {});
-  const flingAdmissionRef = useRef<{
-    target: AdmissionRange;
-    focus: AdmissionRange;
-    admitted: AdmissionRange | null;
-    direction: 1 | -1;
-    rafId: number | null;
-    cancelAck: (() => void) | null;
-  } | null>(null);
+  const flingAdmissionRef = useRef<FlingAdmission | null>(null);
+  const idleReserveRef = useRef<{timer: ReturnType<typeof setTimeout> | null; attempts: number; running: boolean}>({
+    timer: null,
+    attempts: 0,
+    running: false,
+  });
+  const scheduleIdleReserveRef = useRef<() => void>(() => {});
   const prewarmAdmissionRef = useRef<{
     target: AdmissionRange;
     focus: AdmissionRange;
@@ -727,6 +742,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (admission.rafId != null) cancelAnimationFrame(admission.rafId);
       admission.cancelAck?.();
       flingAdmissionRef.current = null;
+      if (admission.reserve === true) idleReserveRef.current.running = false;
     }
   });
   useEffect(() => cancelFlingPrewarm, [cancelFlingPrewarm]);
@@ -740,6 +756,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const cellBridgeRef = useRef<CellBridge>({
     awaitingLayout: 0,
     followIndex: -1,
+    freeCells: Number.POSITIVE_INFINITY,
     cells: new Set(),
     onLayoutSettled: () => {},
     onAutoFixedMismatch: () => {},
@@ -1281,6 +1298,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     gesture.fallback = null;
     if (!gesture.held) return;
     gesture.held = false;
+    scheduleIdleReserveRef.current();
     const hybrid = hybridRef.current;
     const anchor = mvcpResolvedRef.current.size ? mvcpStateRef.current.anchor : null;
     const before =
@@ -2243,7 +2261,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const focusStart = indexAtOffset(Math.max(0, destEngineTop));
     const focusEnd = Math.max(focusStart, indexAtOffset(destEngineTop + viewportH));
     cancelFlingPrewarm();
-    const admission: NonNullable<typeof flingAdmissionRef.current> = {
+    const admission: FlingAdmission = {
       target: {start: destStart, end: destEnd},
       focus: {start: focusStart, end: focusEnd},
       admitted: null,
@@ -2258,11 +2276,20 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       admission.rafId = null;
       admission.cancelAck = null;
       const before = admission.admitted;
+      const sliceBudget = gate.available ? nextSliceSize(gate.costPerItemMs) : PREWARM_ADMISSION_BUDGET_ITEMS;
+      const budget =
+        recycleItems === true
+          ? gestureSliceBudget(sliceBudget, cellBridgeRef.current.freeCells, LIVE_EDGE_FREE_CELLS)
+          : sliceBudget;
+      if (budget < 1) {
+        admission.rafId = requestAnimationFrame(admitSlice);
+        return;
+      }
       admission.admitted = growAdmittedRange(
         admission.target,
         admission.focus,
         admission.admitted,
-        gate.available ? nextSliceSize(gate.costPerItemMs) : PREWARM_ADMISSION_BUDGET_ITEMS,
+        budget,
         admission.direction,
       );
       setPrewarmRangeTracked({
@@ -2283,6 +2310,91 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     };
     admitSlice();
   });
+
+  const admitIdleReserve = useStableCallback(stableCallbacks, () => {
+    const reserve = idleReserveRef.current;
+    reserve.timer = null;
+    if (reserve.running || recycleItems !== true || itemCount === 0) return;
+    const gate = mountGateRef.current!;
+    if (!gate.available) return;
+    const activity = scrollActivityRef.current;
+    const viewportH = mainViewportRef.current;
+    const live = latestRangeRef.current;
+    if (
+      activity.dragging ||
+      activity.momentum ||
+      activity.programmaticAnimated ||
+      flingAdmissionRef.current != null ||
+      prewarmAdmissionRef.current != null ||
+      isPrewarmingRangeRef.current ||
+      viewportH <= 0 ||
+      live.end < live.start
+    ) {
+      if (++reserve.attempts < IDLE_RESERVE_ATTEMPTS) {
+        reserve.timer = setTimeout(admitIdleReserve, IDLE_RESERVE_DELAY_MS);
+      }
+      return;
+    }
+    reserve.attempts = 0;
+    const planned = idleReserveRange(live, itemCount, viewportH * IDLE_RESERVE_VIEWPORTS, readItemOffset, indexAtOffset);
+    if (planned == null) return;
+    const {range: target, direction} = planned;
+    if (cellBridgeRef.current.freeCells >= target.end - target.start + 1) return;
+    reserve.running = true;
+    const admission: FlingAdmission = {
+      target,
+      focus: target,
+      admitted: null,
+      direction,
+      rafId: null,
+      cancelAck: null,
+      reserve: true,
+    };
+    flingAdmissionRef.current = admission;
+    const owns = (): boolean => (flingAdmissionRef.current as unknown) === admission;
+    const release = () => {
+      if (!owns()) return;
+      flingAdmissionRef.current = null;
+      reserve.running = false;
+      setPrewarmRangeTracked(null);
+    };
+    const admitSlice = () => {
+      if (!owns()) return;
+      admission.cancelAck = null;
+      const before = admission.admitted;
+      admission.admitted = growAdmittedRange(target, target, before, nextSliceSize(gate.costPerItemMs), direction);
+      setPrewarmRangeTracked({
+        start: admission.admitted.start,
+        end: admission.admitted.end,
+        layoutVersion: lastSeenLayoutVersionRef.current,
+      });
+      const added =
+        admission.admitted.end - admission.admitted.start + 1 -
+        (before == null ? 0 : before.end - before.start + 1);
+      const sequence = gate.publish(added);
+      admission.cancelAck = gate.afterMount(
+        sequence,
+        rangeCovers(admission.admitted, target) ? release : admitSlice,
+      );
+    };
+    admitSlice();
+  });
+  const scheduleIdleReserve = useStableCallback(stableCallbacks, () => {
+    const reserve = idleReserveRef.current;
+    if (!drawDistanceExpanded || recycleItems !== true || reserve.running || reserve.timer != null) return;
+    reserve.attempts = 0;
+    reserve.timer = setTimeout(admitIdleReserve, IDLE_RESERVE_DELAY_MS);
+  });
+  commitBindings.push(() => {
+    scheduleIdleReserveRef.current = scheduleIdleReserve;
+  });
+  useEffect(scheduleIdleReserve, [drawDistanceExpanded, recycleItems, scheduleIdleReserve]);
+  const clearIdleReserve = useStableCallback(stableCallbacks, () => {
+    const reserve = idleReserveRef.current;
+    if (reserve.timer != null) clearTimeout(reserve.timer);
+    reserve.timer = null;
+  });
+  useEffect(() => clearIdleReserve, [clearIdleReserve]);
 
   const recordFlingOutcome = useStableCallback(stableCallbacks, (finalAbsoluteY: number) => {
     if (!NITRO_LIST_PERF_COMPILED || !NitroListPerfMonitor.enabled) return;

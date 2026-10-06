@@ -8,7 +8,7 @@ import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './help
 const heightFor = () => 100;
 
 function bridgeWith(records: ReturnType<typeof createCellRecord>[]): CellBridge {
-  return {awaitingLayout: 0, followIndex: -1, cells: new Set(records), onLayoutSettled: () => {}, onAutoFixedMismatch: () => {}};
+  return {awaitingLayout: 0, followIndex: -1, freeCells: Number.POSITIVE_INFINITY, cells: new Set(records), onLayoutSettled: () => {}, onAutoFixedMismatch: () => {}};
 }
 
 describe('focus retention', () => {

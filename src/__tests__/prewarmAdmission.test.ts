@@ -1,6 +1,6 @@
 import {describe, expect, it} from '@jest/globals';
 
-import {growAdmittedRange, rangeCovers} from '../prewarmAdmission';
+import {gestureSliceBudget, growAdmittedRange, idleReserveRange, rangeCovers} from '../prewarmAdmission';
 
 describe('rangeCovers', () => {
   it('is true only when outer contains inner', () => {
@@ -93,5 +93,36 @@ describe('growAdmittedRange — growth', () => {
       expect(count - prevCount).toBeLessThanOrEqual(16);
       prevCount = count;
     }
+  });
+});
+
+describe('idleReserveRange', () => {
+  const offset = (index: number) => index * 100;
+  const index = (value: number) => Math.floor(value / 100);
+
+  it('reserves the span after the window while items remain below it', () => {
+    expect(idleReserveRange({start: 0, end: 9}, 500, 1200, offset, index)).toEqual({range: {start: 10, end: 22}, direction: 1});
+    expect(idleReserveRange({start: 480, end: 497}, 500, 1200, offset, index)).toEqual({range: {start: 498, end: 499}, direction: 1});
+  });
+
+  it('reserves the span before the window at the end of the list', () => {
+    expect(idleReserveRange({start: 490, end: 499}, 500, 1200, offset, index)).toEqual({range: {start: 477, end: 489}, direction: -1});
+    expect(idleReserveRange({start: 3, end: 499}, 500, 1200, offset, index)).toEqual({range: {start: 0, end: 2}, direction: -1});
+  });
+
+  it('has nothing to reserve when the window covers the list', () => {
+    expect(idleReserveRange({start: 0, end: 499}, 500, 1200, offset, index)).toBeNull();
+    expect(idleReserveRange({start: 0, end: -1}, 500, 1200, offset, index)).toBeNull();
+    expect(idleReserveRange({start: 0, end: 9}, 0, 1200, offset, index)).toBeNull();
+  });
+});
+
+describe('gestureSliceBudget', () => {
+  it('admits only cells the pool already has, keeping some for the live edge', () => {
+    expect(gestureSliceBudget(8, 20, 2)).toBe(8);
+    expect(gestureSliceBudget(8, 5, 2)).toBe(3);
+    expect(gestureSliceBudget(8, 2, 2)).toBe(0);
+    expect(gestureSliceBudget(8, 0, 2)).toBe(0);
+    expect(gestureSliceBudget(8, Number.POSITIVE_INFINITY, 2)).toBe(8);
   });
 });

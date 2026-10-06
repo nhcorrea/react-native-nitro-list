@@ -70,3 +70,24 @@ export function growAdmittedRange(
   }
   return {start, end};
 }
+
+export function idleReserveRange(
+  live: AdmissionRange,
+  itemCount: number,
+  span: number,
+  readItemOffset: (index: number) => number,
+  indexAtOffset: (offset: number) => number,
+): {range: AdmissionRange; direction: 1 | -1} | null {
+  if (itemCount <= 0 || live.end < live.start || span <= 0) return null;
+  if (live.end < itemCount - 1) {
+    const start = live.end + 1;
+    return {range: {start, end: Math.min(itemCount - 1, Math.max(start, indexAtOffset(readItemOffset(start) + span)))}, direction: 1};
+  }
+  if (live.start <= 0) return null;
+  const end = live.start - 1;
+  return {range: {start: Math.min(end, Math.max(0, indexAtOffset(Math.max(0, readItemOffset(end) - span)))), end}, direction: -1};
+}
+
+export function gestureSliceBudget(sliceBudget: number, freeCells: number, liveEdgeCells: number): number {
+  return Math.max(0, Math.min(sliceBudget, freeCells - liveEdgeCells));
+}

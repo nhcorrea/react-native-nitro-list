@@ -28,6 +28,7 @@ export type RenderRange = {
 export type CellBridge = {
   awaitingLayout: number;
   followIndex: number;
+  freeCells: number;
   cells: Set<CellRecord>;
   onLayoutSettled: () => void;
   onAutoFixedMismatch: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
@@ -771,11 +772,13 @@ export const NitroListCells = React.memo(function NitroListCells({
     if (holding) return;
     metadataRef.current = nextMetadata;
     if (nextPool != null) poolRef.current = nextPool;
+    cellBridge.freeCells = nextPool != null ? nextPool.order.length - renderedEntryCount : Number.POSITIVE_INFINITY;
     elementCacheRef.current = {shared, elements: nextElements};
     heldOutputRef.current = renderedOutput;
     originRef.current = origin;
   });
   let origin = originRef.current;
+  let renderedEntryCount = 0;
   if (holding) return heldOutputRef.current;
   const previousElements = sameCellSharedProps(elementCacheRef.current.shared, shared)
     ? elementCacheRef.current.elements
@@ -827,6 +830,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     }
   }
 
+  renderedEntryCount = entries.length;
   const anchorTop =
     range != null && range.end >= range.start && range.start < itemCount
       ? readItemOffset(Math.max(0, range.start))
