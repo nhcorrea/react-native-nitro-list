@@ -8,6 +8,7 @@ export const SCROLL_TO_INDEX_MAX_RESTARTS = 3;
 export const SCROLL_TO_INDEX_TARGET_EPSILON = 1;
 export const SCROLL_TO_INDEX_CORRECTION_PASSES = 3;
 export const SCROLL_TO_INDEX_SETTLED_SHIFT_RATIO = 0.5;
+export const SCROLL_TO_INDEX_APPROACH_VIEWPORTS = 2;
 
 export interface ScrollToIndexParams {
   index: number;
@@ -146,7 +147,28 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
 
     if (animated) {
       const viewportH = ctx.mainViewportRef.current;
-      if (viewportH > 0) {
+      const from = ctx.lastScrollOffsetRef.current;
+      const approachSpan = SCROLL_TO_INDEX_APPROACH_VIEWPORTS * viewportH;
+      if (viewportH > 0 && Math.abs(finalOffset - from) > approachSpan + viewportH) {
+        const approachRange = (target: number) => {
+          const approach = ctx.clampScrollOffset(target - Math.sign(target - from) * approachSpan);
+          const top = Math.min(approach, target) - ctx.effectivePaddingStartRef.current;
+          const bottom = Math.max(approach, target) + viewportH - ctx.effectivePaddingStartRef.current;
+          const start = ctx.indexAtOffset(Math.max(0, top));
+          return {approach, start, end: Math.max(start, ctx.indexAtOffset(bottom))};
+        };
+        let plan = approachRange(finalOffset);
+        ctx.setPrewarmRangeTracked({start: plan.start, end: plan.end, layoutVersion: ctx.lastSeenLayoutVersionRef.current});
+        await ctx.waitForLayoutSettle(devTrace);
+        if (superseded()) return;
+        devMark('approach');
+        finalOffset = destination() ?? finalOffset;
+        plan = approachRange(finalOffset);
+        ctx.setPrewarmRangeTracked({start: plan.start, end: plan.end, layoutVersion: ctx.lastSeenLayoutVersionRef.current});
+        ctx.scrollToAbsoluteOffset(plan.approach, false);
+        await waitForLayoutPass();
+        if (superseded()) return;
+      } else if (viewportH > 0) {
         const destEngineTop = finalOffset - ctx.effectivePaddingStartRef.current;
         const destStart = ctx.indexAtOffset(Math.max(0, destEngineTop));
         const destEnd = Math.max(destStart, ctx.indexAtOffset(destEngineTop + viewportH));
