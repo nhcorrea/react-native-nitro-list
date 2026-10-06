@@ -1,7 +1,9 @@
 #include "HybridNitroListEngine.hpp"
 #include <cassert>
+#include <chrono>
 #include <cstring>
 #include <iostream>
+#include <thread>
 using namespace margelo::nitro;
 using namespace margelo::nitro::nitrolist;
 // Registration is the sole JSI behavior replaced by this host test.
@@ -50,6 +52,25 @@ static void testPendingSnapshotReleasedByNextPublication() {
   assert(engine.readSnapshot(sequence, full) > 0);
   assert(engine.fillLayoutSlab(full) > 0);
   assert(engine.getExternalMemorySize() == base);
+}
+
+static void testScrollDirectionBiasesBuffers() {
+  HybridNitroListEngine engine;
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  engine.updateData(doubles({1, 10000, 100, 400, 0, 1, 0, 1, 1, -1, -1, 0, 0, 0, 0, 0, 0}), empty, empty, empty, empty);
+  engine.setViewport(400, 600);
+  double start = -1, end = -1;
+  engine.setOnRangeChange([&](double s, double e, double, double) {
+    start = s;
+    end = e;
+  });
+  for (int k = 1; k <= 6; k++) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    engine.setScrollOffset(20000 + k * 100);
+  }
+  const double top = 20600 / 100.0, bottom = (20600 + 600) / 100.0;
+  assert(start >= 0 && end > start);
+  assert(end - bottom > top - start);
 }
 
 int main() {
@@ -123,5 +144,6 @@ int main() {
   assert(reinterpret_cast<double*>(full->data())[10] == 2); // valid empty is distinct
   testDisposeReleasesMemory();
   testPendingSnapshotReleasedByNextPublication();
+  testScrollDirectionBiasesBuffers();
   std::cout << "Hybrid engine tests passed\n";
 }
