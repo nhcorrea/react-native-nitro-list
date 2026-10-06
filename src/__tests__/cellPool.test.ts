@@ -83,6 +83,36 @@ describe('cell pool', () => {
     expect(parkedTypes.filter((type) => type === 'string:b')).toHaveLength(MAX_PARKED_CELLS / 2);
   });
 
+  it('reuses a free slot of another type before creating a cell', () => {
+    let pool = step(emptyCellPool(), block(0, 6, 'string:post')).pool;
+    const before = pool.next;
+    const assigned = step(pool, [...block(4, 2, 'string:post'), ...block(6, 3, 'string:photo')]);
+    expect(assigned.pool.next).toBe(before);
+    expect(new Set(assigned.slots).size).toBe(5);
+    for (const slot of assigned.slots.slice(2)) expect(assigned.pool.types.get(slot)).toBe('string:photo');
+  });
+
+  it('keeps same-type matches before lending slots across types', () => {
+    let pool = step(emptyCellPool(), [...block(0, 3, 'string:a'), ...block(3, 3, 'string:b')]).pool;
+    const slotsOfB = [3, 4, 5].map((index) => pool.slots.get(`8:string:b${index}`));
+    const assigned = step(pool, [...block(10, 3, 'string:b'), ...block(13, 2, 'string:c')]);
+    for (const index of [10, 11, 12]) expect(slotsOfB).toContain(assigned.pool.slots.get(`8:string:b${index}`));
+    expect(assigned.pool.next).toBe(pool.next);
+  });
+
+  it('lends the free slot whose occupant is farthest from the window', () => {
+    let pool = step(emptyCellPool(), block(0, 4, 'string:a')).pool;
+    const occupant = new Map<number, number>();
+    for (const [key, slot] of pool.slots) occupant.set(slot, Number(key.slice('8:string:a'.length)));
+    const assigned = assignCellSlots(
+      pool,
+      entriesFor([{index: 4, type: 'string:b'}]) as never,
+      () => true,
+      (slot) => occupant.get(slot),
+    );
+    expect(assigned.slots[0]).toBe(pool.slots.get('8:string:a0'));
+  });
+
   it('drops stale slots and their metadata instead of parking them', () => {
     let pool = step(emptyCellPool(), block(0, 10, 'string:a')).pool;
     const assigned = step(pool, block(50, 2, 'string:b'), () => false);

@@ -303,10 +303,35 @@ function selectParkedSlots(
   return parked;
 }
 
+function takeFarthestFreeSlot(
+  free: ReadonlyMap<string, number[]>,
+  low: number,
+  high: number,
+  occupantIndex: ((slot: number) => number | undefined) | undefined,
+): number | undefined {
+  let bestList: number[] | null = null;
+  let bestAt = -1;
+  let bestDistance = -1;
+  for (const list of free.values()) {
+    for (let at = 0; at < list.length; at++) {
+      const index = occupantIndex?.(list[at]);
+      const distance =
+        index == null ? Number.POSITIVE_INFINITY : index < low ? low - index : index > high ? index - high : 0;
+      if (distance > bestDistance) {
+        bestDistance = distance;
+        bestList = list;
+        bestAt = at;
+      }
+    }
+  }
+  return bestList == null ? undefined : bestList.splice(bestAt, 1)[0];
+}
+
 export function assignCellSlots(
   previous: CellPool,
   entries: ReadonlyArray<CellEntry>,
   canPark: (slot: number) => boolean,
+  occupantIndex?: (slot: number) => number | undefined,
 ): {pool: CellPool; slots: number[]; parked: number[]} {
   const pool: CellPool = {
     slots: new Map(),
@@ -351,6 +376,7 @@ export function assignCellSlots(
         if (lastKey != null) freeByLastKey.set(lastKey, slot);
       }
     }
+    const unassigned: number[] = [];
     for (const position of pending) {
       const {reactKey, typeKey} = entries[position].metadata;
       const list = free.get(typeKey);
@@ -363,17 +389,34 @@ export function assignCellSlots(
       } else {
         reused = list?.pop();
       }
-      let slot: number;
-      if (reused != null) {
-        slot = reused;
-      } else {
-        slot = pool.next++;
-        created.push(slot);
+      if (reused == null) {
+        unassigned.push(position);
+        continue;
       }
-      active.add(slot);
-      slots[position] = slot;
-      pool.slots.set(reactKey, slot);
-      pool.types.set(slot, typeKey);
+      active.add(reused);
+      slots[position] = reused;
+      pool.slots.set(reactKey, reused);
+      pool.types.set(reused, typeKey);
+    }
+    if (unassigned.length > 0) {
+      let low = Number.POSITIVE_INFINITY;
+      let high = Number.NEGATIVE_INFINITY;
+      for (const entry of entries) {
+        if (entry.index < low) low = entry.index;
+        if (entry.index > high) high = entry.index;
+      }
+      for (const position of unassigned) {
+        const {reactKey, typeKey} = entries[position].metadata;
+        let slot = takeFarthestFreeSlot(free, low, high, occupantIndex);
+        if (slot == null) {
+          slot = pool.next++;
+          created.push(slot);
+        }
+        active.add(slot);
+        slots[position] = slot;
+        pool.slots.set(reactKey, slot);
+        pool.types.set(slot, typeKey);
+      }
     }
   }
   for (let position = 0; position < entries.length; position++) {
@@ -804,16 +847,22 @@ export const NitroListCells = React.memo(function NitroListCells({
   };
   if (recycleItems) {
     const previousPool = poolRef.current;
-    const assigned = assignCellSlots(previousPool, entries, (slot) => {
-      const element = previousPool.elements.get(slot) as
-        | React.ReactElement<NitroListItemContainerProps>
-        | undefined;
-      return (
-        element != null &&
-        element.props.item === items[element.props.index] &&
-        element.props.measurementRevision === measurementRevision
-      );
-    });
+    const assigned = assignCellSlots(
+      previousPool,
+      entries,
+      (slot) => {
+        const element = previousPool.elements.get(slot) as
+          | React.ReactElement<NitroListItemContainerProps>
+          | undefined;
+        return (
+          element != null &&
+          element.props.item === items[element.props.index] &&
+          element.props.measurementRevision === measurementRevision
+        );
+      },
+      (slot) =>
+        (previousPool.elements.get(slot) as React.ReactElement<NitroListItemContainerProps> | undefined)?.props.index,
+    );
     nextPool = assigned.pool;
     for (let position = 0; position < entries.length; position++) {
       const slot = assigned.slots[position];
