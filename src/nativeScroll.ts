@@ -43,3 +43,8 @@ export function unobserveNativeMounts(id: number): void {
   if (Platform.OS !== 'android' || id <= 0) return;
   androidScrollView?.unobserveMounts(id);
 }
+
+export function nativeMountedAt(id: number, sequence: number): number {
+  if (Platform.OS !== 'android' || id <= 0 || androidScrollView == null) return -1;
+  return androidScrollView.mountedAtMs(id, sequence);
+}

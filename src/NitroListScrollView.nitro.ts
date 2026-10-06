@@ -6,4 +6,5 @@ export interface NitroListScrollView extends HybridObject<{android: 'kotlin'}> {
   setEagerMount(enabled: boolean): void;
   observeMounts(markerTag: number, onMounted: (sequence: number, mountMs: number) => void): number;
   unobserveMounts(id: number): void;
+  mountedAtMs(id: number, sequence: number): number;
 }

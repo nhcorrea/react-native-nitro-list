@@ -63,5 +63,10 @@ namespace margelo::nitro::nitrolist {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* id */)>("unobserveMounts");
     method(_javaPart, id);
   }
+  double JHybridNitroListScrollViewSpec::mountedAtMs(double id, double sequence) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<double(double /* id */, double /* sequence */)>("mountedAtMs");
+    auto __result = method(_javaPart, id, sequence);
+    return __result;
+  }
 
 } // namespace margelo::nitro::nitrolist

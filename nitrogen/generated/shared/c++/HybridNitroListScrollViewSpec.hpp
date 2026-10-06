@@ -52,6 +52,7 @@ namespace margelo::nitro::nitrolist {
       virtual void setEagerMount(bool enabled) = 0;
       virtual double observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) = 0;
       virtual void unobserveMounts(double id) = 0;
+      virtual double mountedAtMs(double id, double sequence) = 0;
 
     protected:
       // Hybrid Setup

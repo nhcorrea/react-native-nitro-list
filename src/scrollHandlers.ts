@@ -12,6 +12,7 @@ import {
   classifyScrollEvent,
   type NitroListScrollCommandEcho,
 } from './scrollEvents';
+import {scrollEventTimestamp} from './scrollCorrections';
 import {
   estimateDirectionalVelocity,
   pushVelocitySample,
@@ -78,6 +79,7 @@ export interface ScrollHandlersCtx {
   beginScrollCommand: () => number;
   cancelFlingPrewarm: () => void;
   cancelPendingStickToEnd: () => void;
+  correctionShift: (eventTimestamp: number | undefined) => number;
   holdGestureEstimates: () => void;
   releaseGestureEstimates: () => void;
   captureMvcpAnchor: (engineOffset: number) => void;
@@ -143,9 +145,9 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   };
 
   const handleOuterScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
-    let scrollY = ctx.isHorizontalRef.current
-      ? e.nativeEvent.contentOffset.x
-      : e.nativeEvent.contentOffset.y;
+    let scrollY =
+      (ctx.isHorizontalRef.current ? e.nativeEvent.contentOffset.x : e.nativeEvent.contentOffset.y) +
+      ctx.correctionShift(scrollEventTimestamp(e.nativeEvent));
     const nowMs = Date.now();
     if (NitroListDevFlags.scrollEchoGuard) {
       const command = ctx.pendingScrollCommandRef.current;
@@ -317,9 +319,9 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   const handleMomentumScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
     const activity = ctx.scrollActivityRef.current;
     activity.momentum = false;
-    const momentumOffset = ctx.isHorizontalRef.current
-      ? e.nativeEvent.contentOffset.x
-      : e.nativeEvent.contentOffset.y;
+    const momentumOffset =
+      (ctx.isHorizontalRef.current ? e.nativeEvent.contentOffset.x : e.nativeEvent.contentOffset.y) +
+      ctx.correctionShift(scrollEventTimestamp(e.nativeEvent));
     const settleProgrammatic = activity.programmaticAnimated;
     ctx.endProgrammaticAnimatedScroll();
     if (settleProgrammatic) settleProgrammaticAnimatedScroll(momentumOffset);

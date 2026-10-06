@@ -18,6 +18,7 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridMethod("setEagerMount", &HybridNitroListScrollViewSpec::setEagerMount);
       prototype.registerHybridMethod("observeMounts", &HybridNitroListScrollViewSpec::observeMounts);
       prototype.registerHybridMethod("unobserveMounts", &HybridNitroListScrollViewSpec::unobserveMounts);
+      prototype.registerHybridMethod("mountedAtMs", &HybridNitroListScrollViewSpec::mountedAtMs);
     });
   }
 

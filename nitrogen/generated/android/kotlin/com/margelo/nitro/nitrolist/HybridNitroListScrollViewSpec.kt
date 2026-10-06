@@ -49,6 +49,10 @@ abstract class HybridNitroListScrollViewSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun unobserveMounts(id: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun mountedAtMs(id: Double, sequence: Double): Double
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

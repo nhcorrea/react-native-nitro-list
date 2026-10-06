@@ -82,25 +82,45 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
   override fun unobserveMounts(id: Double) {
     if (id.isFinite() && id > 0) MountObserver.unobserve(id.toInt())
   }
+
+  override fun mountedAtMs(id: Double, sequence: Double): Double {
+    if (!id.isFinite() || id <= 0 || id > Int.MAX_VALUE || !sequence.isFinite()) return -1.0
+    return MountObserver.mountedAt(id.toInt(), sequence)
+  }
 }
 
 @OptIn(UnstableReactNativeAPI::class)
 private object MountObserver {
+  private const val STAMPS_KEPT = 8
+
   private class Watch(val tag: Int, val callback: (Double, Double) -> Unit) {
     var view: WeakReference<View>? = null
     var last = Double.NaN
+    @Volatile var stamps = DoubleArray(0)
+
+    fun stamp(sequence: Double, uptimeMs: Double) {
+      val previous = stamps
+      val kept = minOf(previous.size, (STAMPS_KEPT - 1) * 2)
+      val next = DoubleArray(kept + 2)
+      System.arraycopy(previous, previous.size - kept, next, 0, kept)
+      next[kept] = sequence
+      next[kept + 1] = uptimeMs
+      stamps = next
+    }
   }
 
   private val watches = ConcurrentHashMap<Int, Watch>()
   private var nextId = 1
   private var manager: UIManager? = null
   private var mountStartNs = 0L
+  private var mountStartUptimeMs = 0L
 
   private val listener = object : UIManagerListener {
     override fun willDispatchViewUpdates(uiManager: UIManager) {}
 
     override fun willMountItems(uiManager: UIManager) {
       mountStartNs = System.nanoTime()
+      mountStartUptimeMs = SystemClock.uptimeMillis()
     }
 
     override fun didMountItems(uiManager: UIManager) {
@@ -111,6 +131,7 @@ private object MountObserver {
         val sequence = (view.getTag(R.id.react_test_id) as? String)?.toDoubleOrNull() ?: continue
         if (sequence == watch.last) continue
         watch.last = sequence
+        watch.stamp(sequence, mountStartUptimeMs.toDouble())
         watch.callback(sequence, mountMs)
       }
     }
@@ -139,6 +160,16 @@ private object MountObserver {
     val id = nextId++
     watches[id] = Watch(tag, callback)
     return id
+  }
+
+  fun mountedAt(id: Int, sequence: Double): Double {
+    val stamps = watches[id]?.stamps ?: return -1.0
+    var at = 0
+    while (at < stamps.size) {
+      if (stamps[at] >= sequence) return stamps[at + 1]
+      at += 2
+    }
+    return -1.0
   }
 
   @Synchronized

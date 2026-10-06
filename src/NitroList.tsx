@@ -24,11 +24,13 @@ import {
 
 import {createNitroListEngine, reportEngineMemory, type NitroListEngine} from './NitroListHost';
 import {
+  nativeMountedAt,
   observeNativeMounts,
   scrollToNativeOffset,
   setNativeEagerMount,
   unobserveNativeMounts,
 } from './nativeScroll';
+import {pendingCorrectionShift, type PendingScrollCorrection} from './scrollCorrections';
 import {MountGate, nextSliceSize} from './mountAdmission';
 import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
@@ -347,6 +349,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const mountGateRef = useRef<MountGate | null>(null);
   if (mountGateRef.current == null) mountGateRef.current = new MountGate(store);
   const mountObservationRef = useRef(-1);
+  const pendingCorrectionsRef = useRef<PendingScrollCorrection[]>([]);
   const stickyIndicesKey = stickyHeaderIndices != null ? stickyHeaderIndices.join(',') : '';
   const stickyIndices = useMemo<readonly number[]>(() => {
     const latest = stickyHeaderIndices;
@@ -2180,8 +2183,23 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     updateSticky(engineOffset);
     evaluateViewabilityRef.current();
     checkEdgeCallbacksRef.current();
+    const gate = mountGateRef.current!;
+    if (gate.available && !uiThreadDriverActiveRef.current) {
+      pendingCorrectionsRef.current.push({
+        delta: executable,
+        sequence: gate.publish(0),
+        appliedAt: -1,
+        createdAt: Date.now(),
+      });
+    }
     store.set('mvcpAdjust', store.get('mvcpAdjust') + executable);
   });
+  const readCorrectionMountedAt = useStableCallback(stableCallbacks, (sequence: number) =>
+    nativeMountedAt(mountObservationRef.current, sequence),
+  );
+  const correctionShift = useStableCallback(stableCallbacks, (eventTimestamp: number | undefined) =>
+    pendingCorrectionShift(pendingCorrectionsRef.current, eventTimestamp, Date.now(), readCorrectionMountedAt),
+  );
   useEffect(() => {
     applyMvcpCorrectionRef.current = applyMvcpCorrection;
   }, [applyMvcpCorrection]);
@@ -2190,6 +2208,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const gate = mountGateRef.current!;
     if (mountObservationRef.current > 0) unobserveNativeMounts(mountObservationRef.current);
     mountObservationRef.current = -1;
+    pendingCorrectionsRef.current.length = 0;
     gate.available = false;
     gate.reset();
     if (view == null) return;
@@ -2351,6 +2370,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       beginScrollCommand,
       cancelFlingPrewarm,
       cancelPendingStickToEnd,
+      correctionShift,
       holdGestureEstimates,
       releaseGestureEstimates,
       captureMvcpAnchor,
