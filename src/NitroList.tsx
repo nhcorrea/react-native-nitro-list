@@ -2542,6 +2542,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       cancelPrewarmAdmission,
       acquireEstimateFreeze,
       releaseEstimateFreeze,
+      releaseGestureEstimates,
       isEngineAttached,
       countUnmeasured,
     } satisfies ScrollToIndexCtx);

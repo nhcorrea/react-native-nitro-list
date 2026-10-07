@@ -66,6 +66,7 @@ export interface ScrollToIndexCtx {
   cancelPrewarmAdmission: () => void;
   acquireEstimateFreeze: () => void;
   releaseEstimateFreeze: () => void;
+  releaseGestureEstimates: () => void;
   isEngineAttached: () => boolean;
   countUnmeasured: (from: number, to: number) => number;
 }
@@ -305,6 +306,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
       return;
     }
 
+    ctx.releaseGestureEstimates();
     releaseEstimates?.();
     for (let pass = 0; pass < SCROLL_TO_INDEX_CORRECTION_PASSES; pass++) {
       if (superseded()) return;

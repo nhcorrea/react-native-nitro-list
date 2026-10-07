@@ -66,6 +66,7 @@ export class NitroListHarness<T = string> {
   echoQuantizer: ((offset: number) => number) | null = null;
   animatedScrollFrames = 0;
   animatedScrollFrameMs = 16;
+  animatedMomentumBegin = false;
   horizontal = false;
 
   private props: NitroListProps<T>;
@@ -97,6 +98,11 @@ export class NitroListHarness<T = string> {
       if (animated === true && this.animatedScrollFrames > 0) {
         const from = this.nativeOffset;
         const frames = this.animatedScrollFrames;
+        if (this.animatedMomentumBegin) {
+          this.animationTimers.add(setTimeout(() => {
+            this.scrollProps.onMomentumScrollBegin(makeScrollEvent(from, this.horizontal));
+          }, 0));
+        }
         for (let k = 1; k <= frames; k++) {
           this.animationTimers.add(setTimeout(() => {
             this.dispatchScroll(this.echo(from + ((target - from) * k) / frames));
