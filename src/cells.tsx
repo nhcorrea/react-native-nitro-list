@@ -254,6 +254,7 @@ export type CellPool = {
 };
 
 export const MAX_PARKED_CELLS = 32;
+const PARKED_AWAY_OFFSET = -(2 ** 20);
 const CELLS_STORE_KEYS = [
   'range',
   'prewarmRange',
@@ -878,9 +879,9 @@ export const NitroListCells = React.memo(function NitroListCells({
       const element = previousPool.elements.get(slot)! as React.ReactElement<NitroListItemContainerProps>;
       const near = element.props.top >= firstTop && element.props.top <= lastTop;
       const parkedElement =
-        element.props.parked && (!near || element.props.hidden) && element.props.origin === origin
+        element.props.parked && (!near || element.props.away) && element.props.origin === origin
           ? element
-          : React.cloneElement(element, near ? {parked: true, hidden: true, origin} : {parked: true, origin});
+          : React.cloneElement(element, near ? {parked: true, away: true, origin} : {parked: true, origin});
       nextPool.elements.set(slot, parkedElement);
     }
     const children = new Array<React.ReactElement>(nextPool.order.length);
@@ -934,6 +935,7 @@ export function EndSpaceSpacer({store, horizontal}: {store: ListStore; horizonta
 export interface NitroListItemContainerProps {
   recycled: boolean;
   parked?: boolean;
+  away?: boolean;
   occupant?: string;
   measurementRevision: MeasurementRevision;
   measurementGeometry: number;
@@ -975,6 +977,7 @@ export function areItemContainerPropsEqual(
   return (
     prev.recycled === next.recycled &&
     prev.parked === next.parked &&
+    prev.away === next.away &&
     prev.occupant === next.occupant &&
     prev.measurementRevision === next.measurementRevision &&
     prev.measurementGeometry === next.measurementGeometry &&
@@ -1055,6 +1058,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   origin,
   horizontal,
   hidden,
+  away,
   columnLeft,
   columnWidth,
   mainAxisGap,
@@ -1161,7 +1165,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   );
   const containerStyle = useMemo(() => {
     const visibility = hidden ? styles.hiddenCell : null;
-    const position = top - origin;
+    const position = away ? PARKED_AWAY_OFFSET : top - origin;
     if (columnLeft != null && columnWidth != null) {
       return [
         styles.absoluteCell,
@@ -1178,7 +1182,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
     return horizontal
       ? [styles.absoluteColumn, {left: position}, visibility]
       : [styles.absoluteRow, {top: position}, visibility];
-  }, [horizontal, top, origin, columnLeft, columnWidth, crossAxisGap, hidden]);
+  }, [horizontal, top, origin, columnLeft, columnWidth, crossAxisGap, hidden, away]);
   return (
     <View pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
       <View

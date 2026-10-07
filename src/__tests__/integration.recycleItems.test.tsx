@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import React, {useEffect} from 'react';
-import {View} from 'react-native';
+import {StyleSheet, View} from 'react-native';
 
 import {clearMeasurementCache} from '../measurementCache';
 import {MVCP_ANCHOR_BASE} from '../mvcp';
@@ -70,6 +70,38 @@ describe('recycleItems', () => {
     const mounted = await scrollOutAndBack(false);
     expect(recycled.mounts).toBeLessThan(mounted.mounts / 3);
     expect(recycled.rendered).toEqual(mounted.rendered);
+  });
+
+  it('parks cells near the window off screen instead of hiding them with opacity', async () => {
+    harness = renderNitroList({
+      data: makeItems(1000),
+      renderItem: () => <View />,
+      estimatedItemSize: 100,
+      keyExtractor: itemKey,
+      drawDistance: 500,
+      recycleItems: true,
+      alwaysRender: {top: 1},
+    });
+    harness.layout(VIEWPORT_W, VIEWPORT_H);
+    harness.measureUnmeasuredCells(heightFor);
+    await harness.settle(50);
+    for (const offset of [1500, 3000, 2200]) {
+      harness.scroll(offset);
+      await harness.settle(16);
+      harness.measureUnmeasuredCells(heightFor);
+    }
+    await harness.settle(100);
+    const parked = harness.renderer.root.findAll(
+      (node) =>
+        typeof node.type === 'function' &&
+        typeof node.props?.index === 'number' &&
+        node.props?.enqueueItemSize != null &&
+        node.props?.parked === true,
+    );
+    expect(parked.length).toBeGreaterThan(0);
+    const styles = parked.map((cell) => StyleSheet.flatten(cell.findAll((node) => node.type === View)[0].props.style) as {opacity?: number; top?: number});
+    expect(styles.every((style) => style.opacity !== 0)).toBe(true);
+    expect(styles.some((style) => style.top === -(2 ** 20))).toBe(true);
   });
 
   it('a reused cell reports the size of its new item, never the previous occupant', async () => {
