@@ -156,6 +156,7 @@ private:
   double rangeWindowMax_ = 0.0;
   double rangeWindowViewport_ = -1.0;
   double rangeWindowDraw_ = -1.0;
+  double rangeWindowAhead_ = -1.0;
   int32_t cachedStart_ = 0;
   int32_t cachedEnd_ = -1;
   int32_t cachedVersion_ = -1;
@@ -166,6 +167,8 @@ private:
   double lastSampleTimeMs_ = -1.0;
   double lastSampleOffset_ = 0.0;
   double velocity_ = 0.0;
+  double stallMs_ = 0.0;
+  double stallAtMs_ = -1.0;
   int32_t regime_ = 0;
   int32_t pendingRegime_ = 0;
   int32_t pendingRegimeCount_ = 0;

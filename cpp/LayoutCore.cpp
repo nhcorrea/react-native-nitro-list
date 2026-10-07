@@ -10,6 +10,10 @@ namespace {
 
 constexpr double kBufferAheadRatio = 1.5;
 constexpr double kBufferBehindRatio = 0.5;
+constexpr double kStallMinMs = 80.0;
+constexpr double kStallMemoryMs = 3000.0;
+constexpr double kStallLeadMarginMs = 16.0;
+constexpr double kLeadAheadMaxViewports = 2.0;
 constexpr double kDirectionalMinVelocity = 300.0;
 constexpr double kDirectionalHoldVelocity = 150.0;
 constexpr int32_t kRegimeExitSamples = 3;
@@ -427,6 +431,9 @@ void LayoutCore::resetAll() {
   rangeWindowMax_ = 0.0;
   rangeWindowViewport_ = -1.0;
   rangeWindowDraw_ = -1.0;
+  rangeWindowAhead_ = -1.0;
+  stallMs_ = 0.0;
+  stallAtMs_ = -1.0;
   cachedStart_ = 0;
   cachedEnd_ = -1;
   cachedVersion_ = -1;
@@ -676,8 +683,8 @@ int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, double 
 LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffset,
                                                                double viewportHeight,
                                                                double drawDistance) {
+  const double now = directionalBuffers_ ? (clock_ != nullptr ? clock_() : defaultClockMs()) : 0.0;
   if (directionalBuffers_ && scrollOffset != lastSampleOffset_) {
-    const double now = clock_ != nullptr ? clock_() : defaultClockMs();
     bool advanceBaseline = true;
     bool sampled = false;
     bool stale = false;
@@ -690,6 +697,10 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
       } else if (dt >= kVelocityMinSampleMs) {
         velocity_ = (scrollOffset - lastSampleOffset_) / dt * 1000.0;
         sampled = true;
+        if (dt >= kStallMinMs) {
+          stallMs_ = stallAtMs_ >= 0.0 && now - stallAtMs_ <= kStallMemoryMs ? std::max(stallMs_, dt) : dt;
+          stallAtMs_ = now;
+        }
       } else {
         advanceBaseline = false;
       }
@@ -731,11 +742,19 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
     }
   }
   const int32_t regime = directionalBuffers_ ? regime_ : 0;
+  const double leadStep = std::max(1.0, drawDistance * 0.5);
+  const bool stalling = regime != 0 && stallAtMs_ >= 0.0 && now - stallAtMs_ <= kStallMemoryMs;
+  const double lead = !stalling ? 0.0
+                                : std::floor(std::min(std::abs(velocity_) * (stallMs_ + kStallLeadMarginMs) / 1000.0,
+                                                      viewportHeight * kLeadAheadMaxViewports) /
+                                             leadStep) *
+                                      leadStep;
+  const double ahead = std::max(drawDistance * kBufferAheadRatio, lead);
   double topBuffer = regime == 0    ? drawDistance
                      : regime > 0   ? drawDistance * kBufferBehindRatio
-                                    : drawDistance * kBufferAheadRatio;
+                                    : ahead;
   double bottomBuffer = regime == 0  ? drawDistance
-                        : regime > 0 ? drawDistance * kBufferAheadRatio
+                        : regime > 0 ? ahead
                                      : drawDistance * kBufferBehindRatio;
   ensureClean();
   const bool inside = scrollOffset < totalSize_;
@@ -747,7 +766,7 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
   bottomBuffer += unusedTop;
   if (!atEdge && hasRangeWindow_ && minDirtyIndex_ == INT32_MAX && cachedVersion_ == layoutVersion_ &&
       viewportHeight == rangeWindowViewport_ && drawDistance == rangeWindowDraw_ &&
-      regime == cachedRegime_ && scrollOffset > rangeWindowMin_ &&
+      ahead == rangeWindowAhead_ && regime == cachedRegime_ && scrollOffset > rangeWindowMin_ &&
       scrollOffset < rangeWindowMax_) {
     return EngagedRange{cachedStart_, cachedEnd_, cachedVersion_};
   }
@@ -792,6 +811,7 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
   rangeWindowMax_ = upper;
   rangeWindowViewport_ = viewportHeight;
   rangeWindowDraw_ = drawDistance;
+  rangeWindowAhead_ = ahead;
   hasRangeWindow_ = !atEdge && upper > lower;
   return EngagedRange{start, end, layoutVersion_};
 }

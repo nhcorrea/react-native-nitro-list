@@ -5,6 +5,10 @@ const f32 = Math.fround;
 
 const BUFFER_AHEAD_RATIO = 1.5;
 const BUFFER_BEHIND_RATIO = 0.5;
+const STALL_MIN_MS = 80;
+const STALL_MEMORY_MS = 3000;
+const STALL_LEAD_MARGIN_MS = 16;
+const LEAD_AHEAD_MAX_VIEWPORTS = 2;
 const DIRECTIONAL_MIN_VELOCITY = 300;
 const DIRECTIONAL_HOLD_VELOCITY = 150;
 const REGIME_EXIT_SAMPLES = 3;
@@ -77,6 +81,8 @@ export class LayoutCoreMirror {
   private lastSampleTimeMs = -1;
   private lastSampleOffset = 0;
   private velocity = 0;
+  private stallMs = 0;
+  private stallAtMs = -1;
   private regime = 0;
   private pendingRegime = 0;
   private pendingRegimeCount = 0;
@@ -378,6 +384,8 @@ export class LayoutCoreMirror {
     this.lastSampleTimeMs = -1;
     this.lastSampleOffset = 0;
     this.velocity = 0;
+    this.stallMs = 0;
+    this.stallAtMs = -1;
     this.clearRegime();
   }
 
@@ -532,8 +540,8 @@ export class LayoutCoreMirror {
   }
 
   getEngagedRange(scrollOffset: number, viewportHeight: number, drawDistance: number): EngagedRange {
+    const now = this.directionalBuffers ? this.clock() : 0;
     if (this.directionalBuffers && scrollOffset !== this.lastSampleOffset) {
-      const now = this.clock();
       let advanceBaseline = true;
       let sampled = false;
       let stale = false;
@@ -546,6 +554,11 @@ export class LayoutCoreMirror {
         } else if (dt >= VELOCITY_MIN_SAMPLE_MS) {
           this.velocity = ((scrollOffset - this.lastSampleOffset) / dt) * 1000;
           sampled = true;
+          if (dt >= STALL_MIN_MS) {
+            this.stallMs =
+              this.stallAtMs >= 0 && now - this.stallAtMs <= STALL_MEMORY_MS ? Math.max(this.stallMs, dt) : dt;
+            this.stallAtMs = now;
+          }
         } else {
           advanceBaseline = false;
         }
@@ -586,17 +599,28 @@ export class LayoutCoreMirror {
       }
     }
     const regime = this.directionalBuffers ? this.regime : 0;
+    const leadStep = Math.max(1, drawDistance * 0.5);
+    const stalling = regime !== 0 && this.stallAtMs >= 0 && now - this.stallAtMs <= STALL_MEMORY_MS;
+    const lead = !stalling
+      ? 0
+      : Math.floor(
+          Math.min(
+            (Math.abs(this.velocity) * (this.stallMs + STALL_LEAD_MARGIN_MS)) / 1000,
+            viewportHeight * LEAD_AHEAD_MAX_VIEWPORTS,
+          ) / leadStep,
+        ) * leadStep;
+    const ahead = Math.max(drawDistance * BUFFER_AHEAD_RATIO, lead);
     let topBuffer =
       regime === 0
         ? drawDistance
         : regime > 0
           ? drawDistance * BUFFER_BEHIND_RATIO
-          : drawDistance * BUFFER_AHEAD_RATIO;
+          : ahead;
     let bottomBuffer =
       regime === 0
         ? drawDistance
         : regime > 0
-          ? drawDistance * BUFFER_AHEAD_RATIO
+          ? ahead
           : drawDistance * BUFFER_BEHIND_RATIO;
     this.ensureClean();
     const inside = scrollOffset < this.totalSize;

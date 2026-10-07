@@ -635,6 +635,49 @@ static void testDirectionalBuffers() {
   CHECK(off.end == 62);
 }
 
+static void testStallLeadExtendsAheadBuffer() {
+  LayoutCore core;
+  core.setEstimate(100.0f);
+  core.setItemCount(1000);
+  core.setClockForTesting(&fakeClock);
+  core.setDirectionalBuffers(true);
+  const double viewportH = 800.0;
+  const double draw = 250.0;
+
+  gFakeNowMs = 5000.0;
+  double offset = 20000.0;
+  LayoutCore::EngagedRange steady{0, -1, 0};
+  for (int frame = 0; frame < 6; frame++) {
+    steady = core.getEngagedRange(offset, viewportH, draw);
+    gFakeNowMs += 16.0;
+    offset += 80.0;
+  }
+  CHECK(steady.start == 202);
+  CHECK(steady.end == 215);
+
+  gFakeNowMs += 84.0;
+  offset += 500.0;
+  auto stalled = core.getEngagedRange(offset, viewportH, draw);
+  CHECK(stalled.start == 208);
+  CHECK(stalled.end == 224);
+
+  gFakeNowMs += 16.0;
+  offset += 80.0;
+  auto covered = core.getEngagedRange(offset, viewportH, draw);
+  CHECK(covered.start == 209);
+  CHECK(covered.end == 223);
+
+  for (int frame = 0; frame < 200; frame++) {
+    gFakeNowMs += 16.0;
+    offset += 80.0;
+    core.getEngagedRange(offset, viewportH, draw);
+  }
+  gFakeNowMs += 16.0;
+  offset += 80.0;
+  auto expired = core.getEngagedRange(offset, viewportH, draw);
+  CHECK(expired.end - expired.start == 13);
+}
+
 static void testStalledSlowScrollKeepsRegime() {
   LayoutCore core;
   core.setEstimate(64.0);
@@ -1658,6 +1701,7 @@ int main(int argc, char** argv) {
   testFillLayoutSlab();
   testReadLayout();
   testDirectionalBuffers();
+  testStallLeadExtendsAheadBuffer();
   testStalledSlowScrollKeepsRegime();
   testEstimatesFrozen();
   testResetScrollVelocity();
