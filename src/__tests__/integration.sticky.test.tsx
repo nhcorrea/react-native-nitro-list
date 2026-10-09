@@ -1,9 +1,11 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import React, {useEffect} from 'react';
+import {Platform} from 'react-native';
 
 import {clearWarnDevOnceForTests} from '../devWarnings';
 import type {NitroListRenderItem} from '../NitroList';
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
+import {clearCreatedSharedValuesForTests, getCreatedSharedValuesForTests} from './helpers/mockReanimated';
 
 const VIEWPORT_W = 400;
 const VIEWPORT_H = 600;
@@ -60,6 +62,41 @@ describe('sticky header integration', () => {
 
     harness.scroll(400);
     expect(stickyChanges[stickyChanges.length - 1]).toBe(0);
+  });
+
+  it('drives the overlay with a native interpolation on Android without Reanimated values', async () => {
+    const originalPlatform = Platform.OS;
+    Platform.OS = 'android';
+    try {
+      const stickyChanges: number[] = [];
+      clearCreatedSharedValuesForTests();
+      harness = renderNitroList({
+        data: makeItems(100),
+        renderItem: () => null,
+        estimatedItemSize: 100,
+        keyExtractor: itemKey,
+        stickyHeaderIndices: [0, 10, 20],
+        onChangeStickyIndex: (index) => {
+          stickyChanges.push(index);
+        },
+      });
+      harness.layout(VIEWPORT_W, VIEWPORT_H);
+      harness.measureAllCells(() => 100);
+      await harness.settle(50);
+
+      expect(getCreatedSharedValuesForTests()).toHaveLength(0);
+      expect(stickyChanges[stickyChanges.length - 1]).toBe(0);
+      expect(harness.nativeStickyTranslateY(0)).toBe(0);
+      expect(harness.nativeStickyTranslateY(950)).toBe(-50);
+      expect(harness.nativeStickyTranslateY(1200)).toBe(-100);
+
+      harness.scroll(1050);
+      expect(stickyChanges[stickyChanges.length - 1]).toBe(10);
+      expect(harness.nativeStickyTranslateY(1050)).toBe(0);
+      expect(harness.nativeStickyTranslateY(1950)).toBe(-50);
+    } finally {
+      Platform.OS = originalPlatform;
+    }
   });
 
   it('hideRelatedCell keeps the active header cell mounted but hidden', async () => {

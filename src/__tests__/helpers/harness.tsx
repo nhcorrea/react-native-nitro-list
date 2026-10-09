@@ -364,6 +364,25 @@ export class NitroListHarness<T = string> {
     return flat?.opacity;
   }
 
+  nativeStickyTranslateY(scrollOffset: number): number {
+    const overlay = this.renderer.root.findAll(
+      (node) =>
+        typeof node.type !== 'string' &&
+        node.props.pointerEvents === 'box-none' &&
+        node.props.collapsable === false &&
+        node.props.onLayout != null,
+    )[0];
+    if (overlay == null) throw new Error('sticky overlay is not rendered');
+    const flat = StyleSheet.flatten(overlay.props.style) as {transform?: Array<Record<string, unknown>>};
+    const value = flat.transform?.[0]?.[this.horizontal ? 'translateX' : 'translateY'] as
+      | number
+      | {_parent: {setValue: (v: number) => void}; __getValue: () => number};
+    if (typeof value === 'number') return value;
+    if (value == null) throw new Error('sticky overlay has no translation');
+    value._parent.setValue(scrollOffset);
+    return value.__getValue();
+  }
+
   stickyTranslateY(): number {
     const sticky = getCreatedSharedValuesForTests()[0];
     if (sticky == null) throw new Error('no shared values were created yet');

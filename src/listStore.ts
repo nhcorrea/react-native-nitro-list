@@ -1,5 +1,7 @@
 import {useCallback, useRef, useSyncExternalStore} from 'react';
 
+import type {StickyPush} from './stickyCompute';
+
 export type RangeState = {start: number; end: number; layoutVersion: number};
 
 export interface ListStoreState {
@@ -7,6 +9,7 @@ export interface ListStoreState {
   prewarmRange: RangeState | null;
   reserveRange: RangeState | null;
   stickyIndex: number;
+  stickyPush: StickyPush | null;
   containerSize: number;
   autoFixedTypes: ReadonlyMap<string | number, number> | null;
   renderMode: 'normal' | 'fast';

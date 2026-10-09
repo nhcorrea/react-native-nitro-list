@@ -12,6 +12,7 @@ import React, {
   useState,
 } from 'react';
 import {
+  Animated,
   findNodeHandle,
   PixelRatio,
   Platform,
@@ -76,7 +77,8 @@ import {
   type EdgeCallbacksCtx,
   type EdgeLatchState,
 } from './edges';
-import type {StickyComputeResult} from './sticky';
+import {computeSticky, sameStickyPush, stickyPushFor, type StickyComputeResult, type StickyPush} from './stickyCompute';
+import {NativeStickyHeaderSlot} from './stickyOverlay';
 import {createViewability, type ViewabilityCtx} from './viewability';
 import {flushWaiters, waitForNextFrame} from './scrollCommands';
 import {createMeasurement, MVCP_POSITION_EPSILON, type MeasurementApi, type MeasurementCtx} from './measurement';
@@ -198,6 +200,10 @@ type FlingAdmission = {
   direction: 1 | -1;
   rafId: number | null;
   cancelAck: (() => void) | null;
+};
+
+type NativeEventAttacher = {
+  attachNativeEvent: (target: unknown, eventName: string, mapping: ReadonlyArray<unknown>) => {detach: () => void};
 };
 
 const EMPTY: readonly never[] = Object.freeze([]);
@@ -352,6 +358,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       prewarmRange: null,
       reserveRange: null,
       stickyIndex: -1,
+      stickyPush: null,
       containerSize: Math.max(0, itemCount * estimatedItemSize),
       autoFixedTypes: null,
       renderMode: 'normal',
@@ -565,6 +572,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const lastJsStickyTyRef = useRef<number | null>(null);
   const lastJsStickyIndexRef = useRef<number | null>(null);
   const stickyResultRef = useRef<StickyComputeResult>({index: -1, translateY: 0, height: 0});
+  const lastStickyPushRef = useRef<StickyPush | null>(null);
+  const nativeSticky =
+    Platform.OS === 'android' && stickyIndices.length > 0 && experimentalUiThreadScroll !== true;
+  const nativeStickyRef = useRef(nativeSticky);
+  commitBindings.push(() => {
+    nativeStickyRef.current = nativeSticky;
+  });
+  const stickyScrollValueRef = useRef<Animated.Value | null>(null);
+  const stickyEventAttachedRef = useRef(false);
+  if (nativeSticky && stickyScrollValueRef.current == null) stickyScrollValueRef.current = new Animated.Value(0);
 
   const layoutCacheCtxRef = useRef<LayoutCacheCtx | null>(null);
   if (layoutCacheCtxRef.current == null) {
@@ -979,6 +996,27 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const lastScrollOffsetRef = useRef(initialTargetRef.current?.offset ?? 0);
   const scrollDriverKey = experimentalUiThreadScroll === true ? 'ui-driver' : 'js-driver';
+  useEffect(() => {
+    const value = stickyScrollValueRef.current;
+    const node = scrollRef.current as (ScrollView & {getNativeScrollRef?: () => unknown}) | null;
+    if (!nativeSticky || value == null || node == null) return;
+    const target = node.getNativeScrollRef != null ? node.getNativeScrollRef() : node;
+    let tag: number | null = null;
+    try {
+      tag = findNodeHandle(target as React.ComponentRef<typeof View>);
+    } catch {
+      tag = null;
+    }
+    if (tag == null) return;
+    const attachment = (Animated as unknown as NativeEventAttacher).attachNativeEvent(target, 'onScroll', [
+      {nativeEvent: {contentOffset: isHorizontal ? {x: value} : {y: value}}},
+    ]);
+    stickyEventAttachedRef.current = true;
+    return () => {
+      stickyEventAttachedRef.current = false;
+      attachment.detach();
+    };
+  }, [nativeSticky, isHorizontal, scrollDriverKey]);
   const committedScrollDriverKeyRef = useRef(scrollDriverKey);
   commitBindings.push(() => {
     committedScrollDriverKeyRef.current = scrollDriverKey;
@@ -1372,7 +1410,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   });
 
   const uiValuesRef = useRef<UiThreadValues | null>(null);
-  if (uiValuesRef.current == null && (experimentalUiThreadScroll === true || stickyIndices.length > 0)) {
+  if (uiValuesRef.current == null && (experimentalUiThreadScroll === true || (stickyIndices.length > 0 && !nativeSticky))) {
     uiValuesRef.current = loadUiThread().createUiThreadValues({
       stickyTranslateY: stickyOffset,
       stickyOverlaySize: stickySize ?? 0,
@@ -1558,7 +1596,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     stableCallbacks,
     (offset: number) => {
       const values = uiValuesRef.current;
-      if (stickyIndices.length === 0 || !hybridRef.current || values == null) {
+      const nativeDriven = nativeStickyRef.current;
+      if (stickyIndices.length === 0 || !hybridRef.current || (values == null && !nativeDriven)) {
         if (lastJsStickyIndexRef.current !== -1) {
           lastJsStickyIndexRef.current = -1;
           if (values != null) values.stickyIndex.value = -1;
@@ -1571,7 +1610,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         scheduleStickyRecomputeOnUi();
         return;
       }
-      const result = loadUiThread().computeSticky(
+      const result = computeSticky(
         offset,
         stickyIndices,
         stickyOffset,
@@ -1580,6 +1619,16 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         stickyResultRef.current,
       );
       applyStickyIndex(result.index);
+      if (nativeDriven || values == null) {
+        if (!stickyEventAttachedRef.current) stickyScrollValueRef.current?.setValue(offset + effectivePaddingStartRef.current);
+        if (result.index < 0) return;
+        const push = stickyPushFor(result, stickyIndices, stickyOffset, stickyLayoutReader, effectivePaddingStartRef.current);
+        if (!sameStickyPush(lastStickyPushRef.current, push)) {
+          lastStickyPushRef.current = push;
+          store.set('stickyPush', push);
+        }
+        return;
+      }
       if (lastJsStickyTyRef.current !== result.translateY) {
         lastJsStickyTyRef.current = result.translateY;
         values.stickyTranslateY.value = result.translateY;
@@ -2947,7 +2996,19 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       ) : (
         React.cloneElement(resolvedRenderScrollComponent(scrollProps), {key: scrollDriverKey})
       )}
-      {UiThread != null && uiValues != null && stickyIndices.length > 0 ? (
+      {nativeSticky && stickyScrollValueRef.current != null ? (
+        <NativeStickyHeaderSlot
+          store={store}
+          items={items as ReadonlyArray<unknown>}
+          itemCount={itemCount}
+          renderItem={renderItem as NitroListRenderItem<unknown>}
+          adaptiveRenderMode={adaptiveRenderMode === true}
+          scrollValue={stickyScrollValueRef.current}
+          stickyOffset={stickyOffset}
+          horizontal={isHorizontal}
+          onLayout={handleStickyOverlayLayout}
+        />
+      ) : UiThread != null && uiValues != null && stickyIndices.length > 0 ? (
         <UiThread.StickyHeaderSlot
           store={store}
           items={items as ReadonlyArray<unknown>}
