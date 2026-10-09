@@ -30,6 +30,12 @@ export function setNativeEagerMount(enabled: boolean): void {
   androidScrollView.setEagerMount(enabled);
 }
 
+export function setNativeClipChildren(viewTag: number, enabled: boolean): void {
+  if (Platform.OS !== 'android' || !Number.isInteger(viewTag) || viewTag <= 0) return;
+  androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
+  androidScrollView.setClipChildren(viewTag, enabled);
+}
+
 export function observeNativeMounts(
   markerTag: number,
   onMounted: (sequence: number, mountMs: number) => void,

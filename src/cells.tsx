@@ -5,12 +5,13 @@ import React, {
   useRef,
   useInsertionEffect,
 } from 'react';
-import {PixelRatio, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
+import {findNodeHandle, PixelRatio, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
 
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
 import {MVCP_ANCHOR_BASES} from './mvcp';
 import type {MeasurementIdentity, MeasurementRevision} from './measurementIdentity';
+import {setNativeClipChildren} from './nativeScroll';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import type {
   NitroListAlwaysRenderConfig,
@@ -614,6 +615,7 @@ export interface NitroListCellsProps {
   crossAxisGap: number;
   renderItem: NitroListRenderItem<unknown>;
   recycleItems: boolean;
+  clipItems: boolean;
   ItemSeparatorComponent?: React.ComponentType<{leadingItem: unknown}>;
   enqueueItemSize: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
   cellBridge: CellBridge;
@@ -645,6 +647,37 @@ export function areCellsPropsEqual(prev: NitroListCellsProps, next: NitroListCel
   return Object.keys(prev).length === Object.keys(next).length;
 }
 
+interface OriginClip {
+  attach: (view: View | null) => void;
+  setEnabled: (enabled: boolean) => void;
+}
+
+function createOriginClip(): OriginClip {
+  let tag: number | null = null;
+  let applied = false;
+  let enabled = false;
+  const sync = () => {
+    if (tag == null || applied === enabled) return;
+    setNativeClipChildren(tag, enabled);
+    applied = enabled;
+  };
+  return {
+    attach(view) {
+      const next = view == null ? null : findNodeHandle(view);
+      if (next == null) return;
+      if (next !== tag) {
+        tag = next;
+        applied = false;
+      }
+      sync();
+    },
+    setEnabled(next) {
+      enabled = next;
+      sync();
+    },
+  };
+}
+
 export const NitroListCells = React.memo(function NitroListCells({
   firstPaintLimit,
   measurementRevision,
@@ -667,6 +700,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   crossAxisGap,
   renderItem,
   recycleItems,
+  clipItems,
   ItemSeparatorComponent,
   enqueueItemSize,
   cellBridge,
@@ -682,6 +716,12 @@ export const NitroListCells = React.memo(function NitroListCells({
   );
   const heldOutputRef = useRef<React.ReactElement | null>(null);
   const originRef = useRef(0);
+  const originClipRef = useRef<OriginClip | null>(null);
+  originClipRef.current ??= createOriginClip();
+  const originClip = originClipRef.current;
+  useEffect(() => {
+    originClip.setEnabled(clipItems);
+  }, [originClip, clipItems]);
   useLayoutEffect(() => {
     onCommit(range, prewarmRange, 'measure');
   });
@@ -890,7 +930,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     }
     build.previous = null;
     renderedOutput = (
-      <View collapsable={false} style={originStyle}>
+      <View ref={originClip.attach} collapsable={false} style={originStyle}>
         {children}
       </View>
     );
@@ -902,7 +942,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   }
   build.previous = null;
   renderedOutput = (
-    <View collapsable={false} style={originStyle}>
+    <View ref={originClip.attach} collapsable={false} style={originStyle}>
       {renderedChildren}
     </View>
   );

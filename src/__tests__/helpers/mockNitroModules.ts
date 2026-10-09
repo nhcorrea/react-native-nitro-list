@@ -23,6 +23,21 @@ export function registerNativeScrollViewForTests(tag: number, command: NativeScr
 }
 
 let eagerMountHolders = 0;
+const clippedViews = new Map<number, boolean>();
+const clipCalls: Array<[number, boolean]> = [];
+
+export function nativeClipCallsForTests(): ReadonlyArray<[number, boolean]> {
+  return clipCalls;
+}
+
+export function nativeClippedViewForTests(tag: number): boolean | undefined {
+  return clippedViews.get(tag);
+}
+
+export function resetNativeClipForTests(): void {
+  clippedViews.clear();
+  clipCalls.length = 0;
+}
 
 export function nativeEagerMountHoldersForTests(): number {
   return eagerMountHolders;
@@ -35,6 +50,10 @@ const nativeScrollView = {
   },
   setEagerMount(enabled: boolean): void {
     eagerMountHolders += enabled ? 1 : -1;
+  },
+  setClipChildren(tag: number, enabled: boolean): void {
+    clipCalls.push([tag, enabled]);
+    clippedViews.set(tag, enabled);
   },
 };
 

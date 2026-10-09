@@ -37,6 +37,10 @@ abstract class HybridNitroListScrollViewSpec: HybridObject() {
   @Keep
   abstract fun setEagerMount(enabled: Boolean): Unit
   
+  @DoNotStrip
+  @Keep
+  abstract fun setClipChildren(viewTag: Double, enabled: Boolean): Unit
+  
   abstract fun observeMounts(markerTag: Double, onMounted: (sequence: Double, mountMs: Double) -> Unit): Double
   
   @DoNotStrip

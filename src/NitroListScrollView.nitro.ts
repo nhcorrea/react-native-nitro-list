@@ -4,6 +4,7 @@ import type {HybridObject} from 'react-native-nitro-modules';
 export interface NitroListScrollView extends HybridObject<{android: 'kotlin'}> {
   scrollTo(viewTag: number, x: number, y: number, animated: boolean): void;
   setEagerMount(enabled: boolean): void;
+  setClipChildren(viewTag: number, enabled: boolean): void;
   observeMounts(markerTag: number, onMounted: (sequence: number, mountMs: number) => void): number;
   unobserveMounts(id: number): void;
   mountedAtMs(id: number, sequence: number): number;

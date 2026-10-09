@@ -327,6 +327,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     alwaysRender,
     contentContainerStyle,
     recycleItems,
+    clipItemsToBounds,
     experimentalEagerMount,
   } = props;
 
@@ -2960,6 +2961,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
             crossAxisGap={crossAxisGap}
             renderItem={renderItem as NitroListRenderItem<unknown>}
             recycleItems={recycleItems === true}
+            clipItems={Platform.OS === 'android' && clipItemsToBounds !== false}
             ItemSeparatorComponent={
               ItemSeparatorComponent as React.ComponentType<{leadingItem: unknown}> | undefined
             }

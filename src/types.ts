@@ -163,6 +163,7 @@ export interface NitroListProps<T> {
   dataVersion?: unknown;
   drawDistance?: number;
   recycleItems?: boolean;
+  clipItemsToBounds?: boolean;
   experimentalEagerMount?: boolean;
   horizontal?: boolean;
   numColumns?: number;

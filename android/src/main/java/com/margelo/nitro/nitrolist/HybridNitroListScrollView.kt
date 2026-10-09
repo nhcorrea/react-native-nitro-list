@@ -74,6 +74,12 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
     EagerMount.set(enabled)
   }
 
+  override fun setClipChildren(viewTag: Double, enabled: Boolean) {
+    if (!viewTag.isFinite() || viewTag <= 0 || viewTag > Int.MAX_VALUE ||
+        viewTag != viewTag.toInt().toDouble()) return
+    ChildClipping.request(viewTag.toInt(), enabled)
+  }
+
   override fun observeMounts(markerTag: Double, onMounted: (sequence: Double, mountMs: Double) -> Unit): Double {
     if (!markerTag.isFinite() || markerTag <= 0 || markerTag > Int.MAX_VALUE) return -1.0
     return MountObserver.observe(markerTag.toInt(), onMounted).toDouble()
@@ -254,6 +260,74 @@ private object EagerMount {
     manager?.removeUIManagerEventListener(listener)
     manager = null
     dispatch = null
+  }
+}
+
+@OptIn(UnstableReactNativeAPI::class)
+private object ChildClipping {
+  private const val MOUNT_PASSES_KEPT = 120
+
+  private class Request(var enabled: Boolean, var passesLeft: Int)
+
+  private val pending = HashMap<Int, Request>()
+  private var manager: UIManager? = null
+
+  private val listener = object : UIManagerListener {
+    override fun willDispatchViewUpdates(uiManager: UIManager) {}
+
+    override fun willMountItems(uiManager: UIManager) {}
+
+    override fun didMountItems(uiManager: UIManager) {
+      apply(uiManager)
+    }
+
+    override fun didDispatchMountItems(uiManager: UIManager) {}
+
+    override fun didScheduleMountItems(uiManager: UIManager) {}
+  }
+
+  fun request(tag: Int, enabled: Boolean) {
+    val context = NitroModules.applicationContext ?: return
+    UiThreadUtil.runOnUiThread {
+      val uiManager = UIManagerHelper.getUIManager(context, UIManagerType.FABRIC) ?: return@runOnUiThread
+      val request = pending[tag]
+      if (request == null) pending[tag] = Request(enabled, MOUNT_PASSES_KEPT)
+      else {
+        request.enabled = enabled
+        request.passesLeft = MOUNT_PASSES_KEPT
+      }
+      apply(uiManager)
+      if (pending.isNotEmpty() && manager !== uiManager) {
+        manager?.removeUIManagerEventListener(listener)
+        uiManager.addUIManagerEventListener(listener)
+        manager = uiManager
+      }
+    }
+  }
+
+  private fun apply(uiManager: UIManager) {
+    val entries = pending.entries.iterator()
+    while (entries.hasNext()) {
+      val (tag, request) = entries.next()
+      val view = try {
+        uiManager.resolveView(tag)
+      } catch (_: IllegalViewOperationException) {
+        null
+      }
+      if (view is ViewGroup) {
+        if (view.clipChildren != request.enabled) {
+          view.clipChildren = request.enabled
+          view.invalidate()
+        }
+        entries.remove()
+      } else if (--request.passesLeft <= 0) {
+        entries.remove()
+      }
+    }
+    if (pending.isEmpty() && manager != null) {
+      manager?.removeUIManagerEventListener(listener)
+      manager = null
+    }
   }
 }
 

@@ -16,6 +16,7 @@ namespace margelo::nitro::nitrolist {
     registerHybrids(this, [](Prototype& prototype) {
       prototype.registerHybridMethod("scrollTo", &HybridNitroListScrollViewSpec::scrollTo);
       prototype.registerHybridMethod("setEagerMount", &HybridNitroListScrollViewSpec::setEagerMount);
+      prototype.registerHybridMethod("setClipChildren", &HybridNitroListScrollViewSpec::setClipChildren);
       prototype.registerHybridMethod("observeMounts", &HybridNitroListScrollViewSpec::observeMounts);
       prototype.registerHybridMethod("unobserveMounts", &HybridNitroListScrollViewSpec::unobserveMounts);
       prototype.registerHybridMethod("mountedAtMs", &HybridNitroListScrollViewSpec::mountedAtMs);

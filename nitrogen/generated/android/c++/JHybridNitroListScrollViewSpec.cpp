@@ -54,6 +54,10 @@ namespace margelo::nitro::nitrolist {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void(jboolean /* enabled */)>("setEagerMount");
     method(_javaPart, enabled);
   }
+  void JHybridNitroListScrollViewSpec::setClipChildren(double viewTag, bool enabled) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* viewTag */, jboolean /* enabled */)>("setClipChildren");
+    method(_javaPart, viewTag, enabled);
+  }
   double JHybridNitroListScrollViewSpec::observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<double(double /* markerTag */, jni::alias_ref<JFunc_void_double_double::javaobject> /* onMounted */)>("observeMounts_cxx");
     auto __result = method(_javaPart, markerTag, JFunc_void_double_double_cxx::fromCpp(onMounted));
