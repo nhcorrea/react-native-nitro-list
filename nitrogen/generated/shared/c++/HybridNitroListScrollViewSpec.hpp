@@ -54,6 +54,8 @@ namespace margelo::nitro::nitrolist {
       virtual double observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) = 0;
       virtual void unobserveMounts(double id) = 0;
       virtual double mountedAtMs(double id, double sequence) = 0;
+      virtual void setTransitionDiagnostics(bool enabled) = 0;
+      virtual void markTransition(double origin, double sequence, double revision, double count, double flags) = 0;
 
     protected:
       // Hybrid Setup

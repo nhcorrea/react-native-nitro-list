@@ -20,6 +20,8 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridMethod("observeMounts", &HybridNitroListScrollViewSpec::observeMounts);
       prototype.registerHybridMethod("unobserveMounts", &HybridNitroListScrollViewSpec::unobserveMounts);
       prototype.registerHybridMethod("mountedAtMs", &HybridNitroListScrollViewSpec::mountedAtMs);
+      prototype.registerHybridMethod("setTransitionDiagnostics", &HybridNitroListScrollViewSpec::setTransitionDiagnostics);
+      prototype.registerHybridMethod("markTransition", &HybridNitroListScrollViewSpec::markTransition);
     });
   }
 

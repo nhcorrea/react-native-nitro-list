@@ -1,6 +1,7 @@
 package com.margelo.nitro.nitrolist
 
 import android.os.SystemClock
+import android.os.Trace
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.Keep
@@ -93,6 +94,32 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
     if (!id.isFinite() || id <= 0 || id > Int.MAX_VALUE || !sequence.isFinite()) return -1.0
     return MountObserver.mountedAt(id.toInt(), sequence)
   }
+
+  override fun setTransitionDiagnostics(enabled: Boolean) {
+    TransitionDiagnostics.enabled.set(enabled)
+  }
+
+  override fun markTransition(origin: Double, sequence: Double, revision: Double, count: Double, flags: Double) {
+    TransitionDiagnostics.mark(origin.toInt(), sequence.toLong(), revision.toLong(), count.toInt(), flags.toInt())
+  }
+}
+
+private object TransitionDiagnostics {
+  val enabled = AtomicBoolean(false)
+  private val origins = arrayOf("unknown", "range", "prewarm", "reserve", "measure", "data", "correction", "driver", "mount", "other")
+
+  fun mark(origin: Int, sequence: Long, revision: Long, count: Int, flags: Int) {
+    if (!enabled.get()) return
+    val name = origins.getOrElse(origin) { "unknown" }
+    Trace.beginSection("NL:$name#$sequence r$revision n$count f$flags")
+    Trace.endSection()
+  }
+
+  fun ack(sequence: Long) {
+    if (!enabled.get()) return
+    Trace.beginSection("NL:mount_ack#$sequence")
+    Trace.endSection()
+  }
 }
 
 @OptIn(UnstableReactNativeAPI::class)
@@ -139,6 +166,7 @@ private object MountObserver {
         watch.last = sequence
         watch.stamp(sequence, mountStartUptimeMs.toDouble())
         watch.callback(sequence, mountMs)
+        TransitionDiagnostics.ack(sequence.toLong())
       }
     }
 

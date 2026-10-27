@@ -8,4 +8,6 @@ export interface NitroListScrollView extends HybridObject<{android: 'kotlin'}> {
   observeMounts(markerTag: number, onMounted: (sequence: number, mountMs: number) => void): number;
   unobserveMounts(id: number): void;
   mountedAtMs(id: number, sequence: number): number;
+  setTransitionDiagnostics(enabled: boolean): void;
+  markTransition(origin: number, sequence: number, revision: number, count: number, flags: number): void;
 }

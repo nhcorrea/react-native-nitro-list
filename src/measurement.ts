@@ -12,6 +12,7 @@ import {
 } from './measurementIdentity';
 import type {NitroListEngine} from './NitroListEngine.nitro';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
+import {markTransition, transitionFlags, TRANSITION_ORIGIN} from './transitionDiagnostics';
 
 export const MVCP_POSITION_EPSILON = 0.1;
 
@@ -65,6 +66,7 @@ export interface MeasurementApi {
 
 export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
   let identities: MeasurementIdentity[] = [];
+  let flushSequence = 0;
   const freeBatches: Float64Array<ArrayBuffer>[] = [];
   const flush = (emitRange: boolean = true): void => {
     const state = ctx.pendingSizesRef.current;
@@ -122,6 +124,7 @@ export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
           : null;
       const slab = ctx.layout.getSlab();
       const revision = ctx.dataRevisionRef.current;
+      markTransition(TRANSITION_ORIGIN.measure, ++flushSequence, acceptedRevision, pairCount, transitionFlags(undefined));
       const written = hybrid.setItemSizesAndFill(
         batch.buffer,
         pairCount,

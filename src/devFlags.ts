@@ -7,6 +7,7 @@ export const NitroListDevFlags = {
   stiLayoutEffectWaiter: false,
   dataAppendFastPath: true,
   jsScrollEventThrottle1: false,
+  transitionDiagnostics: false,
 };
 
 export type NitroListDevFlagKey = keyof typeof NitroListDevFlags;

@@ -54,3 +54,15 @@ export function nativeMountedAt(id: number, sequence: number): number {
   if (Platform.OS !== 'android' || id <= 0 || androidScrollView == null) return -1;
   return androidScrollView.mountedAtMs(id, sequence);
 }
+
+export function setNativeTransitionDiagnostics(enabled: boolean): void {
+  if (Platform.OS !== 'android') return;
+  androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
+  androidScrollView.setTransitionDiagnostics(enabled);
+}
+
+export function markNativeTransition(origin: number, sequence: number, revision: number, count: number, flags: number): void {
+  if (Platform.OS !== 'android') return;
+  androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
+  androidScrollView.markTransition(origin, sequence, revision, count, flags);
+}

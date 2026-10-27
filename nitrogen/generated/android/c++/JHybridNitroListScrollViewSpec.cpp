@@ -72,5 +72,13 @@ namespace margelo::nitro::nitrolist {
     auto __result = method(_javaPart, id, sequence);
     return __result;
   }
+  void JHybridNitroListScrollViewSpec::setTransitionDiagnostics(bool enabled) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(jboolean /* enabled */)>("setTransitionDiagnostics");
+    method(_javaPart, enabled);
+  }
+  void JHybridNitroListScrollViewSpec::markTransition(double origin, double sequence, double revision, double count, double flags) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* origin */, double /* sequence */, double /* revision */, double /* count */, double /* flags */)>("markTransition");
+    method(_javaPart, origin, sequence, revision, count, flags);
+  }
 
 } // namespace margelo::nitro::nitrolist

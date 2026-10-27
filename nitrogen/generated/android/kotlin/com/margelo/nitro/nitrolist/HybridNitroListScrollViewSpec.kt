@@ -57,6 +57,14 @@ abstract class HybridNitroListScrollViewSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun mountedAtMs(id: Double, sequence: Double): Double
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setTransitionDiagnostics(enabled: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun markTransition(origin: Double, sequence: Double, revision: Double, count: Double, flags: Double): Unit
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

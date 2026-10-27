@@ -65,6 +65,7 @@ const DEV_FLAG_LABELS: Record<NitroListDevFlagKey, string> = {
   stiLayoutEffectWaiter: 'lew',
   dataAppendFastPath: 'app',
   jsScrollEventThrottle1: 'thr1',
+  transitionDiagnostics: 'trans',
 };
 
 interface BenchItem {

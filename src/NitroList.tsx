@@ -49,6 +49,7 @@ import {
   measurementCacheKey,
 } from './measurementCache';
 import {NitroListDevFlags} from './devFlags';
+import {markTransition, transitionFlags, TRANSITION_ORIGIN} from './transitionDiagnostics';
 import {computeExecutableMvcpDelta} from './mvcp';
 import {
   createScrollToIndex,
@@ -1449,9 +1450,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       ) {
         return;
       }
+      const coalesced = pendingCommitRef.current > commitCounterRef.current;
       rangeStateRef.current = next;
       pendingCommitRef.current = commitCounterRef.current + 1;
       store.set('range', next);
+      markTransition(TRANSITION_ORIGIN.range, pendingCommitRef.current, next.layoutVersion, Math.max(0, next.end - next.start + 1), transitionFlags(true, coalesced));
     },
   );
   const setPrewarmRangeTracked = useStableCallback(
@@ -1468,9 +1471,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       ) {
         return;
       }
+      const coalesced = pendingCommitRef.current > commitCounterRef.current;
       prewarmStateRef.current = next;
       pendingCommitRef.current = commitCounterRef.current + 1;
       store.set('prewarmRange', next);
+      markTransition(TRANSITION_ORIGIN.prewarm, pendingCommitRef.current, next?.layoutVersion ?? lastSeenLayoutVersionRef.current, next == null ? 0 : Math.max(0, next.end - next.start + 1), transitionFlags(false, coalesced));
     },
   );
 
@@ -2423,6 +2428,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       });
       const added = admitted.end - admitted.start + 1 - (before == null ? 0 : before.end - before.start + 1);
       const sequence = gate.publish(added);
+      markTransition(TRANSITION_ORIGIN.reserve, sequence, lastSeenLayoutVersionRef.current, added, transitionFlags(false));
       admission.cancelAck = gate.afterMount(sequence, rangeCovers(admitted, target) ? release : admitSlice);
     };
     admitSlice();

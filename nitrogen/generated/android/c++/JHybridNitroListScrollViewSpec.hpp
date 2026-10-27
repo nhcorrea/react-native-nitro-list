@@ -60,6 +60,8 @@ namespace margelo::nitro::nitrolist {
     double observeMounts(double markerTag, const std::function<void(double /* sequence */, double /* mountMs */)>& onMounted) override;
     void unobserveMounts(double id) override;
     double mountedAtMs(double id, double sequence) override;
+    void setTransitionDiagnostics(bool enabled) override;
+    void markTransition(double origin, double sequence, double revision, double count, double flags) override;
 
   private:
     jni::global_ref<JHybridNitroListScrollViewSpec::JavaPart> _javaPart;
