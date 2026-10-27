@@ -545,8 +545,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     capInitialDrawRef.current = initialTargetRef.current?.settled === true;
   }
   const [drawDistanceExpanded, setDrawDistanceExpanded] = useState(false);
+  const eagerMount = experimentalEagerMount === true || NitroListDevFlags.experimentalEagerMount;
   useEffect(() => {
-    if (experimentalEagerMount !== true || !drawDistanceExpanded) return;
+    if (!eagerMount || !drawDistanceExpanded) return;
     let held = false;
     const frame = requestAnimationFrame(() => {
       held = true;
@@ -556,7 +557,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       cancelAnimationFrame(frame);
       if (held) setNativeEagerMount(false);
     };
-  }, [experimentalEagerMount, drawDistanceExpanded]);
+  }, [eagerMount, drawDistanceExpanded]);
   const effectiveDrawDistance =
     drawDistanceExpanded || !capInitialDrawRef.current
       ? drawDistance

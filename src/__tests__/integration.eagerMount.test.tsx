@@ -3,6 +3,7 @@ import React from 'react';
 import {Platform, View} from 'react-native';
 
 import {clearMeasurementCache} from '../measurementCache';
+import {NitroListDevFlags} from '../devFlags';
 import type {NitroListRenderItem} from '../NitroList';
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
 import {nativeEagerMountHoldersForTests} from './helpers/mockNitroModules';
@@ -12,6 +13,7 @@ const renderItem: NitroListRenderItem<string> = () => <View />;
 describe('experimentalEagerMount', () => {
   const originalPlatform = Platform.OS;
   let harness: NitroListHarness | null = null;
+  let flagsBefore: typeof NitroListDevFlags;
 
   function render(props: {experimentalEagerMount?: boolean}) {
     harness = renderNitroList({
@@ -25,6 +27,7 @@ describe('experimentalEagerMount', () => {
   }
 
   beforeEach(() => {
+    flagsBefore = {...NitroListDevFlags};
     jest.useFakeTimers();
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     clearMeasurementCache();
@@ -34,6 +37,7 @@ describe('experimentalEagerMount', () => {
     harness?.unmount();
     harness = null;
     Platform.OS = originalPlatform;
+    Object.assign(NitroListDevFlags, flagsBefore);
     clearMeasurementCache();
     jest.useRealTimers();
     jest.restoreAllMocks();
@@ -50,6 +54,15 @@ describe('experimentalEagerMount', () => {
     harness?.unmount();
     harness = null;
     expect(nativeEagerMountHoldersForTests()).toBe(0);
+  });
+
+  it('holds the native eager mount with the experimental dev flag', async () => {
+    Platform.OS = 'android';
+    NitroListDevFlags.experimentalEagerMount = true;
+    render({});
+    await harness?.settle();
+    harness?.frame();
+    expect(nativeEagerMountHoldersForTests()).toBe(1);
   });
 
   it('stays off by default on Android', async () => {
