@@ -37,7 +37,6 @@ import {ListStore, type RangeState} from './listStore';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {
   type AdmissionRange,
-  deferIdleReserveForScroll,
   gestureSliceBudget,
   growAdmittedRange,
   idleReserveRange,
@@ -2450,14 +2449,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     if (reserve.timer != null) clearTimeout(reserve.timer);
     reserve.timer = null;
   });
-  const deferIdleReserve = useStableCallback(stableCallbacks, () => {
-    deferIdleReserveForScroll(
-      idleReserveRef.current,
-      clearIdleReserve,
-      () => store.set('reserveRange', null),
-      () => scheduleIdleReserveRef.current(),
-    );
-  });
   useEffect(() => clearIdleReserve, [clearIdleReserve]);
 
   const recordFlingOutcome = useStableCallback(stableCallbacks, (finalAbsoluteY: number) => {
@@ -2545,7 +2536,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       applyScrollOffsetSync,
       beginScrollCommand,
       cancelFlingPrewarm,
-      deferIdleReserve,
       cancelPendingStickToEnd,
       correctionShift,
       holdGestureEstimates,

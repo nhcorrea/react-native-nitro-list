@@ -1,13 +1,6 @@
-import {describe, expect, it, jest} from '@jest/globals';
+import {describe, expect, it} from '@jest/globals';
 
-import {
-  deferIdleReserveForScroll,
-  gestureSliceBudget,
-  growAdmittedRange,
-  idleReserveRange,
-  rangeCovers,
-  type IdleReserveState,
-} from '../prewarmAdmission';
+import {gestureSliceBudget, growAdmittedRange, idleReserveRange, rangeCovers} from '../prewarmAdmission';
 
 describe('rangeCovers', () => {
   it('is true only when outer contains inner', () => {
@@ -131,36 +124,5 @@ describe('gestureSliceBudget', () => {
     expect(gestureSliceBudget(8, 2, 2)).toBe(0);
     expect(gestureSliceBudget(8, 0, 2)).toBe(0);
     expect(gestureSliceBudget(8, Number.POSITIVE_INFINITY, 2)).toBe(8);
-  });
-});
-
-describe('deferIdleReserveForScroll', () => {
-  it('does not schedule new work when no idle reserve is pending', () => {
-    const clearTimer = jest.fn();
-    const clearRange = jest.fn();
-    const reschedule = jest.fn();
-    const state: IdleReserveState = {timer: null, admission: null};
-
-    deferIdleReserveForScroll(state, clearTimer, clearRange, reschedule);
-
-    expect(clearTimer).not.toHaveBeenCalled();
-    expect(clearRange).not.toHaveBeenCalled();
-    expect(reschedule).not.toHaveBeenCalled();
-  });
-
-  it('cancels only the idle admission and reschedules it for the next idle period', () => {
-    const clearTimer = jest.fn();
-    const clearRange = jest.fn();
-    const reschedule = jest.fn();
-    const cancelAck = jest.fn();
-    const state: IdleReserveState = {timer: null, admission: {cancelAck}};
-
-    deferIdleReserveForScroll(state, clearTimer, clearRange, reschedule);
-
-    expect(state.admission).toBeNull();
-    expect(clearTimer).toHaveBeenCalledTimes(1);
-    expect(cancelAck).toHaveBeenCalledTimes(1);
-    expect(clearRange).toHaveBeenCalledTimes(1);
-    expect(reschedule).toHaveBeenCalledTimes(1);
   });
 });
