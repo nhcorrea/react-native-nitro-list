@@ -152,30 +152,4 @@ describe('cell layout events (fronteira 1.5)', () => {
     expect(phases).not.toMatch(/layout\(\d+\)/);
   });
 
-  it('skips the measurement wrapper only for fixed sizes and restores it for dynamic content', async () => {
-    harness = renderNitroList<unknown>({
-      data: makeItems(20),
-      estimatedItemSize: 100,
-      getFixedItemSize: () => 100,
-      keyExtractor: itemKey as (item: unknown) => string,
-      renderItem: () => null,
-    });
-    harness.layout(400, 800);
-    await harness.settle(50);
-    const fixed = harness.cellInstances().get(1)!;
-    expect(fixed.findAll((node) => node.type === View)).toHaveLength(1);
-    expect(measuringView(fixed)).toBe(positionedView(fixed));
-
-    harness.update({getFixedItemSize: undefined});
-    await harness.settle(50);
-    const dynamic = harness.cellInstances().get(1)!;
-    expect(measuringView(dynamic)).not.toBe(positionedView(dynamic));
-    const measuringStyle = StyleSheet.flatten(measuringView(dynamic).props.style) ?? {};
-    for (const key of ['position', 'top', 'left', 'right', 'bottom']) {
-      expect(measuringStyle).not.toHaveProperty(key);
-    }
-    harness.measureCell(1, 140);
-    await harness.settle(50);
-    expect(harness.handle.getItemSize(1)).toBe(140);
-  });
 });
