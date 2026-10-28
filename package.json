@@ -52,6 +52,7 @@
   },
   "scripts": {
     "bench": "node scripts/benchmark/cli.mjs",
+    "bench:core": "sh scripts/benchmark/core-micro.sh",
     "test:bench": "node --test scripts/benchmark/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "test": "jest",
