@@ -91,3 +91,25 @@ export function idleReserveRange(
 export function gestureSliceBudget(sliceBudget: number, freeCells: number, liveEdgeCells: number): number {
   return Math.max(0, Math.min(sliceBudget, freeCells - liveEdgeCells));
 }
+
+export interface IdleReserveState {
+  timer: ReturnType<typeof setTimeout> | null;
+  admission: {cancelAck: (() => void) | null} | null;
+}
+
+export function deferIdleReserveForScroll(
+  state: IdleReserveState,
+  clearTimer: () => void,
+  clearRange: () => void,
+  reschedule: () => void,
+): void {
+  if (state.timer == null && state.admission == null) return;
+  clearTimer();
+  const admission = state.admission;
+  state.admission = null;
+  if (admission != null) {
+    admission.cancelAck?.();
+    clearRange();
+  }
+  reschedule();
+}

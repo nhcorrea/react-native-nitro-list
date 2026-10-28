@@ -78,6 +78,7 @@ export interface ScrollHandlersCtx {
   applyScrollOffsetSync: (engineOffset: number) => void;
   beginScrollCommand: () => number;
   cancelFlingPrewarm: () => void;
+  deferIdleReserve: () => void;
   cancelPendingStickToEnd: () => void;
   correctionShift: (eventTimestamp: number | undefined) => number;
   holdGestureEstimates: () => void;
@@ -165,6 +166,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
         ctx.pendingScrollCommandRef.current = null;
       }
     }
+    if (scrollY !== ctx.lastScrollOffsetRef.current) ctx.deferIdleReserve();
     if (!ctx.uiThreadDriverActiveRef.current && ctx.pendingSizesRef.current.count > 0) {
       ctx.flushPendingItemSizes(false);
     }
