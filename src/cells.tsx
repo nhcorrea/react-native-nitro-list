@@ -1223,22 +1223,33 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
       ? [styles.absoluteColumn, {left: position}, visibility]
       : [styles.absoluteRow, {top: position}, visibility];
   }, [horizontal, top, origin, columnLeft, columnWidth, crossAxisGap, hidden, away]);
-  return (
-    <View pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
+  const content = (
+    <NitroListCellContent
+      index={index}
+      item={item}
+      renderItem={renderItem}
+      SeparatorComponent={SeparatorComponent}
+      isLastItem={isLastItem}
+      renderMode={renderMode}
+      itemsAreEqual={itemsAreEqual}
+    />
+  );
+  if (fixedSize != null) {
+    return (
       <View
         ref={record.attachHost}
-        onLayout={fixedSize != null && !IS_DEV ? undefined : handleLayout}
-        style={styles.cellMeasure}
+        pointerEvents={hidden ? 'none' : undefined}
+        onLayout={IS_DEV ? handleLayout : undefined}
+        style={containerStyle}
       >
-        <NitroListCellContent
-          index={index}
-          item={item}
-          renderItem={renderItem}
-          SeparatorComponent={SeparatorComponent}
-          isLastItem={isLastItem}
-          renderMode={renderMode}
-          itemsAreEqual={itemsAreEqual}
-        />
+        {content}
+      </View>
+    );
+  }
+  return (
+    <View pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
+      <View ref={record.attachHost} onLayout={handleLayout} style={styles.cellMeasure}>
+        {content}
       </View>
     </View>
   );
