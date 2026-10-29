@@ -84,3 +84,5 @@ tsconfig.tsbuildinfo
 
 # Benchmark v2 sessions and build receipts
 /benchmark-results/
+# ESTRITO, NÃO ENVIAR DOCS PARA O GITHUB.
+/docs
