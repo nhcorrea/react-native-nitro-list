@@ -11,6 +11,19 @@
 
 using margelo::nitro::nitrolist::LayoutCore;
 
+namespace margelo::nitro::nitrolist {
+struct LayoutCoreTestAccess {
+  static size_t frozenNodes(LayoutCore& core) {
+    std::lock_guard<std::mutex> guard(core.mutex_);
+    return core.frozen_.size();
+  }
+  static size_t frozenBuckets(LayoutCore& core) {
+    std::lock_guard<std::mutex> guard(core.mutex_);
+    return core.frozen_.bucket_count();
+  }
+};
+}
+
 static int failures = 0;
 
 #define CHECK(cond)                                                                  \
@@ -1668,11 +1681,38 @@ static void testIncrementalGridAgainstPacking() {
   CHECK(boundary.getLayoutVersion() > version); // non-max item size is geometry too
 }
 
+static void testResetReleasesFrozenObservations() {
+  using margelo::nitro::nitrolist::LayoutCoreTestAccess;
+  for (int count : {0, 1, 129, 8192}) {
+    LayoutCore core;
+    const auto emptyBuckets = LayoutCoreTestAccess::frozenBuckets(core);
+    core.setEstimate(100);
+    core.setTypeAverages(true);
+    core.setEstimatesFrozen(true);
+    core.setItemCount(count);
+    std::vector<uint16_t> types(count, 1);
+    core.setItemTypes(types.data(), count);
+    std::vector<double> pairs(static_cast<size_t>(count) * 2);
+    for (double size : {100.0, 140.0, 180.0}) {
+      for (int i = 0; i < count; ++i) { pairs[2 * i] = i; pairs[2 * i + 1] = size; }
+      core.setItemSizes(pairs.data(), count, 1);
+    }
+    CHECK(LayoutCoreTestAccess::frozenNodes(core) == static_cast<size_t>(count));
+    core.resetAll();
+    CHECK(LayoutCoreTestAccess::frozenNodes(core) == 0);
+    CHECK(LayoutCoreTestAccess::frozenBuckets(core) == emptyBuckets);
+    core.setEstimate(64);
+    core.setItemCount(2);
+    CHECK_EQ_F(core.getTotalSize(), 128);
+  }
+}
+
 int main(int argc, char** argv) {
   if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
     return runReplay(argv[2]);
   }
   testIncrementalGridAgainstPacking();
+  testResetReleasesFrozenObservations();
   testOctaveRounding();
   testEstimateFillAndTotal();
   testEpsilonGate();

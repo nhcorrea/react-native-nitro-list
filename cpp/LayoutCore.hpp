@@ -77,6 +77,8 @@ public:
   EngagedRange getEngagedRange(double scrollOffset, double viewportHeight, double drawDistance);
 
 private:
+  friend struct LayoutCoreTestAccess;
+
   struct TypeStats {
     double mean = 0.0;
     double appliedMean = 0.0;

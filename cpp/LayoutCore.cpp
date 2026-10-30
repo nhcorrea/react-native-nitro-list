@@ -404,6 +404,7 @@ void LayoutCore::releaseCapacityLocked() {
 
 void LayoutCore::resetAll() {
   std::lock_guard<std::mutex> guard(mutex_);
+  std::unordered_map<int32_t, float>().swap(frozen_);
   std::vector<float>().swap(remapSizes_);
   std::vector<uint8_t>().swap(remapMeasured_);
   std::vector<float>().swap(sizes_);
