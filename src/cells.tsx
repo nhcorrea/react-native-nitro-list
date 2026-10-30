@@ -203,14 +203,28 @@ export function markCellSupplied(record: CellRecord, cellBridge: CellBridge): vo
 
 type ContainsHost = {contains?: (node: unknown) => boolean};
 
-export function focusedCellIndex(cellBridge: CellBridge): number {
+export function focusedCellIndex(
+  cellBridge: CellBridge,
+  items?: ReadonlyArray<unknown>,
+  keyExtractor?: (item: unknown, index: number) => string,
+): number {
   const focused = TextInput.State?.currentlyFocusedInput?.();
   if (focused == null) return -1;
   for (const record of cellBridge.cells) {
     const identity = record.identity;
     if (identity == null || !identity.active) continue;
     const host = record.host as unknown as ContainsHost | null;
-    if (typeof host?.contains === 'function' && host.contains(focused)) return identity.index;
+    if (typeof host?.contains === 'function' && host.contains(focused)) {
+      if (items == null || keyExtractor == null || items[identity.index] === identity.item) return identity.index;
+      // During a data remap the mounted record still belongs to the previous
+      // commit. Retain its key in the new data, rather than its stale index.
+      const focusedKey = keyExtractor(identity.item, identity.index);
+      if (identity.index < items.length && keyExtractor(items[identity.index], identity.index) === focusedKey) return identity.index;
+      for (let index = 0; index < items.length; index++) {
+        if (keyExtractor(items[index], index) === focusedKey) return index;
+      }
+      return -1;
+    }
   }
   return -1;
 }
@@ -761,7 +775,7 @@ export const NitroListCells = React.memo(function NitroListCells({
       }
     }
   }
-  const focusedIndex = focusedCellIndex(cellBridge);
+  const focusedIndex = focusedCellIndex(cellBridge, items, keyExtractor);
   if (focusedIndex >= 0 && focusedIndex < itemCount) {
     pushRenderRange(renderRanges, {start: focusedIndex, end: focusedIndex}, itemCount);
   }
