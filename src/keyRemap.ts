@@ -1,4 +1,5 @@
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
+import {NitroListDevFlags} from './devFlags';
 
 export const REMAP_MIN_MAPPED_FRACTION = 0.6;
 
@@ -76,6 +77,7 @@ export function lastDifferingIndex<T>(
 }
 
 export function firstDifferingIndex<T>(prev: ReadonlyArray<T>, next: ReadonlyArray<T>): number {
+  if (NitroListDevFlags.experimentalIdenticalDataAnalysis && prev === next) return next.length;
   const common = Math.min(prev.length, next.length);
   let i = 0;
   while (i < common && prev[i] === next[i]) i++;

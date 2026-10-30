@@ -5,13 +5,15 @@ import React, {
   useRef,
   useInsertionEffect,
 } from 'react';
-import {findNodeHandle, PixelRatio, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
+import {findNodeHandle, PixelRatio, Platform, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
 
+import {NitroListDevFlags} from './devFlags';
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
 import {MVCP_ANCHOR_BASES} from './mvcp';
 import type {MeasurementIdentity, MeasurementRevision} from './measurementIdentity';
 import {setNativeClipChildren} from './nativeScroll';
+import {SlotPublisher, type SlotPublisherHandle} from './slotPublication';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import type {
   NitroListAlwaysRenderConfig,
@@ -279,6 +281,7 @@ const CELLS_STORE_KEYS = [
   'autoFixedTypes',
   'renderMode',
 ] as const;
+const SLOT_CELLS_STORE_KEYS = [...CELLS_STORE_KEYS, 'mountSeq'] as const;
 
 export function emptyCellPool(): CellPool {
   return {
@@ -297,6 +300,7 @@ function selectParkedSlots(
   demand: ReadonlyMap<string, number>,
   canPark: (slot: number) => boolean,
 ): Set<number> {
+  const limit = NitroListDevFlags.experimentalParkedLimit8 ? 8 : MAX_PARKED_CELLS;
   const parked = new Set<number>();
   const candidates: Array<{slots: number[]; quota: number; cursor: number}> = [];
   for (const [typeKey, list] of free) {
@@ -304,10 +308,10 @@ function selectParkedSlots(
     if (quota > 0) candidates.push({slots: list, quota, cursor: 0});
   }
   let progressed = true;
-  while (parked.size < MAX_PARKED_CELLS && progressed) {
+  while (parked.size < limit && progressed) {
     progressed = false;
     for (const candidate of candidates) {
-      if (parked.size >= MAX_PARKED_CELLS) break;
+      if (parked.size >= limit) break;
       while (candidate.quota > 0 && candidate.cursor < candidate.slots.length) {
         const slot = candidate.slots[candidate.cursor++];
         if (!canPark(slot)) continue;
@@ -326,12 +330,14 @@ function takeFarthestFreeSlot(
   low: number,
   high: number,
   occupantIndex: ((slot: number) => number | undefined) | undefined,
+  canReuse?: (slot: number) => boolean,
 ): number | undefined {
   let bestList: number[] | null = null;
   let bestAt = -1;
   let bestDistance = -1;
   for (const list of free.values()) {
     for (let at = 0; at < list.length; at++) {
+      if (canReuse != null && !canReuse(list[at])) continue;
       const index = occupantIndex?.(list[at]);
       const distance =
         index == null ? Number.POSITIVE_INFINITY : index < low ? low - index : index > high ? index - high : 0;
@@ -350,7 +356,12 @@ export function assignCellSlots(
   entries: ReadonlyArray<CellEntry>,
   canPark: (slot: number) => boolean,
   occupantIndex?: (slot: number) => number | undefined,
+  protectedIndex?: number,
 ): {pool: CellPool; slots: number[]; parked: number[]} {
+  const focusedEntry = protectedIndex == null ? undefined : entries.find(entry => entry.index === protectedIndex);
+  const focusedSlot = focusedEntry == null ? undefined : previous.slots.get(focusedEntry.metadata.reactKey);
+  const focusPosition = focusedSlot == null ? -1 : previous.order.indexOf(focusedSlot);
+  const beforeFocus = focusPosition < 0 ? null : new Set(previous.order.slice(0, focusPosition));
   const pool: CellPool = {
     slots: new Map(),
     types: new Map(),
@@ -399,11 +410,19 @@ export function assignCellSlots(
       const {reactKey, typeKey} = entries[position].metadata;
       const list = free.get(typeKey);
       const own = freeByLastKey.get(reactKey);
-      const ownAt = own != null && list != null ? list.indexOf(own) : -1;
+      const protect = beforeFocus != null && entries[position].index < protectedIndex!;
+      const ownAt = own != null && list != null && (!protect || beforeFocus!.has(own)) ? list.indexOf(own) : -1;
       let reused: number | undefined;
       if (ownAt >= 0) {
         list!.splice(ownAt, 1);
         reused = own;
+      } else if (protect && list != null) {
+        for (let at = list.length - 1; at >= 0; at--) {
+          if (beforeFocus!.has(list[at])) {
+            reused = list.splice(at, 1)[0];
+            break;
+          }
+        }
       } else {
         reused = list?.pop();
       }
@@ -425,7 +444,10 @@ export function assignCellSlots(
       }
       for (const position of unassigned) {
         const {reactKey, typeKey} = entries[position].metadata;
-        let slot = takeFarthestFreeSlot(free, low, high, occupantIndex);
+        const canReuse = beforeFocus != null && entries[position].index < protectedIndex!
+          ? (slot: number) => beforeFocus.has(slot)
+          : undefined;
+        let slot = takeFarthestFreeSlot(free, low, high, occupantIndex, canReuse);
         if (slot == null) {
           slot = pool.next++;
           created.push(slot);
@@ -504,6 +526,7 @@ type CellEntry = {
 type CellSharedProps = Pick<
   NitroListItemContainerProps,
   | 'recycled'
+  | 'flow'
   | 'dataVersion'
   | 'measurementRevision'
   | 'measurementGeometry'
@@ -568,7 +591,7 @@ function buildCellElement(
     if (
       props.item === item &&
       props.index === i &&
-      props.top === top &&
+      (build.shared.flow === true || props.top === top) &&
       props.origin === build.origin &&
       props.hidden === hidden &&
       props.isLastItem === isLastItem &&
@@ -643,6 +666,7 @@ export interface NitroListCellsProps {
     prewarmRange: RangeState | null,
     phase: 'measure' | 'layout' | 'passive',
   ) => void;
+  onMountMarker?: (view: View | null) => void;
 }
 
 const CALLBACK_PROPS_READ_ON_RENDER = new Set<keyof NitroListCellsProps>([
@@ -725,13 +749,35 @@ export const NitroListCells = React.memo(function NitroListCells({
   readItemOffset,
   ensureLayout,
   onCommit,
+  onMountMarker,
 }: NitroListCellsProps) {
   if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordCellsRender();
   const {range, prewarmRange, reserveRange, dataItems, stickyIndex, autoFixedTypes, renderMode} = useStoreValues(
     store,
-    CELLS_STORE_KEYS,
+    NitroListDevFlags.experimentalSlotPublication ? SLOT_CELLS_STORE_KEYS : CELLS_STORE_KEYS,
   );
   const heldOutputRef = useRef<React.ReactElement | null>(null);
+  const publicationRef = useRef<SlotPublisherHandle>(null);
+  const publicationToken = {};
+  const slotPublication = NitroListDevFlags.experimentalSlotPublication;
+  const markerSequence = slotPublication ? store.get('mountSeq') : 0;
+  const marker = useMemo(() => slotPublication && Platform.OS === 'android' && onMountMarker != null
+    ? <View key="__nitrolist_mount_marker" ref={onMountMarker} testID={String(markerSequence)} collapsable={false} pointerEvents="none" style={styles.mountMarker} />
+    : null, [slotPublication, onMountMarker, markerSequence]);
+  const committedMarkerRef = useRef(marker);
+  const requestCommit = (phase: 'measure' | 'layout' | 'passive') => {
+    if (slotPublication && holding) return;
+    const commit = () => onCommit(range, prewarmRange, phase);
+    if (slotPublication) publicationRef.current?.request(publicationToken, phase, commit);
+    else commit();
+  };
+  const present = (plan: React.ReactElement | null, held = false) => {
+    if (!slotPublication || plan == null) return plan;
+    const selectedMarker = held ? committedMarkerRef.current : marker;
+    const root = plan as React.ReactElement<{children?: readonly React.ReactElement[]}>;
+    const published = selectedMarker == null ? root : React.cloneElement(root, undefined, [...(root.props.children ?? []), selectedMarker]);
+    return <SlotPublisher ref={publicationRef} token={publicationToken} plan={published} />;
+  };
   const originRef = useRef(0);
   const originClipRef = useRef<OriginClip | null>(null);
   originClipRef.current ??= createOriginClip();
@@ -740,14 +786,15 @@ export const NitroListCells = React.memo(function NitroListCells({
     originClip.setEnabled(clipItems);
   }, [originClip, clipItems]);
   useLayoutEffect(() => {
-    onCommit(range, prewarmRange, 'measure');
+    requestCommit('measure');
   });
   useLayoutEffect(() => {
-    onCommit(range, prewarmRange, 'layout');
+    requestCommit('layout');
   }, [range, prewarmRange, onCommit]);
+  const initialOverscanCommitLimit = NitroListDevFlags.experimentalInitialOverscanBatch ? firstPaintLimit : 0;
   useEffect(() => {
-    onCommit(range, prewarmRange, 'passive');
-  }, [range, prewarmRange, onCommit]);
+    requestCommit('passive');
+  }, [range, prewarmRange, onCommit, initialOverscanCommitLimit]);
 
   const renderRanges: RenderRange[] = [];
   pushRenderRange(renderRanges, range, itemCount);
@@ -801,12 +848,20 @@ export const NitroListCells = React.memo(function NitroListCells({
     typeKey: string;
     explicitFixedSize: number | undefined;
   };
-  const metadataRef = useRef(new Map<number, CellMetadata>());
+  const metadataRef = useRef<Map<number, CellMetadata> | null>(
+    NitroListDevFlags.experimentalLazyCellRefs ? null : new Map<number, CellMetadata>(),
+  );
+  if (metadataRef.current === null) metadataRef.current = new Map<number, CellMetadata>();
   const nextMetadata = new Map<number, CellMetadata>();
-  const poolRef = useRef<CellPool>(emptyCellPool());
-  const elementCacheRef = useRef<CellElementCache>({shared: null, elements: new Map()});
+  const poolRef = useRef<CellPool | null>(NitroListDevFlags.experimentalLazyCellRefs ? null : emptyCellPool());
+  if (poolRef.current === null) poolRef.current = emptyCellPool();
+  const elementCacheRef = useRef<CellElementCache | null>(
+    NitroListDevFlags.experimentalLazyCellRefs ? null : {shared: null, elements: new Map()},
+  );
+  if (elementCacheRef.current === null) elementCacheRef.current = {shared: null, elements: new Map()};
   const shared: CellSharedProps = {
     recycled: recycleItems,
+    flow: false,
     dataVersion,
     measurementRevision,
     measurementGeometry,
@@ -836,19 +891,19 @@ export const NitroListCells = React.memo(function NitroListCells({
     cellBridge.freeCells = nextPool != null ? nextPool.order.length - renderedEntryCount : Number.POSITIVE_INFINITY;
     elementCacheRef.current = {shared, elements: nextElements};
     heldOutputRef.current = renderedOutput;
+    committedMarkerRef.current = marker;
     originRef.current = origin;
   });
   let origin = originRef.current;
   let renderedEntryCount = 0;
-  if (holding) return heldOutputRef.current;
-  const previousElements = sameCellSharedProps(elementCacheRef.current.shared, shared)
-    ? elementCacheRef.current.elements
-    : null;
+  if (holding) return present(heldOutputRef.current, true);
+
   const seenRenderKeys = IS_DEV ? new Set<string>() : null;
   const entries: CellEntry[] = [];
   let firstTop = Number.POSITIVE_INFINITY;
   let lastTop = Number.NEGATIVE_INFINITY;
-  for (const {start, end: rangeEnd} of mergeRenderRanges(renderRanges)) {
+  const mergedRanges = mergeRenderRanges(renderRanges);
+  for (const {start, end: rangeEnd} of mergedRanges) {
     const end = firstPaintLimit > 0 ? Math.min(rangeEnd, start + firstPaintLimit - 1) : rangeEnd;
     ensureLayout(start, end);
     for (let i = start; i <= end; i++) {
@@ -897,7 +952,46 @@ export const NitroListCells = React.memo(function NitroListCells({
       ? readItemOffset(Math.max(0, range.start))
       : firstTop;
   if (Number.isFinite(anchorTop)) origin = nextCellOrigin(origin, anchorTop);
-  const originStyle = horizontal ? [styles.cellOriginHorizontal, {left: origin}] : [styles.cellOrigin, {top: origin}];
+  let flow = NitroListDevFlags.experimentalContiguousFlow && Platform.OS === 'android' &&
+    !horizontal && columnLayout == null && resolvedColumns === 1 && mergedRanges.length === 1 &&
+    alwaysRender == null && alwaysRenderKeyIndices == null && anchoredEndSpaceAnchor == null &&
+    !hideRelatedCell && (stickyIndex == null || stickyIndex < 0) &&
+    Number.isFinite(firstTop) && firstTop >= 0 && firstTop < CELL_ORIGIN_SEGMENT * 16;
+  if (flow && focusedIndex >= 0) {
+    // Yoga needs logical child order. If retained hosts would move, preserve
+    // native focus by keeping their physical order in the absolute fallback.
+    const committedOrder = new Map<string, number>();
+    if (recycleItems) {
+      const previousPool = poolRef.current;
+      for (let position = 0; position < previousPool.order.length; position++) {
+        const slot = previousPool.order[position], key = previousPool.lastKeys.get(slot);
+        if (key != null && previousPool.slots.get(key) === slot) committedOrder.set(key, position);
+      }
+    } else {
+      let position = 0;
+      for (const key of elementCacheRef.current.elements.keys()) committedOrder.set(key, position++);
+    }
+    let previousPosition = -1;
+    for (const entry of entries) {
+      const position = committedOrder.get(entry.metadata.reactKey);
+      if (position == null) continue;
+      if (position < previousPosition) { flow = false; break; }
+      previousPosition = position;
+    }
+  }
+  shared.flow = flow;
+  const previousElements = sameCellSharedProps(elementCacheRef.current.shared, shared)
+    ? elementCacheRef.current.elements
+    : null;
+  // Keep the segmented coordinate origin integral. Yoga rounds local positions
+  // and absolute sizes separately; a fractional parent origin creates seams.
+  if (flow) origin = nextCellOrigin(origin, firstTop);
+  const cellOrigin = origin;
+  const originStyle = flow ? [styles.flowOrigin, {top: cellOrigin, paddingTop: firstTop - cellOrigin}] : horizontal
+    ? [styles.cellOriginHorizontal, {left: origin}]
+    : Platform.OS === 'android' && NitroListDevFlags.experimentalTranslatedCellOrigin
+      ? [styles.cellOrigin, {top: 0, transform: [{translateY: origin}]}]
+      : [styles.cellOrigin, {top: origin}];
   const build: CellBuildContext = {
     shared,
     previous: previousElements,
@@ -908,7 +1002,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     columnLayout,
     resolvedColumns,
     recycleItems,
-    origin,
+    origin: cellOrigin,
   };
   if (recycleItems) {
     const previousPool = poolRef.current;
@@ -927,6 +1021,7 @@ export const NitroListCells = React.memo(function NitroListCells({
       },
       (slot) =>
         (previousPool.elements.get(slot) as React.ReactElement<NitroListItemContainerProps> | undefined)?.props.index,
+      flow && focusedIndex >= 0 ? focusedIndex : undefined,
     );
     nextPool = assigned.pool;
     for (let position = 0; position < entries.length; position++) {
@@ -935,30 +1030,42 @@ export const NitroListCells = React.memo(function NitroListCells({
     }
     for (const slot of assigned.parked) {
       const element = previousPool.elements.get(slot)! as React.ReactElement<NitroListItemContainerProps>;
-      const near = element.props.top >= firstTop && element.props.top <= lastTop;
-      const parkedElement =
-        element.props.parked && (!near || element.props.away) && element.props.origin === origin
+      // Active flow elements may retain an old unused top. Refresh it before
+      // the element becomes an absolute parked cell or leaves the flow mode.
+      let parkedTop = element.props.top;
+      if (element.props.flow === true) {
+        ensureLayout(element.props.index, element.props.index);
+        parkedTop = readItemOffset(element.props.index);
+      }
+      const near = parkedTop >= firstTop && parkedTop <= lastTop;
+      const parkedElement = flow
+        ? React.cloneElement(element, {parked: true, away: true, flow: false, origin: cellOrigin, top: parkedTop})
+        : element.props.parked && element.props.flow !== true && (!near || element.props.away) && element.props.origin === origin && element.props.top === parkedTop
           ? element
-          : React.cloneElement(element, near ? {parked: true, away: true, origin} : {parked: true, origin});
+          : React.cloneElement(element, near ? {parked: true, away: true, flow: false, origin, top: parkedTop} : {parked: true, flow: false, origin, top: parkedTop});
       nextPool.elements.set(slot, parkedElement);
     }
-    const children = new Array<React.ReactElement>(nextPool.order.length);
-    for (let position = 0; position < nextPool.order.length; position++) {
-      children[position] = nextPool.elements.get(nextPool.order[position])!;
+    // Same parent/keys in both modes; active slots follow logical order in Yoga.
+    const outputOrder = flow ? [...assigned.slots, ...assigned.parked] : nextPool.order;
+    if (flow) nextPool.order = outputOrder;
+    const children = new Array<React.ReactElement>(outputOrder.length);
+    for (let position = 0; position < outputOrder.length; position++) {
+      children[position] = nextPool.elements.get(outputOrder[position])!;
     }
     build.previous = null;
     renderedOutput = (
-      <View ref={originClip.attach} collapsable={false} style={originStyle}>
+      <View ref={originClip.attach} collapsable={false} style={originStyle}
+        nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-research-flow-root' : 'nitrolist-research-absolute-root') : undefined}>
         {children}
       </View>
     );
-    return renderedOutput;
+    return present(renderedOutput);
   }
   const renderedChildren = new Array<React.ReactElement>(entries.length);
   for (let k = 0; k < entries.length; k++) {
     renderedChildren[k] = buildCellElement(entries[k], entries[k].metadata.reactKey, build);
   }
-  if (focusedIndex >= 0) {
+  if (!flow && focusedIndex >= 0) {
     // Moving an existing Android host can clear native input focus even when
     // its key and parent stay the same. Absolute coordinates let retained
     // children keep their committed physical order across data permutations.
@@ -979,11 +1086,12 @@ export const NitroListCells = React.memo(function NitroListCells({
   }
   build.previous = null;
   renderedOutput = (
-    <View ref={originClip.attach} collapsable={false} style={originStyle}>
+    <View ref={originClip.attach} collapsable={false} style={originStyle}
+        nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-research-flow-root' : 'nitrolist-research-absolute-root') : undefined}>
       {renderedChildren}
     </View>
   );
-  return renderedOutput;
+  return present(renderedOutput);
 }, areCellsPropsEqual);
 
 export function ListContainer({
@@ -1011,6 +1119,7 @@ export function EndSpaceSpacer({store, horizontal}: {store: ListStore; horizonta
 
 export interface NitroListItemContainerProps {
   recycled: boolean;
+  flow?: boolean;
   dataVersion?: unknown;
   parked?: boolean;
   away?: boolean;
@@ -1054,13 +1163,14 @@ export function areItemContainerPropsEqual(
 ): boolean {
   return (
     prev.recycled === next.recycled &&
+    prev.flow === next.flow &&
     Object.is(prev.dataVersion, next.dataVersion) &&
     prev.parked === next.parked &&
     prev.away === next.away &&
     prev.occupant === next.occupant &&
     prev.measurementRevision === next.measurementRevision &&
     prev.measurementGeometry === next.measurementGeometry &&
-    prev.top === next.top &&
+    ((prev.flow === true && next.flow === true) || prev.top === next.top) &&
     prev.origin === next.origin &&
     prev.horizontal === next.horizontal &&
     prev.hidden === next.hidden &&
@@ -1131,6 +1241,7 @@ export const NitroListCellContent = React.memo(function NitroListCellContent({
 
 export const NitroListItemContainer = React.memo(function NitroListItemContainer({
   recycled,
+  flow,
   dataVersion,
   occupant,
   measurementRevision,
@@ -1247,12 +1358,18 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
   );
   const containerStyle = useMemo(() => {
     const visibility = hidden ? styles.hiddenCell : null;
+    if (flow) return [styles.flowRow, {marginBottom: mainAxisGap}, visibility];
     const position = away ? PARKED_AWAY_OFFSET : top - origin;
+    const positionOrigin = Platform.OS === 'android' && !horizontal && NitroListDevFlags.experimentalTranslatedCellOrigin && Math.abs(position) >= 1048576
+      ? Math.floor(position / CELL_ORIGIN_SEGMENT) * CELL_ORIGIN_SEGMENT
+      : 0;
+    const translatedPosition = positionOrigin === 0 ? {} : {transform: [{translateY: positionOrigin}]};
     if (columnLeft != null && columnWidth != null) {
       return [
         styles.absoluteCell,
         {
-          top: position,
+          top: position - positionOrigin,
+          ...translatedPosition,
           left: columnLeft as unknown as number,
           width: columnWidth as unknown as number,
           paddingLeft: crossAxisGap / 2,
@@ -1263,25 +1380,36 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
     }
     return horizontal
       ? [styles.absoluteColumn, {left: position}, visibility]
-      : [styles.absoluteRow, {top: position}, visibility];
-  }, [horizontal, top, origin, columnLeft, columnWidth, crossAxisGap, hidden, away]);
+      : [styles.absoluteRow, {top: position - positionOrigin, ...translatedPosition}, visibility];
+  }, [flow, mainAxisGap, horizontal, top, origin, columnLeft, columnWidth, crossAxisGap, hidden, away]);
+  const content = (
+    <NitroListCellContent
+      dataVersion={dataVersion}
+      index={index}
+      item={item}
+      renderItem={renderItem}
+      SeparatorComponent={SeparatorComponent}
+      isLastItem={isLastItem}
+      renderMode={renderMode}
+      itemsAreEqual={itemsAreEqual}
+    />
+  );
+  if (Platform.OS === 'android' && NitroListDevFlags.experimentalCompactCell && !NitroListDevFlags.experimentalCellMeasureWidth) {
+    return <View ref={record.attachHost} pointerEvents={hidden ? 'none' : undefined}
+      onLayout={fixedSize != null && !IS_DEV ? undefined : handleLayout} style={containerStyle}>
+      {content}
+    </View>;
+  }
   return (
     <View pointerEvents={hidden ? 'none' : undefined} style={containerStyle}>
       <View
         ref={record.attachHost}
         onLayout={fixedSize != null && !IS_DEV ? undefined : handleLayout}
-        style={styles.cellMeasure}
+        style={NitroListDevFlags.experimentalCellMeasureWidth && !horizontal
+          ? [styles.cellMeasure, styles.cellMeasureWidth]
+          : styles.cellMeasure}
       >
-        <NitroListCellContent
-          dataVersion={dataVersion}
-          index={index}
-          item={item}
-          renderItem={renderItem}
-          SeparatorComponent={SeparatorComponent}
-          isLastItem={isLastItem}
-          renderMode={renderMode}
-          itemsAreEqual={itemsAreEqual}
-        />
+        {content}
       </View>
     </View>
   );
@@ -1292,13 +1420,26 @@ export function MountMarkerSlot({store, onMarker}: {store: ListStore; onMarker: 
   return <View ref={onMarker} testID={String(sequence)} collapsable={false} pointerEvents="none" style={styles.mountMarker} />;
 }
 
-export function MvcpAdjustAnchorSlot({store, horizontal}: {store: ListStore; horizontal: boolean}) {
+const MVCP_EXTENT_KEYS = ['containerSize', 'endSpace'] as const;
+
+function SpanningMvcpAdjustAnchor({store, top, contentExtra}: {
+  store: ListStore; top: number; contentExtra: number;
+}) {
+  const {containerSize, endSpace} = useStoreValues(store, MVCP_EXTENT_KEYS);
+  return <MvcpAdjustAnchor top={top} horizontal={false}
+    mainSize={Math.max(1, containerSize + endSpace + contentExtra - top)} />;
+}
+
+export function MvcpAdjustAnchorSlot({store, horizontal, contentExtra = 0}: {
+  store: ListStore; horizontal: boolean; contentExtra?: number;
+}) {
   const mvcpAdjust = useStoreValue(store, 'mvcpAdjust');
+  const span = Platform.OS === 'android' && !horizontal && NitroListDevFlags.experimentalSpanningMvcpAnchor;
   return (
     <>
-      {MVCP_ANCHOR_BASES.map((base) => (
-        <MvcpAdjustAnchor key={base} top={base + mvcpAdjust} horizontal={horizontal} />
-      ))}
+      {MVCP_ANCHOR_BASES.map((base, index) => span && index === MVCP_ANCHOR_BASES.length - 1
+        ? <SpanningMvcpAdjustAnchor key={base} store={store} top={base + mvcpAdjust} contentExtra={contentExtra} />
+        : <MvcpAdjustAnchor key={base} top={base + mvcpAdjust} horizontal={horizontal} />)}
     </>
   );
 }
@@ -1306,15 +1447,18 @@ export function MvcpAdjustAnchorSlot({store, horizontal}: {store: ListStore; hor
 export const MvcpAdjustAnchor = React.memo(function MvcpAdjustAnchor({
   top,
   horizontal,
+  mainSize,
 }: {
   top: number;
   horizontal: boolean;
+  mainSize?: number;
 }) {
   const style = useMemo(
-    () => (horizontal ? [styles.mvcpAnchorHorizontal, {left: top}] : [styles.mvcpAnchor, {top}]),
-    [horizontal, top],
+    () => (horizontal ? [styles.mvcpAnchorHorizontal, {left: top}]
+      : [styles.mvcpAnchor, mainSize == null ? {top} : {top, height: mainSize}]),
+    [horizontal, top, mainSize],
   );
-  return <View collapsable={false} style={style} />;
+  return <View collapsable={false} pointerEvents={mainSize == null ? undefined : 'none'} style={style} />;
 });
 
 export const styles = StyleSheet.create({
@@ -1323,6 +1467,9 @@ export const styles = StyleSheet.create({
   },
   cellMeasure: {
     flexGrow: 1,
+  },
+  cellMeasureWidth: {
+    width: '100%',
   },
   stickyOverlay: {
     position: 'absolute',
@@ -1341,6 +1488,17 @@ export const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     right: 0,
+  },
+  flowOrigin: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+  },
+  flowRow: {
+    position: 'relative',
+    flexGrow: 0,
+    flexShrink: 0,
+    width: '100%',
   },
   absoluteRow: {
     position: 'absolute',

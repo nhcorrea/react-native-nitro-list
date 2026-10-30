@@ -121,7 +121,13 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     const buffer = typeBuffer;
     let changedFrom = sentCount < 0 ? 0 : ctx.itemCount;
     const map = ctx.typeIdMapRef.current;
-    for (let i = from; i < ctx.itemCount; ++i) {
+    // A newly allocated native type buffer is already zero-filled. Without a
+    // callback, the first preparation would only write the same zeros again.
+    const initializedUniformTypes =
+      NitroListDevFlags.experimentalUniformTypePreparation &&
+      typedItems == null &&
+      ctx.getItemType == null;
+    for (let i = initializedUniformTypes ? ctx.itemCount : from; i < ctx.itemCount; ++i) {
       let id = 0;
       if (ctx.getItemType != null) {
         const type = ctx.getItemType(ctx.items[i], i);

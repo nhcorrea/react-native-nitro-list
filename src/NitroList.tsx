@@ -1,4 +1,7 @@
 import {analyzeData} from './dataAnalysis';
+import {hasCoherentInitialSample} from './firstViewport';
+import {InitialOverscanAdmission} from './initialOverscan';
+import {ResourcePreparationQueue} from './resourcePreparation';
 import {DATA_CONFIG_LENGTH, writeDataConfig} from './dataTransaction';
 import {emptyNativeBuffer, growNativeFloat64Array, nativeFloat64Array, nativeUint16Array} from './nativeBuffers';
 import React, {
@@ -146,6 +149,7 @@ export type {
   NitroListMaintainVisibleContentPositionConfig,
   NitroListOnViewableItemsChanged,
   NitroListProps,
+  NitroListPrepareItem,
   NitroListRangeChangeEvent,
   NitroListRenderItem,
   NitroListRenderMode,
@@ -278,6 +282,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const {
     data,
     renderItem,
+    prepareItem,
     estimatedItemSize,
     keyExtractor,
     getItemType,
@@ -545,6 +550,27 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     capInitialDrawRef.current = initialTargetRef.current?.settled === true;
   }
   const [drawDistanceExpanded, setDrawDistanceExpanded] = useState(false);
+  const [initialOverscanLimit, setInitialOverscanLimit] = useState(0);
+  const initialOverscanRef = useRef<{
+    admission: InitialOverscanAdmission; items: ReadonlyArray<T>; dataVersion: unknown;
+    revision: typeof measurementRevision; geometry: number; renderer: typeof renderItem;
+  } | null>(null);
+  commitBindings.push(() => {
+    const pending = initialOverscanRef.current;
+    if (pending != null && (pending.items !== items || !Object.is(pending.dataVersion, dataVersion) ||
+        pending.revision !== measurementRevision || pending.geometry !== measurementGeometry || pending.renderer !== renderItem)) {
+      pending.admission.stop('identity-changed', false);
+    }
+  });
+  useEffect(() => () => initialOverscanRef.current?.admission.stop('unmount', false), []);
+  const [initialSampleConsumed, setInitialSampleConsumed] = useState(false);
+  const initialSampleConsumedRef = useRef(false);
+  const earlyMountDispatch = NitroListDevFlags.experimentalEarlyMountDispatch;
+  useLayoutEffect(() => {
+    if (!earlyMountDispatch) return;
+    setNativeEagerMount(true);
+    return () => setNativeEagerMount(false);
+  }, [earlyMountDispatch]);
   const eagerMount = experimentalEagerMount === true || NitroListDevFlags.experimentalEagerMount;
   useEffect(() => {
     if (!eagerMount || !drawDistanceExpanded) return;
@@ -741,6 +767,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     admission: null,
   });
   const scheduleIdleReserveRef = useRef<() => void>(() => {});
+  const resourcePreparationRef = useRef<ResourcePreparationQueue<T> | null>(null);
   const prewarmAdmissionRef = useRef<{
     target: AdmissionRange;
     focus: AdmissionRange;
@@ -760,6 +787,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     flushWaiters(admission.waiters);
   });
   const cancelFlingPrewarm = useStableCallback(stableCallbacks, () => {
+    initialOverscanRef.current?.admission.stop('activity');
+    resourcePreparationRef.current?.clear();
     cancelPrewarmAdmission();
     const admission = flingAdmissionRef.current;
     if (admission != null) {
@@ -775,6 +804,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
   });
   useEffect(() => cancelFlingPrewarm, [cancelFlingPrewarm]);
+  useEffect(() => {
+    if (NitroListDevFlags.experimentalResourcePreparation && prepareItem != null) scheduleIdleReserveRef.current();
+    return () => { resourcePreparationRef.current?.clear(); };
+  }, [items, dataVersion, prepareItem]);
 
   const pendingSizesRef = useRef<{
     buffer: Float64Array<ArrayBuffer>;
@@ -1443,6 +1476,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const setRangeTracked = useStableCallback(
     stableCallbacks,
     (next: {start: number; end: number; layoutVersion: number}) => {
+      initialOverscanRef.current?.admission.validate();
+      if (initialOverscanRef.current != null && (next.start !== 0 || lastScrollOffsetRef.current !== 0)) {
+        initialOverscanRef.current.admission.stop('scroll');
+      }
       const current = rangeStateRef.current;
       if (
         current.start === next.start &&
@@ -2384,11 +2421,13 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     reserve.timer = null;
     if (reserve.admission != null || recycleItems !== true || itemCount === 0) return;
     const gate = mountGateRef.current!;
-    if (!gate.available) return;
+    const prepareResources = NitroListDevFlags.experimentalResourcePreparation && prepareItem != null;
+    if (!prepareResources && !gate.available) return;
     const activity = scrollActivityRef.current;
     const viewportH = mainViewportRef.current;
     const live = latestRangeRef.current;
     if (
+      initialOverscanRef.current != null ||
       activity.dragging ||
       activity.momentum ||
       activity.programmaticAnimated ||
@@ -2405,9 +2444,25 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       return;
     }
     reserve.attempts = 0;
-    const planned = idleReserveRange(live, itemCount, viewportH * IDLE_RESERVE_VIEWPORTS, readItemOffset, indexAtOffset);
-    if (planned == null) return;
+    const planned = idleReserveRange(live, itemCount, viewportH * (NitroListDevFlags.experimentalIdleReserveOneViewport ? 1 : IDLE_RESERVE_VIEWPORTS), readItemOffset, indexAtOffset);
+    if (planned == null) {
+      resourcePreparationRef.current?.clear();
+      return;
+    }
     const {range: target, direction} = planned;
+    if (prepareResources) {
+      resourcePreparationRef.current ??= new ResourcePreparationQueue<T>();
+      const entries: Array<{item: T; index: number; key: string}> = [];
+      const resourceStart = Math.max(0, target.start);
+      const resourceEnd = Math.min(itemCount - 1, target.end);
+      for (let offset = 0; offset < Math.min(32, resourceEnd - resourceStart + 1); ++offset) {
+        const index = direction > 0 ? resourceStart + offset : resourceEnd - offset;
+        const item = items[index];
+        entries.push({item, index, key: keyExtractor?.(item, index) ?? String(index)});
+      }
+      resourcePreparationRef.current.propose(entries, prepareItem!);
+      return;
+    }
     if (cellBridgeRef.current.freeCells >= target.end - target.start + 1) return;
     const admission: {cancelAck: (() => void) | null} = {cancelAck: null};
     reserve.admission = admission;
@@ -2714,13 +2769,80 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     drawDistanceExpandedStateRef.current = drawDistanceExpanded;
   });
   const expandDrawDistanceRafRef = useRef<number | null>(null);
+  const canStageInitialViewport = useStableCallback(stableCallbacks, () => {
+    const applied = dataChangeCtxRef.current!;
+    return (
+      NitroListDevFlags.experimentalProgressiveFirstViewport &&
+      Platform.OS === 'android' && !isHorizontal && resolvedColumns === 1 &&
+      getFixedItemSize == null && initialTargetRef.current?.index == null && initialTargetRef.current?.offset === 0 &&
+      previousItemsRef.current === applied.items && Object.is(previousDataVersionRef.current, applied.dataVersion) &&
+      pendingSizesRef.current.count === 0 && cellBridgeRef.current.awaitingLayout === 0 && layout.hasCurrentSnapshot() &&
+      hasCoherentInitialSample(cellBridgeRef.current.cells, applied.items, measurementRevision,
+        nativeDataRevisionRef.current, lastSeenLayoutVersionRef.current, layout.getSlab(), FIRST_PAINT_ITEMS, MEASUREMENT_EPSILON_DP)
+    );
+  });
   const maybeExpandDrawDistance = useStableCallback(stableCallbacks, () => {
     if (drawDistanceExpandedStateRef.current || expandDrawDistanceRafRef.current != null) return;
     const committed = committedRangeRef.current;
     if (committed.end < committed.start) return;
     expandDrawDistanceRafRef.current = requestAnimationFrame(() => {
       expandDrawDistanceRafRef.current = null;
-      setDrawDistanceExpanded(true);
+      if (!initialSampleConsumedRef.current && canStageInitialViewport()) {
+        initialSampleConsumedRef.current = true;
+        setInitialSampleConsumed(true);
+      } else {
+        const gate = mountGateRef.current!;
+        const sampleEnd = Math.min(FIRST_PAINT_ITEMS, itemCount) - 1;
+        const canBatch = NitroListDevFlags.experimentalInitialOverscanBatch &&
+          Platform.OS === 'android' && !isHorizontal && resolvedColumns === 1 &&
+          getFixedItemSize == null && initialTargetRef.current?.index == null &&
+          initialTargetRef.current?.offset === 0 && lastScrollOffsetRef.current === 0 &&
+          !scrollActivityRef.current.dragging && !scrollActivityRef.current.momentum &&
+          !scrollActivityRef.current.programmaticAnimated && experimentalUiThreadScroll !== true &&
+          ListHeaderComponent == null && ListFooterComponent == null && alwaysRender == null &&
+          stickyIndices.length === 0 && anchoredEndSpace == null && gate.available &&
+          itemCount > FIRST_PAINT_ITEMS && sampleEnd >= 0 &&
+          previousItemsRef.current === items && Object.is(previousDataVersionRef.current, dataVersion) &&
+          pendingSizesRef.current.count === 0 && cellBridgeRef.current.awaitingLayout === 0 &&
+          hasCoherentInitialSample(cellBridgeRef.current.cells, items, measurementRevision,
+            nativeDataRevisionRef.current, lastSeenLayoutVersionRef.current, layout.getSlab(),
+            FIRST_PAINT_ITEMS, MEASUREMENT_EPSILON_DP) &&
+          readItemOffset(sampleEnd) + readItemSize(sampleEnd) >= mainViewportRef.current;
+        if (canBatch) {
+          const identity = {admission: null as unknown as InitialOverscanAdmission,
+            items, dataVersion, revision: measurementRevision, geometry: measurementGeometry, renderer: renderItem};
+          const admission = new InitialOverscanAdmission(FIRST_PAINT_ITEMS, {
+            target: () => Math.min(itemCount, latestRangeRef.current.end + 1),
+            current: () => initialOverscanRef.current === identity &&
+              previousItemsRef.current === items && Object.is(previousDataVersionRef.current, dataVersion) &&
+              measurementRevision.geometry === identity.geometry && lastScrollOffsetRef.current === 0 &&
+              !scrollActivityRef.current.dragging && !scrollActivityRef.current.momentum &&
+              !scrollActivityRef.current.programmaticAnimated &&
+              readItemOffset(sampleEnd) + readItemSize(sampleEnd) >= mainViewportRef.current,
+            publish: limit => setInitialOverscanLimit(limit),
+            afterMount: callback => {
+              const sequence = gate.publish(0);
+              return gate.afterMount(sequence, () => callback(
+                nativeMountedAt(mountObservationRef.current, sequence) >= 0));
+            },
+            frame: requestAnimationFrame,
+            cancelFrame: cancelAnimationFrame,
+            now: () => performance.now(),
+            finish: (_reason, notify) => {
+              if (initialOverscanRef.current !== identity) return;
+              initialOverscanRef.current = null;
+              if (notify) {
+                setInitialOverscanLimit(0);
+                scheduleIdleReserveRef.current();
+              }
+            },
+          });
+          identity.admission = admission;
+          initialOverscanRef.current = identity;
+          setInitialOverscanLimit(FIRST_PAINT_ITEMS);
+        }
+        setDrawDistanceExpanded(true);
+      }
     });
   });
   const maybeExpandDrawDistanceRef = useRef(maybeExpandDrawDistance);
@@ -2759,6 +2881,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         return;
       }
       committedRangeRef.current = range;
+      initialOverscanRef.current?.admission.committed();
       evaluateViewabilityRef.current();
       const versionChanged = range.layoutVersion !== lastCommittedLayoutVersionRef.current;
       lastCommittedLayoutVersionRef.current = range.layoutVersion;
@@ -2926,7 +3049,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     children: (
       <>
         {mvcpEnabled ? (
-          <MvcpAdjustAnchorSlot store={store} horizontal={isHorizontal} />
+          <MvcpAdjustAnchorSlot store={store} horizontal={isHorizontal}
+            contentExtra={alignPad + paddingStart + headerSize + footerSize + paddingEnd + contentInsetBottomRef.current} />
         ) : null}
         {alignPad > 0 ? (
           <View style={isHorizontal ? {width: alignPad} : {height: alignPad}} />
@@ -2936,12 +3060,20 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         ) : null}
         {itemCount === 0 ? renderSlot(ListEmptyComponent) : null}
         <ListContainer store={store} horizontal={isHorizontal}>
-          {Platform.OS === 'android' ? (
+          {Platform.OS === 'android' && !NitroListDevFlags.experimentalSlotPublication ? (
             <MountMarkerSlot store={store} onMarker={handleMountMarker} />
           ) : null}
           <NitroListCells
             firstPaintLimit={
+              initialOverscanRef.current != null &&
+              initialOverscanRef.current.items === items &&
+              Object.is(initialOverscanRef.current.dataVersion, dataVersion) &&
+              initialOverscanRef.current.revision === measurementRevision &&
+              initialOverscanRef.current.geometry === measurementGeometry &&
+              initialOverscanRef.current.renderer === renderItem
+                ? initialOverscanLimit :
               !drawDistanceExpanded &&
+              !(NitroListDevFlags.experimentalProgressiveFirstViewport && initialSampleConsumed) &&
               getFixedItemSize == null &&
               initialTargetRef.current?.index == null &&
               initialTargetRef.current?.offset === 0
@@ -2979,6 +3111,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
             readItemOffset={readItemOffset}
             ensureLayout={ensureLayout}
             onCommit={handleCellsCommit}
+            onMountMarker={NitroListDevFlags.experimentalSlotPublication ? handleMountMarker : undefined}
           />
         </ListContainer>
         {ListFooterComponent != null ? (

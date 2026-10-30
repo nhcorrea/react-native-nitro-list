@@ -7,6 +7,7 @@ export type {
   NitroListMaintainVisibleContentPositionConfig,
   NitroListOnViewableItemsChanged,
   NitroListProps,
+  NitroListPrepareItem,
   NitroListRenderItem,
   NitroListRenderMode,
   NitroListRenderScrollComponent,

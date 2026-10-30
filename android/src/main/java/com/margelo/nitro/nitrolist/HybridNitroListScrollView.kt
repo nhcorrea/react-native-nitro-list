@@ -216,79 +216,111 @@ private object MountObserver {
   }
 }
 
+@Keep
+@DoNotStrip
 @OptIn(UnstableReactNativeAPI::class)
 private object EagerMount {
+  private class Generation(val id: Long, val manager: UIManager) {
+    val scheduled = AtomicBoolean(false)
+    @Volatile var active = true
+    lateinit var run: Runnable
+  }
   private var holders = 0
-  private var manager: UIManager? = null
+  private var nextGeneration = 0L
   private var unavailable = false
-  private val scheduled = AtomicBoolean(false)
+  private val dispatches = java.util.concurrent.atomic.AtomicLong(0)
+  private val staleDrops = java.util.concurrent.atomic.AtomicLong(0)
+  @Volatile private var generation: Generation? = null
 
-  @Volatile private var dispatch: Runnable? = null
-
+  private fun schedule(current: Generation) {
+    if (current.active && current.scheduled.compareAndSet(false, true)) {
+      UiThreadUtil.runOnUiThread(current.run)
+    }
+  }
   private val listener = object : UIManagerListener {
     override fun willDispatchViewUpdates(uiManager: UIManager) {}
-
     override fun willMountItems(uiManager: UIManager) {}
-
     override fun didMountItems(uiManager: UIManager) {}
-
     override fun didDispatchMountItems(uiManager: UIManager) {}
-
     override fun didScheduleMountItems(uiManager: UIManager) {
-      val run = dispatch ?: return
-      if (scheduled.compareAndSet(false, true)) UiThreadUtil.runOnUiThread(run)
+      val current = generation ?: return
+      if (current.manager === uiManager) schedule(current)
     }
   }
 
   @Synchronized
   fun set(enabled: Boolean) {
+    // Cleanup cannot depend on a ReactContext that may already be invalidated.
+    if (!enabled) {
+      if (holders > 0 && --holders == 0) detach()
+      return
+    }
     if (unavailable) return
     val context = NitroModules.applicationContext ?: return
-    val current = UIManagerHelper.getUIManager(context, UIManagerType.FABRIC) ?: return
-    if (current !== manager) {
+    val manager = UIManagerHelper.getUIManager(context, UIManagerType.FABRIC) ?: return
+    if (generation?.manager !== manager) {
       detach()
       holders = 0
     }
-    if (enabled) {
-      holders++
-      if (holders == 1) attach(current)
-    } else if (holders > 0) {
-      holders--
-      if (holders == 0) detach()
-    }
+    if (holders > 0) holders++ else if (attach(manager)) holders = 1
   }
 
-  private fun attach(uiManager: UIManager) {
+  private fun attach(manager: UIManager): Boolean {
     try {
-      val field = uiManager.javaClass.getDeclaredField("mMountItemDispatcher")
+      val field = manager.javaClass.getDeclaredField("mMountItemDispatcher")
       field.isAccessible = true
-      val dispatcher = field.get(uiManager) ?: return
+      val dispatcher = field.get(manager) ?: return false
       val method = dispatcher.javaClass.getMethod("tryDispatchMountItems")
-      dispatch = Runnable {
-        scheduled.set(false)
+      val current = Generation(++nextGeneration, manager)
+      current.run = Runnable {
+        // A revoked callback must not clear a new generation's scheduled bit.
+        if (!current.active || generation !== current) {
+          staleDrops.incrementAndGet()
+          return@Runnable
+        }
+        current.scheduled.set(false)
+        Trace.beginSection("NL:eager_dispatch")
         try {
+          dispatches.incrementAndGet()
           method.invoke(dispatcher)
         } catch (error: InvocationTargetException) {
           throw error.cause ?: error
         } catch (_: IllegalAccessException) {
-          unavailable = true
-          dispatch = null
+          synchronized(this) {
+            unavailable = true
+            if (generation === current) { detach(); holders = 0 }
+          }
+        } finally {
+          Trace.endSection()
         }
       }
-      uiManager.addUIManagerEventListener(listener)
-      manager = uiManager
+      generation = current
+      manager.addUIManagerEventListener(listener)
+      return true
     } catch (_: ReflectiveOperationException) {
       unavailable = true
     } catch (_: SecurityException) {
       unavailable = true
     }
+    detach()
+    return false
   }
 
   private fun detach() {
-    manager?.removeUIManagerEventListener(listener)
-    manager = null
-    dispatch = null
+    val current = generation ?: return
+    current.active = false
+    generation = null
+    current.manager.removeUIManagerEventListener(listener)
   }
+
+  // Temporary research diagnostics, accessed only by the example through reflection.
+  @Synchronized fun diagnosticSnapshot(): Map<String, Long> = mapOf(
+    "holders" to holders.toLong(), "generation" to nextGeneration,
+    "attached" to if (generation != null) 1L else 0L,
+    "scheduled" to if (generation?.scheduled?.get() == true) 1L else 0L,
+    "unavailable" to if (unavailable) 1L else 0L,
+    "dispatches" to dispatches.get(), "staleDrops" to staleDrops.get())
+  fun diagnosticSchedule() { generation?.let { schedule(it) } }
 }
 
 @OptIn(UnstableReactNativeAPI::class)

@@ -151,9 +151,18 @@ export type NitroListOnViewableItemsChanged<T> = (info: {
   changed: NitroListViewToken<T>[];
 }) => void;
 
+export type NitroListPrepareItem<T> = (info: {
+  item: T;
+  index: number;
+  key: string;
+  signal: AbortSignal;
+}) => void | Promise<void>;
+
 export interface NitroListProps<T> {
   data: ReadonlyArray<T> | null | undefined;
   renderItem: NitroListRenderItem<T>;
+  /** Optional speculative resources. Release owned resources when signal aborts. */
+  prepareItem?: NitroListPrepareItem<T>;
   estimatedItemSize: number;
   keyExtractor?: (item: T, index: number) => string;
   getItemType?: (item: T, index: number) => string | number;

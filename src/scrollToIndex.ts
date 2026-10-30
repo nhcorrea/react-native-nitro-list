@@ -1,4 +1,4 @@
-import {PixelRatio} from 'react-native';
+import {PixelRatio, Platform} from 'react-native';
 
 import {NitroListDevFlags} from './devFlags';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
@@ -308,6 +308,12 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
 
     ctx.releaseGestureEstimates();
     releaseEstimates?.();
+    if (Platform.OS === 'android' && NitroListDevFlags.experimentalSynchronousThawCorrection && !superseded()) {
+      const thawedOffset = destination();
+      if (thawedOffset != null && Math.abs(thawedOffset - commandedOffset) >= 0.5 / PixelRatio.get()) {
+        commandedOffset = ctx.scrollToAbsoluteOffset(thawedOffset, false);
+      }
+    }
     for (let pass = 0; pass < SCROLL_TO_INDEX_CORRECTION_PASSES; pass++) {
       if (superseded()) return;
       devCorrectionPasses++;
