@@ -29,6 +29,12 @@ export const NitroListDevFlags = {
   experimentalContiguousFlow: false,
   experimentalSlotPublication: false,
   experimentalCompactCell: false,
+  experimentalPlan3A: false,
+  experimentalPlan3B: false,
+  experimentalPlan3C: false,
+  experimentalPlan3D: false,
+  experimentalPlan3E: false,
+  experimentalPlan3F: false,
 };
 
 export type NitroListDevFlagKey = keyof typeof NitroListDevFlags;

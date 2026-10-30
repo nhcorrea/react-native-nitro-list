@@ -87,6 +87,12 @@ const DEV_FLAG_LABELS: Record<NitroListDevFlagKey, string> = {
   experimentalContiguousFlow: 'flow',
   experimentalSlotPublication: 'slots',
   experimentalCompactCell: 'compact',
+  experimentalPlan3A: 'p3a',
+  experimentalPlan3B: 'p3b',
+  experimentalPlan3C: 'p3c',
+  experimentalPlan3D: 'p3d',
+  experimentalPlan3E: 'p3e',
+  experimentalPlan3F: 'p3f',
 };
 
 interface BenchItem {
