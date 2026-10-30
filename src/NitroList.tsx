@@ -2056,10 +2056,37 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const flushPendingMvcpAdjust = scrollHandlers.flushPendingMvcpAdjust;
   const handleOuterScroll = scrollHandlers.handleOuterScroll;
   const handleOuterLayout = scrollHandlers.handleOuterLayout;
-  const handleScrollBeginDrag = scrollHandlers.handleScrollBeginDrag;
+  const plan3MvcpSuspendedRef = useRef(false);
+  const restorePlan3Mvcp = () => {
+    if (!plan3MvcpSuspendedRef.current) return;
+    scrollRef.current?.setNativeProps({
+      maintainVisibleContentPosition: mvcpEnabled ? MVCP_SCROLL_VIEW_CONFIG : null,
+    });
+    plan3MvcpSuspendedRef.current = false;
+  };
+  const plan3ScrollBeginDrag = useStableCallback(stableCallbacks,
+    (event: Parameters<ScrollHandlersApi['handleScrollBeginDrag']>[0]) => {
+      restorePlan3Mvcp();
+      scrollHandlers.handleScrollBeginDrag(event);
+    });
+  const plan3MomentumBegin = useStableCallback(stableCallbacks,
+    (event: Parameters<ScrollHandlersApi['handleMomentumScrollBegin']>[0]) => {
+      if (mvcpEnabled && scrollRef.current != null) {
+        scrollRef.current.setNativeProps({maintainVisibleContentPosition: null});
+        plan3MvcpSuspendedRef.current = true;
+      }
+      scrollHandlers.handleMomentumScrollBegin(event);
+    });
+  const plan3MomentumEnd = useStableCallback(stableCallbacks,
+    (event: Parameters<ScrollHandlersApi['handleMomentumScrollEnd']>[0]) => {
+      restorePlan3Mvcp();
+      scrollHandlers.handleMomentumScrollEnd(event);
+    });
+  const plan3MvcpAblation = Platform.OS === 'android' && NitroListDevFlags.experimentalPlan3C;
+  const handleScrollBeginDrag = plan3MvcpAblation ? plan3ScrollBeginDrag : scrollHandlers.handleScrollBeginDrag;
   const handleScrollEndDrag = scrollHandlers.handleScrollEndDrag;
-  const handleMomentumScrollBegin = scrollHandlers.handleMomentumScrollBegin;
-  const handleMomentumScrollEnd = scrollHandlers.handleMomentumScrollEnd;
+  const handleMomentumScrollBegin = plan3MvcpAblation ? plan3MomentumBegin : scrollHandlers.handleMomentumScrollBegin;
+  const handleMomentumScrollEnd = plan3MvcpAblation ? plan3MomentumEnd : scrollHandlers.handleMomentumScrollEnd;
 
 
   const userOnScrollRef = useRef(userOnScroll);
