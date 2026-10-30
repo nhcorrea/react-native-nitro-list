@@ -958,6 +958,25 @@ export const NitroListCells = React.memo(function NitroListCells({
   for (let k = 0; k < entries.length; k++) {
     renderedChildren[k] = buildCellElement(entries[k], entries[k].metadata.reactKey, build);
   }
+  if (focusedIndex >= 0) {
+    // Moving an existing Android host can clear native input focus even when
+    // its key and parent stay the same. Absolute coordinates let retained
+    // children keep their committed physical order across data permutations.
+    const remaining = new Map(nextElements);
+    nextElements.clear();
+    let position = 0;
+    for (const key of elementCacheRef.current.elements.keys()) {
+      const element = remaining.get(key);
+      if (element == null) continue;
+      renderedChildren[position++] = element;
+      nextElements.set(key, element);
+      remaining.delete(key);
+    }
+    for (const [key, element] of remaining) {
+      renderedChildren[position++] = element;
+      nextElements.set(key, element);
+    }
+  }
   build.previous = null;
   renderedOutput = (
     <View ref={originClip.attach} collapsable={false} style={originStyle}>
