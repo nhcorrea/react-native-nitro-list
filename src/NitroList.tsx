@@ -2948,6 +2948,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
                 ? FIRST_PAINT_ITEMS
                 : 0
             }
+            dataVersion={dataVersion}
             measurementRevision={measurementRevision}
             measurementGeometry={measurementGeometry}
             store={store}

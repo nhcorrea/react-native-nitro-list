@@ -490,6 +490,7 @@ type CellEntry = {
 type CellSharedProps = Pick<
   NitroListItemContainerProps,
   | 'recycled'
+  | 'dataVersion'
   | 'measurementRevision'
   | 'measurementGeometry'
   | 'horizontal'
@@ -591,6 +592,7 @@ function buildCellElement(
 
 export interface NitroListCellsProps {
   firstPaintLimit: number;
+  dataVersion?: unknown;
   measurementRevision: MeasurementRevision;
   measurementGeometry: number;
   store: ListStore;
@@ -680,6 +682,7 @@ function createOriginClip(): OriginClip {
 
 export const NitroListCells = React.memo(function NitroListCells({
   firstPaintLimit,
+  dataVersion,
   measurementRevision,
   measurementGeometry,
   store,
@@ -790,6 +793,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   const elementCacheRef = useRef<CellElementCache>({shared: null, elements: new Map()});
   const shared: CellSharedProps = {
     recycled: recycleItems,
+    dataVersion,
     measurementRevision,
     measurementGeometry,
     horizontal,
@@ -974,6 +978,7 @@ export function EndSpaceSpacer({store, horizontal}: {store: ListStore; horizonta
 
 export interface NitroListItemContainerProps {
   recycled: boolean;
+  dataVersion?: unknown;
   parked?: boolean;
   away?: boolean;
   occupant?: string;
@@ -1016,6 +1021,7 @@ export function areItemContainerPropsEqual(
 ): boolean {
   return (
     prev.recycled === next.recycled &&
+    Object.is(prev.dataVersion, next.dataVersion) &&
     prev.parked === next.parked &&
     prev.away === next.away &&
     prev.occupant === next.occupant &&
@@ -1046,6 +1052,7 @@ export const MEASUREMENT_NOISE_EPSILON_DP = 1 / PixelRatio.get() + 0.01;
 export const IS_DEV = typeof __DEV__ !== 'undefined' && __DEV__;
 
 export interface NitroListCellContentProps {
+  dataVersion?: unknown;
   index: number;
   item: unknown;
   renderItem: NitroListRenderItem<unknown>;
@@ -1060,6 +1067,7 @@ export function areCellContentPropsEqual(
   next: NitroListCellContentProps,
 ): boolean {
   return (
+    Object.is(prev.dataVersion, next.dataVersion) &&
     prev.index === next.index &&
     prev.renderItem === next.renderItem &&
     prev.SeparatorComponent === next.SeparatorComponent &&
@@ -1090,6 +1098,7 @@ export const NitroListCellContent = React.memo(function NitroListCellContent({
 
 export const NitroListItemContainer = React.memo(function NitroListItemContainer({
   recycled,
+  dataVersion,
   occupant,
   measurementRevision,
   measurementGeometry,
@@ -1231,6 +1240,7 @@ export const NitroListItemContainer = React.memo(function NitroListItemContainer
         style={styles.cellMeasure}
       >
         <NitroListCellContent
+          dataVersion={dataVersion}
           index={index}
           item={item}
           renderItem={renderItem}
