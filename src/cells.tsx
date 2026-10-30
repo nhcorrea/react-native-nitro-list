@@ -8,6 +8,7 @@ import React, {
 import {findNodeHandle, PixelRatio, Platform, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
 
 import {NitroListDevFlags} from './devFlags';
+import {markPlan3Publication} from './transitionDiagnostics';
 import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
 import {MVCP_ANCHOR_BASES} from './mvcp';
@@ -273,6 +274,7 @@ export type CellPool = {
 export const MAX_PARKED_CELLS = 32;
 const PARKED_AWAY_OFFSET = -(2 ** 20);
 const CELLS_STORE_KEYS = [
+  'plan3WindowPaused',
   'range',
   'prewarmRange',
   'reserveRange',
@@ -766,7 +768,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     : null, [slotPublication, onMountMarker, markerSequence]);
   const committedMarkerRef = useRef(marker);
   const requestCommit = (phase: 'measure' | 'layout' | 'passive') => {
-    if (slotPublication && holding) return;
+    if ((slotPublication || plan3Holding) && holding) return;
     const commit = () => onCommit(range, prewarmRange, phase);
     if (slotPublication) publicationRef.current?.request(publicationToken, phase, commit);
     else commit();
@@ -877,14 +879,17 @@ export const NitroListCells = React.memo(function NitroListCells({
   };
   const nextElements = new Map<string, React.ReactElement<NitroListItemContainerProps>>();
   let nextPool: CellPool | null = null;
-  const holding =
+  const plan3Holding = Platform.OS === 'android' && NitroListDevFlags.experimentalPlan3E &&
+    store.get('plan3WindowPaused') === true && heldOutputRef.current != null;
+  const holding = plan3Holding || (
     dataItems != null &&
     dataItems !== items &&
     heldOutputRef.current != null &&
     keyExtractor != null &&
-    rangeKeysMoved(metadataRef.current, items, range, keyExtractor);
+    rangeKeysMoved(metadataRef.current, items, range, keyExtractor));
   let renderedOutput: React.ReactElement | null = null;
   useInsertionEffect(() => {
+    markPlan3Publication(range.start, range.end, plan3Holding, store.get('plan3WindowPaused') === true);
     if (holding) return;
     metadataRef.current = nextMetadata;
     if (nextPool != null) poolRef.current = nextPool;

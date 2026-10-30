@@ -30,3 +30,8 @@ export function markTransition(origin: number, sequence: number, revision: numbe
   if (!NitroListDevFlags.transitionDiagnostics) return;
   markNativeTransition(origin, sequence, revision, count, flags);
 }
+
+export function markPlan3Publication(start: number, end: number, held: boolean, paused: boolean): void {
+  if (!NitroListDevFlags.experimentalPlan3E) return;
+  markNativeTransition(TRANSITION_ORIGIN.other, 3, start, end, (held ? 1 : 0) | (paused ? 2 : 0));
+}

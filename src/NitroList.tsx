@@ -32,6 +32,7 @@ import {
   observeNativeMounts,
   scrollToNativeOffset,
   setNativeEagerMount,
+  setNativeTransitionDiagnostics,
   unobserveNativeMounts,
 } from './nativeScroll';
 import {pendingCorrectionShift, type PendingScrollCorrection} from './scrollCorrections';
@@ -2057,6 +2058,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const handleOuterScroll = scrollHandlers.handleOuterScroll;
   const handleOuterLayout = scrollHandlers.handleOuterLayout;
   const plan3MvcpSuspendedRef = useRef(false);
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !NitroListDevFlags.experimentalPlan3E) return;
+    setNativeTransitionDiagnostics(true);
+    return () => setNativeTransitionDiagnostics(false);
+  }, []);
   const restorePlan3Mvcp = () => {
     if (!plan3MvcpSuspendedRef.current) return;
     scrollRef.current?.setNativeProps({
@@ -2066,12 +2072,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   };
   const plan3ScrollBeginDrag = useStableCallback(stableCallbacks,
     (event: Parameters<ScrollHandlersApi['handleScrollBeginDrag']>[0]) => {
+      if (NitroListDevFlags.experimentalPlan3E) store.set('plan3WindowPaused', false);
       restorePlan3Mvcp();
       scrollHandlers.handleScrollBeginDrag(event);
     });
   const plan3MomentumBegin = useStableCallback(stableCallbacks,
     (event: Parameters<ScrollHandlersApi['handleMomentumScrollBegin']>[0]) => {
-      if (mvcpEnabled && scrollRef.current != null) {
+      if (NitroListDevFlags.experimentalPlan3E) store.set('plan3WindowPaused', true);
+      if (NitroListDevFlags.experimentalPlan3C && mvcpEnabled && scrollRef.current != null) {
         scrollRef.current.setNativeProps({maintainVisibleContentPosition: null});
         plan3MvcpSuspendedRef.current = true;
       }
@@ -2079,10 +2087,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     });
   const plan3MomentumEnd = useStableCallback(stableCallbacks,
     (event: Parameters<ScrollHandlersApi['handleMomentumScrollEnd']>[0]) => {
+      if (NitroListDevFlags.experimentalPlan3E) store.set('plan3WindowPaused', false);
       restorePlan3Mvcp();
       scrollHandlers.handleMomentumScrollEnd(event);
     });
-  const plan3MvcpAblation = Platform.OS === 'android' && NitroListDevFlags.experimentalPlan3C;
+  const plan3MvcpAblation = Platform.OS === 'android' &&
+    (NitroListDevFlags.experimentalPlan3C || NitroListDevFlags.experimentalPlan3E);
   const handleScrollBeginDrag = plan3MvcpAblation ? plan3ScrollBeginDrag : scrollHandlers.handleScrollBeginDrag;
   const handleScrollEndDrag = scrollHandlers.handleScrollEndDrag;
   const handleMomentumScrollBegin = plan3MvcpAblation ? plan3MomentumBegin : scrollHandlers.handleMomentumScrollBegin;
