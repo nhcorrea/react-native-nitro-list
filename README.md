@@ -65,6 +65,7 @@ function MyList({ items }: { items: Item[] }) {
       renderItem={renderItem}
       estimatedItemSize={64}
       keyExtractor={keyExtractor}
+      recycleItems
     />
   );
 }
@@ -72,10 +73,11 @@ function MyList({ items }: { items: Item[] }) {
 
 When `renderItem` needs component state, wrap it in `useCallback` with only what the cells display. See [Callbacks](#callbacks).
 
-Two things matter from the start:
+Three things matter from the start:
 
 - **`estimatedItemSize` is required.** It drives layout until each cell reports its measured size, after which real measurements take over. Get it roughly right and the first frames are already stable; get it badly wrong and dev builds will tell you (see [Development warnings](#development-warnings)).
 - **The list needs a bounded height.** `flex: 1` inside a flex parent, or an explicit height. Nothing renders while the viewport measures 0.
+- **Turn on `recycleItems` unless your cells must start from fresh state.** It is off by default, like `FlatList`: every item that enters the window then mounts a new cell and creates its native views, and every item that leaves unmounts one. On a low-end Android device a fast fling through a grid creates views for about a hundred cells and drops frames. With `recycleItems`, scrolling hands mounted cells of the same type (`getItemType`) to the new items instead of creating new ones. State kept inside the component returned by `renderItem` then follows the cell to the next item: derive it from `item`, or reset it with a `key`.
 
 ## Coming from FlatList
 
