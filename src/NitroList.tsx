@@ -566,7 +566,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       pending.admission.stop('identity-changed', false);
     }
   });
-  useEffect(() => () => initialOverscanRef.current?.admission.stop('unmount', false), []);
+  const stopInitialOverscanOnUnmount = useStableCallback(stableCallbacks, () => {
+    initialOverscanRef.current?.admission.stop('unmount', false);
+  });
+  useEffect(() => stopInitialOverscanOnUnmount, [stopInitialOverscanOnUnmount]);
   const [initialSampleConsumed, setInitialSampleConsumed] = useState(false);
   const initialSampleConsumedRef = useRef(false);
   const earlyMountDispatch = NitroListDevFlags.experimentalEarlyMountDispatch;
