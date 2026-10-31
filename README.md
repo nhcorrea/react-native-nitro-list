@@ -386,6 +386,7 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 - `numColumns` combined with `horizontal`.
 - A JS `onScroll` under `experimentalUiThreadScroll`.
 - `renderItem` changing identity on 10 consecutive renders — every mounted cell re-renders each time.
+- `recycleItems` left unset on a list that has mounted 100 new cells after its first window — every item that enters the window creates its native views from scratch. Set `recycleItems`, or `recycleItems={false}` to keep fresh cells and silence it.
 
 ## Recipes
 

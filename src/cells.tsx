@@ -9,7 +9,7 @@ import {findNodeHandle, PixelRatio, Platform, StyleSheet, TextInput, View, type 
 
 import {NitroListDevFlags} from './devFlags';
 import {markPlan3Publication} from './transitionDiagnostics';
-import {checkDuplicateKeyDev, warnDevOnce} from './devWarnings';
+import {checkDuplicateKeyDev, countNewKeysDev, maybeWarnRecycleItemsUnset, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
 import {MVCP_ANCHOR_BASES} from './mvcp';
 import type {MeasurementIdentity, MeasurementRevision} from './measurementIdentity';
@@ -33,6 +33,8 @@ export type CellBridge = {
   awaitingLayout: number;
   followIndex: number;
   freeCells: number;
+  createdCells: number;
+  recycleItemsUnset: boolean;
   cells: Set<CellRecord>;
   onLayoutSettled: () => void;
   onAutoFixedMismatch: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
@@ -894,6 +896,10 @@ export const NitroListCells = React.memo(function NitroListCells({
     metadataRef.current = nextMetadata;
     if (nextPool != null) poolRef.current = nextPool;
     cellBridge.freeCells = nextPool != null ? nextPool.order.length - renderedEntryCount : Number.POSITIVE_INFINITY;
+    if (IS_DEV && nextPool == null && cellBridge.recycleItemsUnset) {
+      cellBridge.createdCells += countNewKeysDev(elementCacheRef.current?.elements ?? new Map(), nextElements);
+      maybeWarnRecycleItemsUnset(cellBridge.createdCells);
+    }
     elementCacheRef.current = {shared, elements: nextElements};
     heldOutputRef.current = renderedOutput;
     committedMarkerRef.current = marker;

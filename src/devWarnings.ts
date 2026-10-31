@@ -26,6 +26,26 @@ export function maybeWarnMissingKeyExtractor(
   );
 }
 
+export const RECYCLE_ITEMS_WARNING_CELLS = 100;
+
+export function countNewKeysDev(previous: ReadonlyMap<string, unknown>, next: ReadonlyMap<string, unknown>): number {
+  if (!IS_DEV) return 0;
+  let created = 0;
+  for (const key of next.keys()) if (!previous.has(key)) created++;
+  return created;
+}
+
+export function maybeWarnRecycleItemsUnset(createdCells: number): void {
+  if (createdCells < RECYCLE_ITEMS_WARNING_CELLS) return;
+  warnDevOnce(
+    'recycle-items-unset',
+    `recycleItems is not set and this list has mounted ${RECYCLE_ITEMS_WARNING_CELLS} new cells after ` +
+      'its first window: every item that enters the window creates its native views from scratch. ' +
+      'Pass recycleItems to hand mounted cells of the same type to new items, or ' +
+      'recycleItems={false} to keep fresh cells and silence this warning.',
+  );
+}
+
 export const MAX_TRACKED_ITEM_TYPES = 4096;
 
 export function maybeWarnTooManyItemTypes(distinctTypes: number): void {

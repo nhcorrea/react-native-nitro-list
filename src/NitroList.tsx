@@ -348,6 +348,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const itemCount = items.length;
   const renderItemChurnRef = useRef<RenderItemChurn>({last: undefined, streak: 0});
   if (IS_DEV) commitBindings.push(() => noteRenderItemIdentity(renderItemChurnRef.current, renderItem));
+  if (IS_DEV) commitBindings.push(() => {
+    cellBridgeRef.current.recycleItemsUnset = recycleItems === undefined;
+  });
   const {fontScale} = useWindowDimensions();
   const hasKeyExtractor = keyExtractor != null;
   const hasItemType = getItemType != null;
@@ -820,6 +823,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     awaitingLayout: 0,
     followIndex: -1,
     freeCells: Number.POSITIVE_INFINITY,
+    createdCells: 0,
+    recycleItemsUnset: false,
     cells: new Set(),
     onLayoutSettled: () => {},
     onAutoFixedMismatch: () => {},
