@@ -93,6 +93,8 @@ const DEV_FLAG_LABELS: Record<NitroListDevFlagKey, string> = {
   experimentalPlan3D: 'p3d',
   experimentalPlan3E: 'p3e',
   experimentalPlan3F: 'p3f',
+  benchViewRecycling: 'vr',
+  benchPreparedText: 'pt',
 };
 
 interface BenchItem {

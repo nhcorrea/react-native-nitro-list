@@ -35,6 +35,8 @@ export const NitroListDevFlags = {
   experimentalPlan3D: false,
   experimentalPlan3E: false,
   experimentalPlan3F: false,
+  benchViewRecycling: false,
+  benchPreparedText: false,
 };
 
 export type NitroListDevFlagKey = keyof typeof NitroListDevFlags;
