@@ -456,6 +456,7 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 | Rows re-render on every data update | Pass a stable `itemsAreEqual`, and keep `renderItem` referentially stable. |
 | `maintainVisibleContentPosition` does nothing | A custom `renderScrollComponent` isn't forwarding the prop, or has `removeClippedSubviews` on. |
 | Animations stutter while scrolling | See the Reanimated feature flags noted in [UI-thread scroll mode](#ui-thread-scroll-mode-experimental). |
+| Frames drop on Android when many text cells mount at once | Text layout on the UI thread. React Native's prepared text layout (`enablePreparedTextLayout` with `enableAndroidTextMeasurementOptimizations`) moves it off the mount: on a Redmi 10C, a fast fling through a grid without `recycleItems` went from 66 ms to 17 ms of frozen frames with it. NitroList was checked with these flags; they are internal and global in React Native 0.86–0.88, and already on by default in its main branch (the future 0.89). |
 
 ## Development
 
