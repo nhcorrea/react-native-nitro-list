@@ -1707,6 +1707,40 @@ static void testResetReleasesFrozenObservations() {
   }
 }
 
+static void testSeedTypeMeansRejectsNonFinite() {
+  LayoutCore core;
+  core.setTypeAverages(true);
+  core.setEstimate(100);
+  core.setItemCount(10);
+  const std::vector<uint16_t> types(10, 1);
+  core.setItemTypes(types.data(), 10);
+  const double badTypes[] = {NAN, 50, INFINITY, 50, -INFINITY, 50, 3e9, 50, -3e9, 50, 1.5, 50};
+  CHECK(!core.seedTypeMeans(badTypes, 6, 1.0));
+  const double badMeans[] = {1, INFINITY, 1, 1e39, 1, NAN};
+  CHECK(!core.seedTypeMeans(badMeans, 3, 1.0));
+  CHECK(std::isfinite(core.getTotalSize()));
+  CHECK_EQ_F(core.getTotalSize(), 1000.0f);
+}
+
+static void testOversizedAndNonFiniteSizesAreRejected() {
+  LayoutCore core;
+  core.setEstimate(100);
+  core.setItemCount(10);
+  const double huge[] = {5, 1e39};
+  CHECK(!core.setItemSizes(huge, 1, 1.0));
+  const double scaledHuge[] = {5, 1e38};
+  CHECK(!core.setItemSizes(scaledHuge, 1, 10.0));
+  CHECK(!core.setItemSize(5, INFINITY));
+  CHECK(!core.setItemSize(5, NAN));
+  CHECK(!core.setItemSize(5, -INFINITY));
+  CHECK(!core.setItemSize(5, -10));
+  CHECK(core.countUnmeasured(5, 6) == 1);
+  CHECK(std::isfinite(core.getTotalSize()));
+  CHECK_EQ_F(core.getTotalSize(), 1000.0f);
+  CHECK(core.setItemSize(5, 40));
+  CHECK_EQ_F(core.getTotalSize(), 940.0f);
+}
+
 int main(int argc, char** argv) {
   if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
     return runReplay(argv[2]);
@@ -1753,6 +1787,8 @@ int main(int argc, char** argv) {
   testSubFrameEchoDoesNotEngageRegime();
   testRandomizedDifferential();
   testBlockedOffsetsLargeDifferential();
+  testSeedTypeMeansRejectsNonFinite();
+  testOversizedAndNonFiniteSizesAreRejected();
   if (failures == 0) {
     std::printf("OK — all LayoutCore tests passed\n");
     return 0;

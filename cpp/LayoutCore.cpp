@@ -180,10 +180,13 @@ void LayoutCore::setMeasurementEpsilon(double value) {
 
 bool LayoutCore::setItemSize(int32_t index, double size) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (index < 0 || index >= itemCount_) {
+  if (index < 0 || index >= itemCount_ || !std::isfinite(size) || size < 0.0) {
     return false;
   }
-  const float rounded = std::max(0.0f, roundToOctave(size));
+  const float rounded = roundToOctave(size);
+  if (!std::isfinite(rounded)) {
+    return false;
+  }
   if (measured_[index] != 0 && std::abs(sizes_[index] - rounded) <= measurementEpsilon_) {
     return false;
   }
@@ -230,7 +233,10 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
     if (idx < 0 || idx >= itemCount_) {
       continue;
     }
-    const float rounded = std::max(0.0f, roundToOctave(pairs[i * 2 + 1] * scale));
+    const float rounded = std::max(0.0f, roundToOctave(rawSize));
+    if (!std::isfinite(rounded)) {
+      continue;
+    }
     if (measured_[idx] != 0 && std::abs(sizes_[idx] - rounded) <= measurementEpsilon_) {
       continue;
     }
@@ -524,9 +530,14 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double sc
   }
   bool anySeeded = false;
   for (int32_t p = 0; p < pairCount; p++) {
-    const auto type = static_cast<int32_t>(pairs[2 * p]);
-    const float mean = roundToOctave(pairs[2 * p + 1] * scale);
-    if (type <= 0 || type >= kMaxTypeStats || !(mean > 0.0f)) {
+    const double rawType = pairs[2 * p], rawMean = pairs[2 * p + 1] * scale;
+    if (!std::isfinite(rawType) || rawType != std::floor(rawType) || rawType <= 0 ||
+        rawType >= kMaxTypeStats || !std::isfinite(rawMean)) {
+      continue;
+    }
+    const auto type = static_cast<int32_t>(rawType);
+    const float mean = roundToOctave(rawMean);
+    if (!std::isfinite(mean) || !(mean > 0.0f)) {
       continue;
     }
     if (static_cast<int32_t>(typeStats_.size()) <= type) {
