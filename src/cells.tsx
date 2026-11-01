@@ -722,6 +722,32 @@ function createOriginClip(): OriginClip {
   };
 }
 
+type MountMarkerCache = {onMountMarker: NonNullable<NitroListCellsProps['onMountMarker']>; sequence: number; element: React.ReactElement};
+
+function cachedMountMarker(
+  cacheRef: React.RefObject<MountMarkerCache | null>,
+  onMountMarker: MountMarkerCache['onMountMarker'],
+  sequence: number,
+): React.ReactElement {
+  const cached = cacheRef.current;
+  if (cached != null && cached.onMountMarker === onMountMarker && cached.sequence === sequence) return cached.element;
+  const element = <View key="__nitrolist_mount_marker" ref={onMountMarker} testID={String(sequence)} collapsable={false} pointerEvents="none" style={styles.mountMarker} />;
+  cacheRef.current = {onMountMarker, sequence, element};
+  return element;
+}
+
+function presentSlotPlan(
+  plan: React.ReactElement | null,
+  marker: React.ReactElement | null,
+  publicationRef: React.RefObject<SlotPublisherHandle | null>,
+  publicationToken: object,
+): React.ReactElement | null {
+  if (plan == null) return plan;
+  const root = plan as React.ReactElement<{children?: readonly React.ReactElement[]}>;
+  const published = marker == null ? root : React.cloneElement(root, undefined, [...(root.props.children ?? []), marker]);
+  return <SlotPublisher ref={publicationRef} token={publicationToken} plan={published} />;
+}
+
 export const NitroListCells = React.memo(function NitroListCells({
   firstPaintLimit,
   dataVersion,
@@ -765,22 +791,16 @@ export const NitroListCells = React.memo(function NitroListCells({
   const publicationToken = {};
   const slotPublication = NitroListDevFlags.experimentalSlotPublication;
   const markerSequence = slotPublication ? store.get('mountSeq') : 0;
-  const marker = useMemo(() => slotPublication && Platform.OS === 'android' && onMountMarker != null
-    ? <View key="__nitrolist_mount_marker" ref={onMountMarker} testID={String(markerSequence)} collapsable={false} pointerEvents="none" style={styles.mountMarker} />
-    : null, [slotPublication, onMountMarker, markerSequence]);
+  const markerCacheRef = useRef<MountMarkerCache | null>(null);
+  const marker = slotPublication && Platform.OS === 'android' && onMountMarker != null
+    ? cachedMountMarker(markerCacheRef, onMountMarker, markerSequence)
+    : null;
   const committedMarkerRef = useRef(marker);
   const requestCommit = (phase: 'measure' | 'layout' | 'passive') => {
     if ((slotPublication || plan3Holding) && holding) return;
     const commit = () => onCommit(range, prewarmRange, phase);
     if (slotPublication) publicationRef.current?.request(publicationToken, phase, commit);
     else commit();
-  };
-  const present = (plan: React.ReactElement | null, held = false) => {
-    if (!slotPublication || plan == null) return plan;
-    const selectedMarker = held ? committedMarkerRef.current : marker;
-    const root = plan as React.ReactElement<{children?: readonly React.ReactElement[]}>;
-    const published = selectedMarker == null ? root : React.cloneElement(root, undefined, [...(root.props.children ?? []), selectedMarker]);
-    return <SlotPublisher ref={publicationRef} token={publicationToken} plan={published} />;
   };
   const originRef = useRef(0);
   const originClipRef = useRef<OriginClip | null>(null);
@@ -907,7 +927,11 @@ export const NitroListCells = React.memo(function NitroListCells({
   });
   let origin = originRef.current;
   let renderedEntryCount = 0;
-  if (holding) return present(heldOutputRef.current, true);
+  if (holding) {
+    return slotPublication
+      ? presentSlotPlan(heldOutputRef.current, committedMarkerRef.current, publicationRef, publicationToken)
+      : heldOutputRef.current;
+  }
 
   const seenRenderKeys = IS_DEV ? new Set<string>() : null;
   const entries: CellEntry[] = [];
@@ -1070,7 +1094,7 @@ export const NitroListCells = React.memo(function NitroListCells({
         {children}
       </View>
     );
-    return present(renderedOutput);
+    return slotPublication ? presentSlotPlan(renderedOutput, marker, publicationRef, publicationToken) : renderedOutput;
   }
   const renderedChildren = new Array<React.ReactElement>(entries.length);
   for (let k = 0; k < entries.length; k++) {
@@ -1102,7 +1126,7 @@ export const NitroListCells = React.memo(function NitroListCells({
       {renderedChildren}
     </View>
   );
-  return present(renderedOutput);
+  return slotPublication ? presentSlotPlan(renderedOutput, marker, publicationRef, publicationToken) : renderedOutput;
 }, areCellsPropsEqual);
 
 export function ListContainer({

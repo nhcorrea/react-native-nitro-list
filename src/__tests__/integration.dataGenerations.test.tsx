@@ -4,6 +4,8 @@ import {Animated, Platform, View} from 'react-native';
 import type {LayoutChangeEvent} from 'react-native';
 import {act, create, type ReactTestRenderer} from 'react-test-renderer';
 
+import {NitroListDevFlags} from '../devFlags';
+import * as nativeScroll from '../nativeScroll';
 import type {NitroListProps, NitroListRenderScrollComponentProps} from '../NitroList';
 import {NitroSectionList, type NitroSectionListProps} from '../section-list';
 import {reachableLabels} from './helpers/gc';
@@ -29,6 +31,14 @@ const CURRENT = ['E:array', 'E:first', 'E:last'];
 const ITEM_COUNT = 400;
 const calls = {viewable: 0, endReached: 0, firstVisible: 0, stickyAttached: 0};
 const ORIGINAL_PLATFORM = Platform.OS;
+const ORIGINAL_FLAGS = {...NitroListDevFlags};
+
+function enableOnAndroid(flags: Partial<typeof NitroListDevFlags>): () => void {
+  return () => {
+    Platform.OS = 'android';
+    Object.assign(NitroListDevFlags, flags);
+  };
+}
 
 function simulateAndroidNativeSticky(): void {
   Platform.OS = 'android';
@@ -232,6 +242,39 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: 'the experimental eager mount prop',
+    stableKeys: false,
+    extra: {experimentalEagerMount: true},
+  },
+  {
+    name: 'the early mount dispatch dev flag',
+    stableKeys: false,
+    extra: {},
+    setup: enableOnAndroid({experimentalEarlyMountDispatch: true}),
+  },
+  {
+    name: 'the plan 3E dev flag',
+    stableKeys: false,
+    extra: {},
+    setup: () => {
+      enableOnAndroid({experimentalPlan3E: true})();
+      jest.spyOn(nativeScroll, 'setNativeTransitionDiagnostics').mockImplementation(() => {});
+      jest.spyOn(nativeScroll, 'markNativeTransition').mockImplementation(() => {});
+    },
+  },
+  {
+    name: 'slot publication with replaced keys',
+    stableKeys: false,
+    extra: {},
+    setup: enableOnAndroid({experimentalSlotPublication: true}),
+  },
+  {
+    name: 'slot publication with stable keys',
+    stableKeys: true,
+    extra: {},
+    setup: enableOnAndroid({experimentalSlotPublication: true}),
+  },
+  {
     name: 'the ui-thread scroll driver',
     stableKeys: true,
     extra: {experimentalUiThreadScroll: true, stickyHeaderIndices: [0]},
@@ -257,6 +300,7 @@ describe('data generations (fronteira 1.7)', () => {
     jest.useRealTimers();
     jest.restoreAllMocks();
     Platform.OS = ORIGINAL_PLATFORM;
+    Object.assign(NitroListDevFlags, ORIGINAL_FLAGS);
   });
 
   it.each(SCENARIOS)('keeps only the current generation reachable with $name', async (scenario) => {

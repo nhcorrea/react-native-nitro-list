@@ -235,6 +235,36 @@ const ADAPTIVE_EXIT_DP_S = 1000;
 const ADAPTIVE_EXIT_DELAY_MS = 250;
 const ENGINE_MEMORY_REPORT_MIN_ITEMS = 4096;
 
+function releaseNativeEagerMount(): void {
+  setNativeEagerMount(false);
+}
+
+function holdNativeEagerMount(): () => void {
+  setNativeEagerMount(true);
+  return releaseNativeEagerMount;
+}
+
+function holdNativeEagerMountAfterFrame(): () => void {
+  let held = false;
+  const frame = requestAnimationFrame(() => {
+    held = true;
+    setNativeEagerMount(true);
+  });
+  return () => {
+    cancelAnimationFrame(frame);
+    if (held) setNativeEagerMount(false);
+  };
+}
+
+function disableNativeTransitionDiagnostics(): void {
+  setNativeTransitionDiagnostics(false);
+}
+
+function enableNativeTransitionDiagnostics(): () => void {
+  setNativeTransitionDiagnostics(true);
+  return disableNativeTransitionDiagnostics;
+}
+
 function attachStickyScrollEvent(
   target: unknown,
   value: Animated.Value,
@@ -596,24 +626,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const [initialSampleConsumed, setInitialSampleConsumed] = useState(false);
   const initialSampleConsumedRef = useRef(false);
   const earlyMountDispatch = NitroListDevFlags.experimentalEarlyMountDispatch;
-  useLayoutEffect(() => {
-    if (!earlyMountDispatch) return;
-    setNativeEagerMount(true);
-    return () => setNativeEagerMount(false);
-  }, [earlyMountDispatch]);
+  useLayoutEffect(() => (earlyMountDispatch ? holdNativeEagerMount() : undefined), [earlyMountDispatch]);
   const eagerMount = experimentalEagerMount === true || NitroListDevFlags.experimentalEagerMount;
-  useEffect(() => {
-    if (!eagerMount || !drawDistanceExpanded) return;
-    let held = false;
-    const frame = requestAnimationFrame(() => {
-      held = true;
-      setNativeEagerMount(true);
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      if (held) setNativeEagerMount(false);
-    };
-  }, [eagerMount, drawDistanceExpanded]);
+  useEffect(
+    () => (eagerMount && drawDistanceExpanded ? holdNativeEagerMountAfterFrame() : undefined),
+    [eagerMount, drawDistanceExpanded],
+  );
   const effectiveDrawDistance =
     drawDistanceExpanded || !capInitialDrawRef.current
       ? drawDistance
@@ -2075,11 +2093,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const handleOuterScroll = scrollHandlers.handleOuterScroll;
   const handleOuterLayout = scrollHandlers.handleOuterLayout;
   const plan3MvcpSuspendedRef = useRef(false);
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !NitroListDevFlags.experimentalPlan3E) return;
-    setNativeTransitionDiagnostics(true);
-    return () => setNativeTransitionDiagnostics(false);
-  }, []);
+  useEffect(
+    () =>
+      Platform.OS === 'android' && NitroListDevFlags.experimentalPlan3E ? enableNativeTransitionDiagnostics() : undefined,
+    [],
+  );
   const restorePlan3Mvcp = () => {
     if (!plan3MvcpSuspendedRef.current) return;
     scrollRef.current?.setNativeProps({

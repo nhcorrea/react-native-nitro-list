@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useSyncExternalStore} from 'react';
+import React, {useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useSyncExternalStore} from 'react';
 import {StyleSheet, unstable_batchedUpdates, View, type ViewProps} from 'react-native';
 
 type Element = React.ReactElement;
@@ -137,9 +137,22 @@ export class SlotPlanStore {
   }
 }
 
+function slotSubscription(store: SlotPlanStore, slot: string) {
+  return {subscribe: (listener: Listener) => store.subscribe(slot, listener), read: () => store.getElement(slot)};
+}
+function createPublisherHandle(store: SlotPlanStore): SlotPublisherHandle {
+  return {request: (requested, phase, callback) => store.request(requested, phase, callback)};
+}
+function releaseStoreAfterUnmount(store: SlotPlanStore, lifecycle: {current: number}): () => void {
+  lifecycle.current++;
+  return () => {
+    const cleanup = ++lifecycle.current;
+    queueMicrotask(() => { if (lifecycle.current === cleanup) store.destroy(); });
+  };
+}
+
 const PublishedSlot = React.memo(function PublishedSlot({store, slot}: {store: SlotPlanStore; slot: string}) {
-  const subscribe = useCallback((listener: Listener) => store.subscribe(slot, listener), [store, slot]);
-  const read = useCallback(() => store.getElement(slot), [store, slot]);
+  const {subscribe, read} = useMemo(() => slotSubscription(store, slot), [store, slot]);
   const element = useSyncExternalStore(subscribe, read, read);
   count('slotRenders');
   useLayoutEffect(() => { store.acknowledgeSlot(slot, element, 'layout'); }, [store, slot, element]);
@@ -160,16 +173,8 @@ export const SlotPublisher = React.forwardRef<SlotPublisherHandle, {token: objec
   if (storeRef.current == null) storeRef.current = new SlotPlanStore(token, plan);
   const store = storeRef.current;
   const lifecycle = useRef(0);
-  useImperativeHandle(ref, () => ({request: (requested, phase, callback) => store.request(requested, phase, callback)}), [store]);
+  useImperativeHandle(ref, () => createPublisherHandle(store), [store]);
   useLayoutEffect(() => { store.activate(); store.publish(token, plan); }, [store, token, plan]);
-  useLayoutEffect(() => {
-    lifecycle.current++;
-    return () => {
-      const cleanup = ++lifecycle.current;
-      // Effect replay must not destroy the still-mounted store. A real
-      // unmount releases it after the current commit, before native events.
-      queueMicrotask(() => { if (lifecycle.current === cleanup) store.destroy(); });
-    };
-  }, [store]);
+  useLayoutEffect(() => releaseStoreAfterUnmount(store, lifecycle), [store]);
   return <PublishedRoot store={store} />;
 });
