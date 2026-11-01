@@ -101,11 +101,9 @@ export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
     identities = [];
     const pairCount = accepted.size;
     if (pairCount === 0 || ctx.dataRevisionRef.current !== acceptedRevision) return;
-    // Detach the pending buffer before calling anything that can enqueue again.
     const batch = state.buffer as Float64Array<ArrayBuffer>;
     state.buffer = freeBatches.pop() ?? nativeFloat64Array(Math.max(128, batch.length));
     try {
-      // The normal unique/valid batch is consumed directly, without copying pairs.
       if (pairCount !== queuedCount) {
         let cursor = 0;
         for (const [index, size] of accepted) {
@@ -141,7 +139,7 @@ export function createMeasurement<T>(ctx: MeasurementCtx<T>): MeasurementApi {
       )
         return;
       if (filled != null) ctx.consumeSnapshot(filled.slab, filled.written, emitRange);
-      else ctx.invalidateLayoutCache(); // mutation succeeded; preserve its one-time anchor delta
+      else ctx.invalidateLayoutCache();
       if (ctx.dataRevisionRef.current !== revision) return;
       if (anchor != null && Math.abs(delta) > MVCP_POSITION_EPSILON)
         ctx.applyMvcpCorrectionRef.current(delta);

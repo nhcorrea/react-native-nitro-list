@@ -281,7 +281,7 @@ static void testRemapItemSizes() {
   const double keepZeroOnly[] = {0, 0};
   CHECK(typed.remapItemSizes(keepZeroOnly, 1));
   CHECK_EQ_F(typed.getSize(0), 60.0f);
-  CHECK_EQ_F(typed.getSize(3), 60.0f); // removed measurement no longer contributes to the mean
+  CHECK_EQ_F(typed.getSize(3), 60.0f);
 
   LayoutCore garbage;
   garbage.setEstimate(100.0f);
@@ -306,9 +306,6 @@ static void testRemapItemSizes() {
 }
 
 static void testContiguousRemapMatchesGeneralPath() {
-  // Exhaust overlapping moves in both directions, partial survivor runs, and
-  // identity moves. The reference is forced through the existing general remap
-  // by an ignored invalid pair, independently of the in-place traversal.
   for (const int columns : {1, 3}) {
     for (const bool frozen : {false, true}) {
       for (int32_t oldStart = 0; oldStart < 8; ++oldStart) {
@@ -328,7 +325,6 @@ static void testContiguousRemapMatchesGeneralPath() {
               core->setEstimatesFrozen(frozen);
               core->getTotalSize();
               core->setItemCount(16);
-              // Leave dirty geometry preceding some source/destination runs.
               core->setItemSize(0, 67.5);
             }
             std::vector<double> pairs;
@@ -354,7 +350,6 @@ static void testContiguousRemapMatchesGeneralPath() {
               CHECK(a.start == b.start && a.end == b.end && a.version == b.version);
             };
             compare();
-            // Subsequent observations and shrink must also preserve type means.
             for (auto* core : {&actual, &reference}) {
               core->setItemSize(3, 112.75);
               core->setItemCount(10);
@@ -503,7 +498,7 @@ static void testDataChangesKeepPublishedTypeEstimate() {
       measured.push_back(i); measured.push_back(80);
     }
     core.setItemSizes(measured.data(), 20, 1);
-    core.setItemSize(9999, 76); // mean 79.8; below the threshold for a layout sweep
+    core.setItemSize(9999, 76);
     CHECK_EQ_F(core.getSize(100), 80);
     const double oldAnchor = core.getOffset(9990);
     const double oldTotal = core.getTotalSize();
@@ -524,7 +519,7 @@ static void testDataChangesKeepPublishedTypeEstimate() {
   frozen.setEstimatesFrozen(true);
   frozen.setItemSize(0, 80);
   frozen.setItemTypes(nullptr, 0);
-  CHECK_EQ_F(frozen.getSize(1), 64); // no type estimate has been published yet
+  CHECK_EQ_F(frozen.getSize(1), 64);
   frozen.setEstimatesFrozen(false);
   CHECK_EQ_F(frozen.getSize(1), 80);
 }
@@ -1210,7 +1205,7 @@ static void testTypesRangeAndUnmeasured() {
   CHECK_EQ_F(core.getSize(0), 50.0f);
   CHECK(core.countUnmeasured(0, 10) == 9);
   CHECK(core.setItemTypes(nullptr, 0));
-  CHECK_EQ_F(core.getSize(1), 50.0f); // surviving observation is now attributed to type zero
+  CHECK_EQ_F(core.getSize(1), 50.0f);
 }
 
 static double gScriptedClockMs = 0.0;
@@ -1473,7 +1468,7 @@ static void testCurrentTypeObservations() {
   core.resetItemSizes();
   double stats[12];
   CHECK(core.fillTypeStats(stats, 12, 1) == 0);
-  CHECK_EQ_F(core.getSize(3), 100); // prior, not two current samples
+  CHECK_EQ_F(core.getSize(3), 100);
   core.setItemSize(0, 200);
   CHECK(core.fillTypeStats(stats, 12, 1) == 1);
   CHECK_EQ_F(stats[1], 200);
@@ -1646,7 +1641,6 @@ static void testIncrementalGridAgainstPacking() {
       const int count = stage == 9 ? 5 : 10 + stage * 3;
       spans.resize(count, 1);
       sizes.resize(count, 80);
-      // Leave a size dirty across the count change.
       if (stage > 0 && !sizes.empty()) { core.setItemSize(0, 120 + stage); sizes[0] = 120 + stage; }
       core.setItemCount(count);
       for (int i = 1; i < count; ++i) { spans[i] = i % 4 == 0 ? columns : 1; }
@@ -1673,12 +1667,12 @@ static void testIncrementalGridAgainstPacking() {
   const uint16_t spans[] = {2, 2, 1}; boundary.setItemSpans(spans, 3);
   CHECK_EQ_F(boundary.getOffset(1), 100);
   const uint16_t one[] = {1}; boundary.setItemSpansRange(1, one, 1);
-  CHECK_EQ_F(boundary.getOffset(1), 0); // changed span can move into the preceding row
+  CHECK_EQ_F(boundary.getOffset(1), 0);
   CHECK_EQ_F(boundary.getOffset(2), 100);
   const int version = boundary.getLayoutVersion();
   boundary.setItemSize(1, 80);
   CHECK_EQ_F(boundary.getTotalSize(), 200);
-  CHECK(boundary.getLayoutVersion() > version); // non-max item size is geometry too
+  CHECK(boundary.getLayoutVersion() > version);
 }
 
 static void testResetReleasesFrozenObservations() {

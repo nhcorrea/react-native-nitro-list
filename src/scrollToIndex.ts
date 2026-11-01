@@ -244,8 +244,6 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
           }
         }
 
-        // Applying the newly learned type means can move every unmeasured
-        // prefix item. Converge on that geometry before issuing the native jump.
         releaseEstimates?.();
         if (superseded()) return;
         finalOffset = destination();

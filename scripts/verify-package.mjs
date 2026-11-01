@@ -1,8 +1,3 @@
-// verify-build.mjs checks lib/ on disk; this checks the tarball npm would ship.
-// The difference matters: a file can exist locally and still be missing from the
-// published package (absent from "files"), or a relative specifier can resolve
-// locally and point outside the packed tree. Both break only the consumer, which
-// is exactly how the lib/nitrogen regression reached npm.
 import {execFileSync} from 'node:child_process'
 import {existsSync, readFileSync, readdirSync, statSync} from 'node:fs'
 import {dirname, join, posix, relative, resolve} from 'node:path'
@@ -12,11 +7,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const failures = []
 
-// --ignore-scripts is load-bearing: prepack calls into this file's siblings, and
-// a pack that re-ran lifecycle scripts would recurse.
-// Inside a lifecycle script npm puts node_modules/.bin ahead of PATH, where a
-// transitive npm copy shadows the real CLI. npm_execpath is the one actually
-// running us; only fall back to PATH when invoked outside npm.
 const execpath = process.env.npm_execpath
 const [command, prefixArgs] = execpath
   ? execpath.endsWith('.js')
@@ -36,9 +26,6 @@ try {
   console.error(String(error.stderr || error.message).trim())
   process.exit(1)
 }
-// npm <= 11 prints an array of package entries; npm 12 switched to an object
-// keyed by package name. Accept both — a release pipeline should not break on a
-// registry client upgrade, and it should say so out loud if the shape changes again.
 const parsed = JSON.parse(packOutput)
 const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0]
 
@@ -65,7 +52,6 @@ function firstShipped(packagePath) {
   return candidates.find((candidate) => shipped.has(candidate))
 }
 
-// Entry points declared in package.json must exist inside the tarball.
 const entries = []
 for (const field of ['main', 'module', 'types', 'react-native', 'source']) {
   if (pkg[field]) entries.push([field, pkg[field]])
@@ -87,7 +73,6 @@ for (const [label, target] of entries) {
   }
 }
 
-// Every relative specifier emitted into lib/ must resolve to a shipped file.
 function walk(dir) {
   const out = []
   for (const entry of readdirSync(dir)) {

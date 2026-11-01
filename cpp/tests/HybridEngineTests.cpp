@@ -7,7 +7,6 @@
 #include <thread>
 using namespace margelo::nitro;
 using namespace margelo::nitro::nitrolist;
-// Registration is the sole JSI behavior replaced by this host test.
 void HybridNitroListEngineSpec::loadHybridMethods() {}
 std::shared_ptr<ArrayBuffer> doubles(std::initializer_list<double> values) {
   auto out = std::make_shared<ArrayBuffer>(values.size() * sizeof(double));
@@ -166,7 +165,6 @@ int main() {
   int notifications = 0;
   engine.setOnRangeChange([&](double, double, double, double) {
     ++notifications;
-    // Callback reentrancy must not deadlock and must observe the final transaction.
     assert(engine.getTotalSize() > 0);
   });
   notifications = 0;
@@ -189,10 +187,9 @@ int main() {
                     empty, doubles({1,0,0,1}));
   assert(engine.getItemSize(0) == 200 && engine.getItemSize(1) == 300);
   engine.updateData(doubles({1,8,100,0,0,1,0,0,1,0,-1,0,0,0,0,0,0}), empty, empty, empty, empty);
-  assert(engine.getTotalSize() == 500); // obsolete data revision rejected
+  assert(engine.getTotalSize() == 500);
   notifications = 0;
   auto small = std::make_shared<ArrayBuffer>(12 * sizeof(double));
-  // Spare capacity in a reusable pairs buffer must never be applied.
   auto batch = doubles({0, 250, 1, 999});
   assert(engine.setItemSizesAndFill(batch, 1, 1, 2, small) == -1);
   auto* header = reinterpret_cast<double*>(small->data());
@@ -215,17 +212,17 @@ int main() {
   auto* snapshot = reinterpret_cast<double*>(full->data());
   assert(snapshot[9] == 50 && snapshot[1] == 550 && snapshot[13] == 250 && snapshot[15] == 300);
   assert(engine.getItemSize(1) == 300 && notifications == 0);
-  assert(engine.readSnapshot(sequence, full) == 2); // read retry does not mutate
+  assert(engine.readSnapshot(sequence, full) == 2);
   assert(engine.getTotalSize() == 550);
   assert(engine.setItemSizesAndFill(batch, 1, 1, 1, full) == -2);
   assert(engine.setItemSizesAndFill(batch, 1, 1, 2, full) == 2);
   assert(reinterpret_cast<double*>(full->data())[9] == 0);
   engine.setScrollOffsetAndFill(100, full);
-  assert(engine.readSnapshot(sequence, full) == -2); // newer publication wins
+  assert(engine.readSnapshot(sequence, full) == -2);
   engine.setOnRangeChange(std::nullopt);
   engine.updateData(doubles({1,0,100,0,0,1,0,0,3,-1,-1,0,0,0,0,0,0}), empty, empty, empty, empty);
   assert(engine.fillLayoutSlab(full) == 0);
-  assert(reinterpret_cast<double*>(full->data())[10] == 2); // valid empty is distinct
+  assert(reinterpret_cast<double*>(full->data())[10] == 2);
   testDisposeReleasesMemory();
   testPendingSnapshotReleasedByNextPublication();
   testScrollDirectionBiasesBuffers();

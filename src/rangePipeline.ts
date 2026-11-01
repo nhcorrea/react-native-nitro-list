@@ -163,8 +163,6 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     version: number,
     engineOffset: number,
   ): void => {
-    // Destination prewarm is additional content. The native animation still
-    // needs the live window at every intermediate offset.
     const direction = engineOffset - ctx.lastLiveEngineOffsetRef.current;
     ctx.lastLiveEngineOffsetRef.current = engineOffset;
     const latest = ctx.latestRangeRef.current;
@@ -217,7 +215,6 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       if (ctx.scrollActivityRef.current.programmaticAnimated)
         ctx.programmaticAnimatedScrollSeenRef.current = true;
     }
-    // Publish the complete geometry before callbacks can read it or reenter.
     if (
       versionChanged ||
       rangeChanged ||
@@ -247,7 +244,6 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     _version: number,
     _offset: number,
   ): void => {
-    // Async events are invalidation hints. Their offset/range can already be obsolete.
     const filled = ctx.fillSlab(start, end);
     if (filled == null) return;
     const offset = filled.slab[8];

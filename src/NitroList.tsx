@@ -323,9 +323,6 @@ function scheduleRevealTimeout(setRevealPending: (pending: boolean) => void): ()
 }
 
 function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHandle>) {
-  // Publish bindings before child layout effects. This phase only assigns refs;
-  // engine mutations and notifications remain in layout effects. Abandoned
-  // renders never execute these publications.
   const commitBindings: Array<() => void> = [];
   const stableCallbacks: StableCallbackBindings = [];
   useInsertionEffect(() => {
@@ -472,8 +469,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   }, [isHorizontal, requestedColumns]);
   const mainAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.rowGap ?? 0) : 0;
   const crossAxisGap = resolvedColumns > 1 ? (columnWrapperStyle?.columnGap ?? 0) : 0;
-  // A cache entry belongs to this list and constraint domain. Type labels
-  // alone do not establish compatibility across lists or mixed spans.
   const measurementCacheDomain = useMemo(() => ({}), [
     hasItemType, hasSeparator, dataVersion, fontScale,
     isHorizontal, resolvedColumns, mainAxisGap, crossAxisGap, hasItemLayoutOverride,
@@ -662,8 +657,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const layoutCacheCtxRef = useRef<LayoutCacheCtx | null>(null);
   if (layoutCacheCtxRef.current == null) {
-    // Pinned cells can read estimated geometry on the first render, before
-    // there is a published engine or live range.
     layoutCacheCtxRef.current = {engineRef: hybridRef,
       liveRangeRef: {current: {start: 0, end: -1}}, estimatedItemSize, itemCount};
   }
@@ -1396,8 +1389,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       hybridRef.current
     ) {
       hybridRef.current.setEstimatesFrozen(false);
-      // The range notification may arrive later; synchronous landing reads
-      // must already see the means applied by the thaw.
       invalidateLayoutCache();
       if (NITRO_LIST_PERF_COMPILED) NitroListPerfMonitor.recordJsiCall();
     }
@@ -2092,46 +2083,46 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const flushPendingMvcpAdjust = scrollHandlers.flushPendingMvcpAdjust;
   const handleOuterScroll = scrollHandlers.handleOuterScroll;
   const handleOuterLayout = scrollHandlers.handleOuterLayout;
-  const plan3MvcpSuspendedRef = useRef(false);
+  const momentumMvcpSuspendedRef = useRef(false);
   useEffect(
     () =>
-      Platform.OS === 'android' && NitroListDevFlags.experimentalPlan3E ? enableNativeTransitionDiagnostics() : undefined,
+      Platform.OS === 'android' && NitroListDevFlags.experimentalMomentumWindowPause ? enableNativeTransitionDiagnostics() : undefined,
     [],
   );
-  const restorePlan3Mvcp = () => {
-    if (!plan3MvcpSuspendedRef.current) return;
+  const restoreMomentumMvcp = () => {
+    if (!momentumMvcpSuspendedRef.current) return;
     scrollRef.current?.setNativeProps({
       maintainVisibleContentPosition: mvcpEnabled ? MVCP_SCROLL_VIEW_CONFIG : null,
     });
-    plan3MvcpSuspendedRef.current = false;
+    momentumMvcpSuspendedRef.current = false;
   };
-  const plan3ScrollBeginDrag = useStableCallback(stableCallbacks,
+  const momentumPauseScrollBeginDrag = useStableCallback(stableCallbacks,
     (event: Parameters<ScrollHandlersApi['handleScrollBeginDrag']>[0]) => {
-      if (NitroListDevFlags.experimentalPlan3E) store.set('plan3WindowPaused', false);
-      restorePlan3Mvcp();
+      if (NitroListDevFlags.experimentalMomentumWindowPause) store.set('momentumWindowPaused', false);
+      restoreMomentumMvcp();
       scrollHandlers.handleScrollBeginDrag(event);
     });
-  const plan3MomentumBegin = useStableCallback(stableCallbacks,
+  const momentumPauseBegin = useStableCallback(stableCallbacks,
     (event: Parameters<ScrollHandlersApi['handleMomentumScrollBegin']>[0]) => {
-      if (NitroListDevFlags.experimentalPlan3E) store.set('plan3WindowPaused', true);
-      if (NitroListDevFlags.experimentalPlan3C && mvcpEnabled && scrollRef.current != null) {
+      if (NitroListDevFlags.experimentalMomentumWindowPause) store.set('momentumWindowPaused', true);
+      if (NitroListDevFlags.experimentalMomentumMvcpPause && mvcpEnabled && scrollRef.current != null) {
         scrollRef.current.setNativeProps({maintainVisibleContentPosition: null});
-        plan3MvcpSuspendedRef.current = true;
+        momentumMvcpSuspendedRef.current = true;
       }
       scrollHandlers.handleMomentumScrollBegin(event);
     });
-  const plan3MomentumEnd = useStableCallback(stableCallbacks,
+  const momentumPauseEnd = useStableCallback(stableCallbacks,
     (event: Parameters<ScrollHandlersApi['handleMomentumScrollEnd']>[0]) => {
-      if (NitroListDevFlags.experimentalPlan3E) store.set('plan3WindowPaused', false);
-      restorePlan3Mvcp();
+      if (NitroListDevFlags.experimentalMomentumWindowPause) store.set('momentumWindowPaused', false);
+      restoreMomentumMvcp();
       scrollHandlers.handleMomentumScrollEnd(event);
     });
-  const plan3MvcpAblation = Platform.OS === 'android' &&
-    (NitroListDevFlags.experimentalPlan3C || NitroListDevFlags.experimentalPlan3E);
-  const handleScrollBeginDrag = plan3MvcpAblation ? plan3ScrollBeginDrag : scrollHandlers.handleScrollBeginDrag;
+  const momentumPauseActive = Platform.OS === 'android' &&
+    (NitroListDevFlags.experimentalMomentumMvcpPause || NitroListDevFlags.experimentalMomentumWindowPause);
+  const handleScrollBeginDrag = momentumPauseActive ? momentumPauseScrollBeginDrag : scrollHandlers.handleScrollBeginDrag;
   const handleScrollEndDrag = scrollHandlers.handleScrollEndDrag;
-  const handleMomentumScrollBegin = plan3MvcpAblation ? plan3MomentumBegin : scrollHandlers.handleMomentumScrollBegin;
-  const handleMomentumScrollEnd = plan3MvcpAblation ? plan3MomentumEnd : scrollHandlers.handleMomentumScrollEnd;
+  const handleMomentumScrollBegin = momentumPauseActive ? momentumPauseBegin : scrollHandlers.handleMomentumScrollBegin;
+  const handleMomentumScrollEnd = momentumPauseActive ? momentumPauseEnd : scrollHandlers.handleMomentumScrollEnd;
 
 
   const userOnScrollRef = useRef(userOnScroll);
@@ -3064,7 +3055,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       nativeMeasurementRevisionRef.current = null;
       itemTypes.forgetSent();
     }
-    // The data handler remaps old sources before a shrinking count is applied.
     const follows = !first && cellBridgeRef.current.followIndex >= 0 && stickToEndRef.current.wasAtEnd;
     stickImmediateRef.current = follows;
     try {

@@ -2,7 +2,6 @@ import type {CellRecord} from './cells';
 import {SNAPSHOT_HEADER, validSnapshot} from './layoutSnapshot';
 import {isCurrentMeasurement, type MeasurementRevision} from './measurementIdentity';
 
-/** Release the sampling cap only after its current measurements are consumed. */
 export function hasCoherentInitialSample(
   cells: Iterable<CellRecord>,
   items: ReadonlyArray<unknown>,

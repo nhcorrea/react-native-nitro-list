@@ -43,7 +43,7 @@ afterEach(() => {
   clearWarnDevOnceForTests();
 });
 
-describe('callback identity (fronteira 1.1)', () => {
+describe('callback identity', () => {
   const data = makeItems(30);
 
   function inlineProps(label: string): NitroListProps<string> {

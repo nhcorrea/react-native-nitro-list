@@ -48,8 +48,6 @@ export function flattenSections<ItemT, SectionT extends NitroSectionBase<ItemT>>
   for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
     const section = sections[sectionIndex];
     const sectionKey = section.key ?? String(sectionIndex);
-    // Locations belong to the previous immutable snapshot. Look up candidates
-    // before allocating wrappers; changes in earlier sections can shift flat indices.
     const oldStart = previous?.headerFlatIndex[sectionIndex];
     const oldItems = previous?.itemFlatIndex[sectionIndex];
     headerFlatIndex.push(rows.length);

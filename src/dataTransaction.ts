@@ -1,4 +1,3 @@
-/** Internal ABI, shared with HybridNitroListEngine::updateData. */
 export const DATA_CONFIG_SCHEMA = 1;
 export const DATA_CONFIG_LENGTH = 17;
 export function writeDataConfig(target: Float64Array, values: {

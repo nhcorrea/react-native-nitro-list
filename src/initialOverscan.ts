@@ -12,7 +12,6 @@ export type InitialOverscanDriver = {
   now: () => number;
 };
 
-/** Count-limited optional content. A timeout falls back; it never confirms a mount. */
 export class InitialOverscanAdmission {
   private active = true;
   private waiting = false;
@@ -50,7 +49,7 @@ export class InitialOverscanAdmission {
       });
     });
     if (this.waiting) this.cancelWait = cancel;
-    else cancel(); // Handles an already acknowledged marker without retaining its waiter.
+    else cancel();
   }
   stop(reason: string, notify = true): void {
     if (!this.active) return;

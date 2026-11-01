@@ -166,7 +166,6 @@ describe('numColumns grid (T30)', () => {
     harness.layout(400, 600);
     harness.measureAllCells(() => 100);
     await harness.settle(50);
-    // Available width 360; slots 240 + 120. Column gap is padding inside slots.
     expect(harness.handle.getLayout(0)).toEqual({x: 0, y: 0, width: 240, height: 100});
     expect(harness.handle.getLayout(1)).toEqual({x: 240, y: 0, width: 120, height: 100});
     expect(harness.handle.getLayout(2)).toEqual({x: 0, y: 108, width: 120, height: 100});

@@ -118,8 +118,6 @@ describe('imperative scroll integration', () => {
 
   function expectViewportCovered(): void {
     const offset = harness.lastScrollTop();
-    // Rectangles come from committed cell props in the test renderer. This is
-    // a React geometry oracle, not native presentation timing.
     const rectangles = [...harness.cellInstances().values()]
       .filter(cell => !cell.props.hidden)
       .map(cell => ({x: 0, y: cell.props.top, width: VIEWPORT_W, height: 100}));
@@ -279,8 +277,6 @@ describe('imperative scroll integration', () => {
     });
     harness.layout(VIEWPORT_W, VIEWPORT_H);
     await harness.settle(50);
-    // Feed the native trajectory explicitly; the next native command cancels
-    // the previous animation, so old scheduled echoes must not drive this test.
     harness.echoProgrammaticScrolls = false;
     const {act} = require('react-test-renderer') as typeof import('react-test-renderer');
     act(() => { harness.handle.scrollToOffset({offset: 20000, animated: true}); });
@@ -312,8 +308,6 @@ describe('imperative scroll integration', () => {
     expect(harness.observedNativeOffset).toBeGreaterThan(0);
     expect(harness.observedNativeOffset).toBeLessThan(20000);
     act(() => { replacement = harness.handle.scrollToOffset({offset: 1000, animated: false}); });
-    // Wait beyond every frame of the old animation. The observed event offset
-    // must stay at the replacement, independently of optimistic JS bookkeeping.
     await harness.settle(1000);
     await Promise.all([interrupted, replacement]);
     expect(harness.observedNativeOffset).toBe(1000);
@@ -437,8 +431,6 @@ describe('imperative scroll integration', () => {
     }, {asyncRangeDelivery: true});
     harness.layout(VIEWPORT_W, VIEWPORT_H);
     const height = (index: number) => index < count / 2 ? 120 : tailSize;
-    // The anchored tail starts at its estimate and gets its true height while
-    // the jump is preparing, changing the padding used by scrollToEnd.
     await drive(index => atEnd && index === target ? 120 : height(index), 3);
 
     let landing!: Promise<void>;

@@ -131,7 +131,7 @@ describe('public observability integration (T19)', () => {
   });
 });
 
-describe('render cascade (plan 2026-09-01, Fase E)', () => {
+describe('render cascade', () => {
   it('a scroll that moves the range re-renders the cells component, not the orchestrator', async () => {
     const harness = renderNitroList({
       data: makeItems(400),

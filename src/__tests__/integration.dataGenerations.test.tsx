@@ -253,11 +253,11 @@ const SCENARIOS: Scenario[] = [
     setup: enableOnAndroid({experimentalEarlyMountDispatch: true}),
   },
   {
-    name: 'the plan 3E dev flag',
+    name: 'the momentum window pause dev flag',
     stableKeys: false,
     extra: {},
     setup: () => {
-      enableOnAndroid({experimentalPlan3E: true})();
+      enableOnAndroid({experimentalMomentumWindowPause: true})();
       jest.spyOn(nativeScroll, 'setNativeTransitionDiagnostics').mockImplementation(() => {});
       jest.spyOn(nativeScroll, 'markNativeTransition').mockImplementation(() => {});
     },
@@ -281,7 +281,7 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
-describe('data generations (fronteira 1.7)', () => {
+describe('data generations', () => {
   let harness: NitroListHarness<Item> | undefined;
 
   beforeEach(() => {

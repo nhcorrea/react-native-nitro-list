@@ -33,16 +33,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      # OIDC (trusted publishing) needs npm >= 11.5.1 and the node 22 runner ships
-      # npm 10. Pinned to the major used locally, not `@latest`: `@latest` pulled
-      # in npm 12, which changed the shape of `npm pack --json` and broke the
-      # release mid-pipeline. Dropping this step entirely means moving the runner
-      # to node 24, whose bundled npm already speaks OIDC.
       - name: Use npm 11
         run: npm install -g npm@11
 
-      # Fails in seconds, before the suite, because the damage it prevents is a
-      # burned version number that npm never lets you reuse.
       - name: Verify the release baseline
         run: node scripts/verify-release-baseline.mjs
 

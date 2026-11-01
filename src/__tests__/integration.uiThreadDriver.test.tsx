@@ -143,7 +143,7 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-describe('UI-thread scroll driver (fronteira 1.3)', () => {
+describe('UI-thread scroll driver', () => {
   it('registers the scroll worklet when the list mounts in UI-thread mode', async () => {
     act(() => {
       renderer = create(element({experimentalUiThreadScroll: true}));

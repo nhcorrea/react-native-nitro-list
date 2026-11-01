@@ -15,7 +15,7 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-describe('engine memory (fronteira 1.6)', () => {
+describe('engine memory', () => {
   it('reports engine memory to the JS runtime only when the item count moves a lot', async () => {
     harness = renderNitroList({
       data: makeItems(100),

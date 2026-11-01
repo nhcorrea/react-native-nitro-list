@@ -135,7 +135,6 @@ void HybridNitroListEngine::updateData(const std::shared_ptr<ArrayBuffer>& confi
     horizontal_ = c[4] != 0;
     core_.setMeasurementEpsilon(c[6]);
     core_.setEstimate(std::max(0.0, c[2]));
-    // Preserve old tail sources until every surviving measurement has moved.
     if (count > itemCount_) core_.setItemCount(count);
     if (c[7] != 0) core_.invalidateItemSizesFrom(0, true);
     else if (remapCount > 0) core_.remapItemSizes(r, remapCount);
@@ -191,7 +190,6 @@ double HybridNitroListEngine::fillSnapshotLocked(double* out, int32_t capacity, 
     pendingSnapshot_.resize(required);
     target = pendingSnapshot_.data();
   }
-  // Offset eight leaves the core payload at offset twelve. Move only its header.
   const int32_t written = core_.fillLayoutSlab(target + 8, required - 8,
       scrollOffset_, mainViewportLocked(), drawDistance_, 1.0);
   if (written < 0) return -1;

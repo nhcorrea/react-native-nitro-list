@@ -33,7 +33,6 @@ export function measurementCacheKey(
 
 function pushSample(entry: CacheStats, sizeDp: number): void {
   if (entry.num === MAX_SAMPLES_PER_KEY) {
-    // Bounded effective weight with continued learning after sample 64.
     const delta = sizeDp - entry.mean;
     entry.mean += delta / MAX_SAMPLES_PER_KEY;
     entry.m2 = (1 - 1 / MAX_SAMPLES_PER_KEY) * (entry.m2 + delta * delta);

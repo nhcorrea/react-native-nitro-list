@@ -2,7 +2,6 @@
 #include <cstddef>
 #include <memory>
 namespace margelo::nitro {
-// Host-test transport only. Production engine and generated abstract spec are compiled unchanged.
 class HybridObject {
 public:
   explicit HybridObject(const char*) {}

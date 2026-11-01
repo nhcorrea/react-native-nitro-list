@@ -8,7 +8,7 @@ import React, {
 import {findNodeHandle, PixelRatio, Platform, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
 
 import {NitroListDevFlags} from './devFlags';
-import {markPlan3Publication} from './transitionDiagnostics';
+import {markMomentumPublication} from './transitionDiagnostics';
 import {checkDuplicateKeyDev, countNewKeysDev, maybeWarnRecycleItemsUnset, warnDevOnce} from './devWarnings';
 import {ListStore, useStoreValue, useStoreValues, type RangeState} from './listStore';
 import {MVCP_ANCHOR_BASES} from './mvcp';
@@ -221,8 +221,6 @@ export function focusedCellIndex(
     const host = record.host as unknown as ContainsHost | null;
     if (typeof host?.contains === 'function' && host.contains(focused)) {
       if (items == null || keyExtractor == null || items[identity.index] === identity.item) return identity.index;
-      // During a data remap the mounted record still belongs to the previous
-      // commit. Retain its key in the new data, rather than its stale index.
       const focusedKey = keyExtractor(identity.item, identity.index);
       if (identity.index < items.length && keyExtractor(items[identity.index], identity.index) === focusedKey) return identity.index;
       for (let index = 0; index < items.length; index++) {
@@ -276,7 +274,7 @@ export type CellPool = {
 export const MAX_PARKED_CELLS = 32;
 const PARKED_AWAY_OFFSET = -(2 ** 20);
 const CELLS_STORE_KEYS = [
-  'plan3WindowPaused',
+  'momentumWindowPaused',
   'range',
   'prewarmRange',
   'reserveRange',
@@ -797,7 +795,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     : null;
   const committedMarkerRef = useRef(marker);
   const requestCommit = (phase: 'measure' | 'layout' | 'passive') => {
-    if ((slotPublication || plan3Holding) && holding) return;
+    if ((slotPublication || momentumHolding) && holding) return;
     const commit = () => onCommit(range, prewarmRange, phase);
     if (slotPublication) publicationRef.current?.request(publicationToken, phase, commit);
     else commit();
@@ -901,9 +899,9 @@ export const NitroListCells = React.memo(function NitroListCells({
   };
   const nextElements = new Map<string, React.ReactElement<NitroListItemContainerProps>>();
   let nextPool: CellPool | null = null;
-  const plan3Holding = Platform.OS === 'android' && NitroListDevFlags.experimentalPlan3E &&
-    store.get('plan3WindowPaused') === true && heldOutputRef.current != null;
-  const holding = plan3Holding || (
+  const momentumHolding = Platform.OS === 'android' && NitroListDevFlags.experimentalMomentumWindowPause &&
+    store.get('momentumWindowPaused') === true && heldOutputRef.current != null;
+  const holding = momentumHolding || (
     dataItems != null &&
     dataItems !== items &&
     heldOutputRef.current != null &&
@@ -911,7 +909,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     rangeKeysMoved(metadataRef.current, items, range, keyExtractor));
   let renderedOutput: React.ReactElement | null = null;
   useInsertionEffect(() => {
-    markPlan3Publication(range.start, range.end, plan3Holding, store.get('plan3WindowPaused') === true);
+    markMomentumPublication(range.start, range.end, momentumHolding, store.get('momentumWindowPaused') === true);
     if (holding) return;
     metadataRef.current = nextMetadata;
     if (nextPool != null) poolRef.current = nextPool;
@@ -971,7 +969,6 @@ export const NitroListCells = React.memo(function NitroListCells({
               Number(getFixedItemSize != null),
           );
       }
-      // Retain only metadata from this committed window, with a fixed cap for alwaysRender.
       if (nextMetadata.size < 512) nextMetadata.set(i, metadata);
       if (seenRenderKeys != null) checkDuplicateKeyDev(seenRenderKeys, metadata.itemKey);
       const top = readItemOffset(i);
@@ -993,8 +990,6 @@ export const NitroListCells = React.memo(function NitroListCells({
     !hideRelatedCell && (stickyIndex == null || stickyIndex < 0) &&
     Number.isFinite(firstTop) && firstTop >= 0 && firstTop < CELL_ORIGIN_SEGMENT * 16;
   if (flow && focusedIndex >= 0) {
-    // Yoga needs logical child order. If retained hosts would move, preserve
-    // native focus by keeping their physical order in the absolute fallback.
     const committedOrder = new Map<string, number>();
     if (recycleItems) {
       const previousPool = poolRef.current;
@@ -1018,8 +1013,6 @@ export const NitroListCells = React.memo(function NitroListCells({
   const previousElements = sameCellSharedProps(elementCacheRef.current.shared, shared)
     ? elementCacheRef.current.elements
     : null;
-  // Keep the segmented coordinate origin integral. Yoga rounds local positions
-  // and absolute sizes separately; a fractional parent origin creates seams.
   if (flow) origin = nextCellOrigin(origin, firstTop);
   const cellOrigin = origin;
   const originStyle = flow ? [styles.flowOrigin, {top: cellOrigin, paddingTop: firstTop - cellOrigin}] : horizontal
@@ -1065,8 +1058,6 @@ export const NitroListCells = React.memo(function NitroListCells({
     }
     for (const slot of assigned.parked) {
       const element = previousPool.elements.get(slot)! as React.ReactElement<NitroListItemContainerProps>;
-      // Active flow elements may retain an old unused top. Refresh it before
-      // the element becomes an absolute parked cell or leaves the flow mode.
       let parkedTop = element.props.top;
       if (element.props.flow === true) {
         ensureLayout(element.props.index, element.props.index);
@@ -1080,7 +1071,6 @@ export const NitroListCells = React.memo(function NitroListCells({
           : React.cloneElement(element, near ? {parked: true, away: true, flow: false, origin, top: parkedTop} : {parked: true, flow: false, origin, top: parkedTop});
       nextPool.elements.set(slot, parkedElement);
     }
-    // Same parent/keys in both modes; active slots follow logical order in Yoga.
     const outputOrder = flow ? [...assigned.slots, ...assigned.parked] : nextPool.order;
     if (flow) nextPool.order = outputOrder;
     const children = new Array<React.ReactElement>(outputOrder.length);
@@ -1090,7 +1080,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     build.previous = null;
     renderedOutput = (
       <View ref={originClip.attach} collapsable={false} style={originStyle}
-        nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-research-flow-root' : 'nitrolist-research-absolute-root') : undefined}>
+        nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-flow-root' : 'nitrolist-absolute-root') : undefined}>
         {children}
       </View>
     );
@@ -1101,9 +1091,6 @@ export const NitroListCells = React.memo(function NitroListCells({
     renderedChildren[k] = buildCellElement(entries[k], entries[k].metadata.reactKey, build);
   }
   if (!flow && focusedIndex >= 0) {
-    // Moving an existing Android host can clear native input focus even when
-    // its key and parent stay the same. Absolute coordinates let retained
-    // children keep their committed physical order across data permutations.
     const remaining = new Map(nextElements);
     nextElements.clear();
     let position = 0;
@@ -1122,7 +1109,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   build.previous = null;
   renderedOutput = (
     <View ref={originClip.attach} collapsable={false} style={originStyle}
-        nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-research-flow-root' : 'nitrolist-research-absolute-root') : undefined}>
+        nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-flow-root' : 'nitrolist-absolute-root') : undefined}>
       {renderedChildren}
     </View>
   );

@@ -92,8 +92,6 @@ export class NitroListHarness<T = string> {
       const target = (this.horizontal ? x : y) ?? 0;
       this.scrollCommands.push({y: target, animated: animated === true});
       if (!this.echoProgrammaticScrolls) return;
-      // RN Android's immediate scrollTo leaves its ValueAnimator running.
-      // Another smooth scroll (or the Nitro command) cancels it explicitly.
       if (animated === true || Platform.OS !== 'android') this.cancelNativeAnimation();
       if (animated === true && this.animatedScrollFrames > 0) {
         const from = this.nativeOffset;

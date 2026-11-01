@@ -142,7 +142,6 @@ export function createViewability<T>(ctx: ViewabilityCtx<T>): () => void {
       previous.viewport !== viewportH || previous.padding !== ctx.effectivePaddingStartRef.current ||
       previous.interacted !== ctx.hasInteractedRef.current;
     if (subscriberChanged) viewable.clear();
-    // Time qualified against old keys/thresholds cannot qualify the new contract.
     if (subscriberChanged || dataChanged || configChanged) pending.clear();
 
     const committedRange = ctx.committedRangeRef.current;

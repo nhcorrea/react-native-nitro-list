@@ -5,7 +5,7 @@ import type {StickyPush} from './stickyCompute';
 export type RangeState = {start: number; end: number; layoutVersion: number};
 
 export interface ListStoreState {
-  plan3WindowPaused?: boolean;
+  momentumWindowPaused?: boolean;
   range: RangeState;
   prewarmRange: RangeState | null;
   reserveRange: RangeState | null;

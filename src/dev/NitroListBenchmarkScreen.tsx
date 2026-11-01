@@ -87,12 +87,12 @@ const DEV_FLAG_LABELS: Record<NitroListDevFlagKey, string> = {
   experimentalContiguousFlow: 'flow',
   experimentalSlotPublication: 'slots',
   experimentalCompactCell: 'compact',
-  experimentalPlan3A: 'p3a',
-  experimentalPlan3B: 'p3b',
-  experimentalPlan3C: 'p3c',
-  experimentalPlan3D: 'p3d',
-  experimentalPlan3E: 'p3e',
-  experimentalPlan3F: 'p3f',
+  experimentalReservedA: 'rsva',
+  experimentalReservedB: 'rsvb',
+  experimentalMomentumMvcpPause: 'mvpause',
+  experimentalReservedD: 'rsvd',
+  experimentalMomentumWindowPause: 'winpause',
+  experimentalReservedF: 'rsvf',
   benchViewRecycling: 'vr',
   benchPreparedText: 'pt',
 };
@@ -682,7 +682,6 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
       };
 
       try {
-        // Commit the chat data and anchor before issuing a scroll command.
         const committed = await new Promise<boolean>((resolve) => {
           const timeout = setTimeout(() => complete(false), LIST_READY_TIMEOUT_MS);
           const complete = (ready: boolean) => {
@@ -697,7 +696,6 @@ export function NitroListBenchmarkScreen({headerAccessory}: NitroListBenchmarkSc
         if (runAbortRef.current || !listRef.current) return cancelPreparation();
         if (!committed) throw new Error('chat preparation did not commit');
         await listRef.current.scrollToEnd(false);
-        // Let the native scroll event and remaining layout work settle.
         await delay(STI_REPOSITION_SETTLE_MS);
         if (runAbortRef.current || !listRef.current) return cancelPreparation();
       } catch (error) {

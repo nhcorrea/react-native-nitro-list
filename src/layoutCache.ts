@@ -233,7 +233,6 @@ export function createLayoutCache(ctx: LayoutCacheCtx): LayoutCacheApi {
       slab = nativeFloat64Array(Math.max(slab.length * 2, slab[11]));
       written = engine.readSnapshot(sequence, slab.buffer);
     }
-    // Another runtime may have published in between. Read current state; never replay a mutation.
     for (let attempt = 0; written < 0 && attempt < 3; ++attempt) {
       if (slab[11] > slab.length) slab = nativeFloat64Array(Math.max(slab.length * 2, slab[11]));
       written = engine.fillLayoutSlab(slab.buffer);

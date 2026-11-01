@@ -5,7 +5,7 @@ import {itemKey, makeItems, renderNitroList} from './helpers/harness';
 const VIEWPORT_W = 400;
 const VIEWPORT_H = 600;
 
-describe('work after unmount (fronteira 1.8)', () => {
+describe('work after unmount', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.spyOn(console, 'warn').mockImplementation(() => {});

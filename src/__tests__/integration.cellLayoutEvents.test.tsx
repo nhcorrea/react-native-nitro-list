@@ -28,7 +28,7 @@ function positionedView(cell: ReactTestInstance): ReactTestInstance {
   return cell.findAll((node) => node.type === View)[0];
 }
 
-describe('cell layout events (fronteira 1.5)', () => {
+describe('cell layout events', () => {
   it('measures on an unpositioned child, so moving a cell does not change the measured frame', async () => {
     harness = renderNitroList<unknown>({
       data: makeItems(20),

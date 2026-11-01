@@ -4,7 +4,6 @@ import {renderNitroList, type NitroListHarness} from './helpers/harness';
 
 type Msg = {id: string; type: string; text: string; height: number};
 
-// Match the on-device chat benchmark, including its long unchanged prefix.
 const COUNT = 5_000;
 const VIEWPORT_W = 400;
 const VIEWPORT_H = 800;
@@ -18,7 +17,7 @@ function messages(count: number): Msg[] {
   }));
 }
 
-describe('engine calls on a chat stream (fronteira 1.9)', () => {
+describe('engine calls on a chat stream', () => {
   let harness: NitroListHarness<Msg> | undefined;
   let msgs: Msg[];
 

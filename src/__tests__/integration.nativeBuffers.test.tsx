@@ -15,7 +15,7 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-describe('engine buffers (fronteira 1.2)', () => {
+describe('engine buffers', () => {
   it('passes only native buffers across scroll, measurement, data updates and reads', async () => {
     const data = makeItems(400);
     harness = renderNitroList({

@@ -14,7 +14,7 @@ function countCalls(log: number[][], name: string): number {
     name === 'remapItemSizes' ? c[13] > 0 && c[7] === 0 : c[7] !== 0).length;
 }
 
-describe('data changes with an identity-preserving prefix (plan 2026-09-01, Fase F)', () => {
+describe('data changes with an identity-preserving prefix', () => {
   let harness: NitroListHarness | null = null;
   let warnSpy: ReturnType<typeof jest.spyOn>;
   const flagsBefore = {...NitroListDevFlags};

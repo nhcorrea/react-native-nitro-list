@@ -7,7 +7,6 @@ export interface DataAnalysis {
   keysChanged: boolean;
 }
 
-/** One immutable description per render revision, published only on commit. */
 export function analyzeData<T>(
   previous: ReadonlyArray<T>,
   items: ReadonlyArray<T>,

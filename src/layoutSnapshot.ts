@@ -1,4 +1,3 @@
-/** Engine ABI. LayoutCore's private four-double slab is wrapped by this header. */
 export const SNAPSHOT_SCHEMA = 1;
 export const SNAPSHOT_HEADER = 12;
 export const SNAPSHOT_STATUS = {

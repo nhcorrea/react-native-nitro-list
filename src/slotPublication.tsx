@@ -40,7 +40,6 @@ function unpack(plan: React.ReactElement<RootProps>) {
   return {elements, root: {props, keys: [...elements.keys()]} satisfies RootSnapshot};
 }
 
-/** Prototype: immutable snapshots are published after a committed planner render. */
 export class SlotPlanStore {
   private root: RootSnapshot;
   private elements: Map<string, Element>;
@@ -88,9 +87,6 @@ export class SlotPlanStore {
       if (this.passive.get(key) !== element) this.pendingPassive.add(key);
     }
     count('publications');
-    // All snapshots change before the first notification. RN0.86 exports a
-    // compatibility batching shim; the layout-effect publication boundary,
-    // React's sync-store checks and native oracles remain part of the proof.
     unstable_batchedUpdates(() => {
       if (rootChanged) for (const listener of this.rootListeners) { count('notifications'); listener(); }
       for (const key of changed) for (const listener of this.listeners.get(key) ?? []) { count('notifications'); listener(); }

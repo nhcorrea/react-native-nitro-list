@@ -15,12 +15,10 @@ let diagnosticObserver: ((event: PreparationEvent) => void) | undefined;
 type QueueCounts = {retained: number; waiting: number; inFlight: number; prepared: number};
 const aggregateCounts: QueueCounts = {retained: 0, waiting: 0, inFlight: 0, prepared: 0};
 
-/** Numeric counters only; this never retains queues, tasks, items or resources. */
 export function getPreparationQueueCounts(): QueueCounts {
   return {...aggregateCounts};
 }
 
-/** Research instrumentation; unset during performance collection. */
 export function setPreparationObserver(observer?: (event: PreparationEvent) => void): void {
   diagnosticObserver = observer;
 }
@@ -35,7 +33,6 @@ type Task<T> = {
   queuedAtMs: number;
 };
 
-/** Optional work only: visible content never waits on this queue. */
 export class ResourcePreparationQueue<T> {
   private readonly queueId = ++nextQueueId;
   private readonly tasks = new Map<string, Task<T>>();
@@ -84,8 +81,6 @@ export class ResourcePreparationQueue<T> {
       this.note(task, task.stage === 'prepared' ? 'released' : 'cancelled');
       task.controller.abort();
     }
-    // Remove cancelled entries before admitting replacements. Running callbacks
-    // retain their capacity until they settle, even when their signal is aborted.
     for (let index = this.waiting.length - 1; index >= 0; --index) {
       const task = this.waiting[index];
       if (this.tasks.get(task.key) !== task) this.waiting.splice(index, 1);

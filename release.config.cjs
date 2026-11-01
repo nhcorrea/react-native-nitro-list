@@ -11,9 +11,6 @@ const sortMap = Object.fromEntries(
   rules.map((rule, index) => [rule.title, index])
 )
 
-/**
- * @type {import('semantic-release').GlobalConfig}
- */
 module.exports = {
   branches: ['main', { name: 'next', prerelease: 'next' }],
   plugins: [

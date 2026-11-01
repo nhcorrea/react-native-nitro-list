@@ -257,7 +257,6 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
 
 bool LayoutCore::resetItemSizes() {
   std::lock_guard<std::mutex> guard(mutex_);
-  // Keep the previous mean only as an estimate, never as current observations.
   resetTypeObservationsLocked();
   frozen_.clear();
   bool anyChanged = false;
@@ -314,8 +313,6 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
     return false;
   }
   const auto sourceLimit = static_cast<int32_t>(sizes_.size());
-  // JS has already validated keys/content. Specialize only a complete run of
-  // index pairs; no assumptions about index-dependent user callbacks are needed.
   int32_t oldStart = 0, newStart = 0;
   bool contiguous = pairCount <= sourceLimit && pairCount <= itemCount_ &&
       pairs[0] >= 0.0 && pairs[0] <= sourceLimit - pairCount &&
@@ -351,8 +348,6 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
       const uint8_t measured = mapped ? measured_[source] : 0;
       assign(i, measured != 0 ? sizes_[source] : estimateForTypeLocked(types_[i]), measured);
     };
-    // Traverse in the direction that reads overlapping sources before overwriting
-    // them, including when resetting destinations outside the surviving run.
     if (newStart > oldStart) {
       for (int32_t i = itemCount_; i-- > 0;) move(i);
     } else {
@@ -1118,7 +1113,6 @@ void LayoutCore::updateTypeMeanLocked(int32_t index, bool wasMeasured, float pre
         stats.mean = (stats.mean * stats.num - prevSize) / (stats.num - 1);
       }
       if (stats.num > 0) stats.num--;
-      // A last observation may remain a prior, but is not a measured item.
       if (stats.num == 0) stats.seeded = stats.mean > 0.0;
     } else if (stats.num > 0) {
       stats.mean += (static_cast<double>(newSize) - static_cast<double>(prevSize)) /
@@ -1200,9 +1194,6 @@ bool LayoutCore::applyTypeMeansLocked() {
 float LayoutCore::estimateForTypeLocked(uint16_t type) const {
   if (typeAverages_ && type < typeStats_.size() &&
       (typeStats_[type].num > 0 || typeStats_[type].seeded)) {
-    // Data transactions must use the same estimate already published to layout.
-    // The observed mean may have drifted below the sweep threshold; applying it
-    // during remap/type assignment would move every unmeasured item at once.
     const double published = typeStats_[type].appliedMean;
     return published > 0.0 ? roundToOctave(published) : estimate_;
   }

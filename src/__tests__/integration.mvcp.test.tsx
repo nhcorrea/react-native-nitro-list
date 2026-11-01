@@ -149,8 +149,6 @@ describe('maintainVisibleContentPosition integration', () => {
       items = [...makeItems(5, 20_000 + round * 5), ...items];
       harness.update({data: items});
       await harness.settle(50);
-      // Android ReactScrollView.onLayoutChange clamps to the new content extent
-      // before MaintainVisibleScrollPositionHelper applies the anchor delta.
       const nativeDelta = mvcpAnchorTop() - nativeAnchorBefore;
       const maxAfter = harness.handle.getTotalSize() - VIEWPORT_H;
       harness.scroll(Math.min(Math.min(before, maxAfter) + nativeDelta, maxAfter));

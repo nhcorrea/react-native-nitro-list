@@ -130,7 +130,7 @@ describe('stream benchmark measurement window', () => {
     expect(buttonRenders).toBe(before);
 
     await advance(450);
-    expect(buttonRenders).toBeGreaterThan(before); // The next HUD snapshot still updates the panel.
+    expect(buttonRenders).toBeGreaterThan(before);
     await press('Stop');
     await advance(50);
     expect(mockListProps.maintainScrollAtEnd).toBe(false);

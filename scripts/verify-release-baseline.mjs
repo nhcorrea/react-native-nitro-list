@@ -1,9 +1,3 @@
-// semantic-release derives the last released version from git tags. With no tags
-// it assumes a first release and publishes 1.0.0 — over a package already on 2.x.
-// That is not hypothetical: it happened on the first automated run of this repo,
-// because the history had never been tagged. Tags go missing for mundane reasons
-// too — a shallow checkout that skipped them, a deleted tag, a fresh fork — and
-// the damage is a burned version number that npm never lets you reuse.
 import {execFileSync} from 'node:child_process'
 import {readFileSync} from 'node:fs'
 import {dirname, join, resolve} from 'node:path'

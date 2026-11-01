@@ -23,7 +23,7 @@ function mountMeasured(props: Partial<Parameters<typeof renderNitroList<string>>
   return harness;
 }
 
-describe('scroll path churn (fronteira 1.8)', () => {
+describe('scroll path churn', () => {
   let harness: NitroListHarness | undefined;
 
   beforeEach(() => {

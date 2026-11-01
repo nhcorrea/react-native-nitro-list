@@ -121,8 +121,6 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     const buffer = typeBuffer;
     let changedFrom = sentCount < 0 ? 0 : ctx.itemCount;
     const map = ctx.typeIdMapRef.current;
-    // A newly allocated native type buffer is already zero-filled. Without a
-    // callback, the first preparation would only write the same zeros again.
     const initializedUniformTypes =
       NitroListDevFlags.experimentalUniformTypePreparation &&
       typedItems == null &&

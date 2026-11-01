@@ -32,14 +32,11 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
         viewTag != viewTag.toInt().toDouble() || !x.isFinite() || !y.isFinite()) return
     val context = NitroModules.applicationContext ?: return
     val tag = viewTag.toInt()
-    // All programmatic commands use this queue, including animations. Splitting
-    // cancellation and the next scroll between Nitro and Fabric would race.
     UiThreadUtil.runOnUiThread {
       val manager = UIManagerHelper.getUIManagerForReactTag(context, tag) ?: return@runOnUiThread
       val view = try {
         manager.resolveView(tag)
       } catch (_: IllegalViewOperationException) {
-        // The list can unmount between the JS call and execution on the UI thread.
         return@runOnUiThread
       }
       val density = PixelUtil.getDisplayMetricDensity().toDouble()
@@ -48,8 +45,6 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
       if (view is ViewGroup) PendingDestinations.clear(view)
       when (view) {
         is ReactScrollView -> {
-          // RN's abortAnimation stops OverScroller, but a programmatic smooth
-          // scroll uses a separate ValueAnimator that otherwise keeps writing.
           view.flingAnimator.cancel()
           view.abortAnimation()
           if (animated) view.reactSmoothScrollTo(destX, destY)
@@ -250,7 +245,6 @@ private object EagerMount {
 
   @Synchronized
   fun set(enabled: Boolean) {
-    // Cleanup cannot depend on a ReactContext that may already be invalidated.
     if (!enabled) {
       if (holders > 0 && --holders == 0) detach()
       return
@@ -273,7 +267,6 @@ private object EagerMount {
       val method = dispatcher.javaClass.getMethod("tryDispatchMountItems")
       val current = Generation(++nextGeneration, manager)
       current.run = Runnable {
-        // A revoked callback must not clear a new generation's scheduled bit.
         if (!current.active || generation !== current) {
           staleDrops.incrementAndGet()
           return@Runnable
@@ -313,7 +306,6 @@ private object EagerMount {
     current.manager.removeUIManagerEventListener(listener)
   }
 
-  // Temporary research diagnostics, accessed only by the example through reflection.
   @Synchronized fun diagnosticSnapshot(): Map<String, Long> = mapOf(
     "holders" to holders.toLong(), "generation" to nextGeneration,
     "attached" to if (generation != null) 1L else 0L,
