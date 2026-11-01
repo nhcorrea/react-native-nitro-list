@@ -63,7 +63,7 @@
     "codegen": "nitrogen && tsc --noEmit && bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs",
     "prepack": "bob build && node scripts/copy-nitrogen-assets.mjs && node scripts/verify-build.mjs && node scripts/verify-package.mjs",
     "test:engine": "sh scripts/test-engine.sh",
-    "test:cpp": "cd cpp && clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o /tmp/layoutcore-tests && /tmp/layoutcore-tests"
+    "test:cpp": "cd cpp && clang++ -std=c++20 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o /tmp/layoutcore-tests && /tmp/layoutcore-tests"
   },
   "keywords": [
     "react-native",

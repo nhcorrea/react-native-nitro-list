@@ -38,7 +38,7 @@ static int failures = 0;
   do {                                                                               \
     const float _a = (a);                                                            \
     const float _b = (b);                                                            \
-    if (std::abs(_a - _b) > 1e-4f) {                                                 \
+    if (!(std::abs(_a - _b) <= 1e-4f)) {                                             \
       std::printf("FAIL %s:%d: %s == %s (%f != %f)\n", __FILE__, __LINE__, #a, #b,   \
                   static_cast<double>(_a), static_cast<double>(_b));                 \
       failures++;                                                                    \

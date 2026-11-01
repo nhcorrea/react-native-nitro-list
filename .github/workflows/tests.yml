@@ -57,6 +57,6 @@ jobs:
       - name: Build and run with sanitizers
         working-directory: cpp
         run: |
-          clang++ -std=c++20 -fsanitize=address,undefined -Wall -Wextra \
+          clang++ -std=c++20 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra \
             -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o layoutcore-tests
           ./layoutcore-tests
