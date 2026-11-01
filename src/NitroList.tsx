@@ -235,6 +235,29 @@ const ADAPTIVE_EXIT_DP_S = 1000;
 const ADAPTIVE_EXIT_DELAY_MS = 250;
 const ENGINE_MEMORY_REPORT_MIN_ITEMS = 4096;
 
+function attachStickyScrollEvent(
+  target: unknown,
+  value: Animated.Value,
+  horizontal: boolean,
+  attachedRef: {current: boolean},
+): (() => void) | undefined {
+  let tag: number | null = null;
+  try {
+    tag = findNodeHandle(target as React.ComponentRef<typeof View>);
+  } catch {
+    tag = null;
+  }
+  if (tag == null) return undefined;
+  const attachment = (Animated as unknown as NativeEventAttacher).attachNativeEvent(target, 'onScroll', [
+    {nativeEvent: {contentOffset: horizontal ? {x: value} : {y: value}}},
+  ]);
+  attachedRef.current = true;
+  return () => {
+    attachedRef.current = false;
+    attachment.detach();
+  };
+}
+
 function watchZeroViewport(mainViewportRef: {current: number}, itemCount: number): () => void {
   let cancelled = false;
   let framesLeft = ZERO_VIEWPORT_WARNING_FRAMES;
@@ -1046,21 +1069,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     const node = scrollRef.current as (ScrollView & {getNativeScrollRef?: () => unknown}) | null;
     if (!nativeSticky || value == null || node == null) return;
     const target = node.getNativeScrollRef != null ? node.getNativeScrollRef() : node;
-    let tag: number | null = null;
-    try {
-      tag = findNodeHandle(target as React.ComponentRef<typeof View>);
-    } catch {
-      tag = null;
-    }
-    if (tag == null) return;
-    const attachment = (Animated as unknown as NativeEventAttacher).attachNativeEvent(target, 'onScroll', [
-      {nativeEvent: {contentOffset: isHorizontal ? {x: value} : {y: value}}},
-    ]);
-    stickyEventAttachedRef.current = true;
-    return () => {
-      stickyEventAttachedRef.current = false;
-      attachment.detach();
-    };
+    return attachStickyScrollEvent(target, value, isHorizontal, stickyEventAttachedRef);
   }, [nativeSticky, isHorizontal, scrollDriverKey]);
   const committedScrollDriverKeyRef = useRef(scrollDriverKey);
   commitBindings.push(() => {

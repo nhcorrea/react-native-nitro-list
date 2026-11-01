@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import React from 'react';
-import {View} from 'react-native';
+import {Animated, Platform, View} from 'react-native';
 import type {LayoutChangeEvent} from 'react-native';
 import {act, create, type ReactTestRenderer} from 'react-test-renderer';
 
@@ -19,6 +19,7 @@ type Scenario = {
   stableKeys: boolean;
   scrolls?: boolean;
   extra: Partial<NitroListProps<Item>>;
+  setup?: () => void;
   between?: (harness: NitroListHarness<Item>) => void;
   exercised?: (harness: NitroListHarness<Item>) => void;
 };
@@ -26,7 +27,23 @@ type Scenario = {
 const GENERATIONS = ['A', 'B', 'C', 'D', 'E'] as const;
 const CURRENT = ['E:array', 'E:first', 'E:last'];
 const ITEM_COUNT = 400;
-const calls = {viewable: 0, endReached: 0, firstVisible: 0};
+const calls = {viewable: 0, endReached: 0, firstVisible: 0, stickyAttached: 0};
+const ORIGINAL_PLATFORM = Platform.OS;
+
+function simulateAndroidNativeSticky(): void {
+  Platform.OS = 'android';
+  const reactNative = jest.requireActual<Record<string, unknown>>('react-native');
+  const original = reactNative.findNodeHandle as (target: unknown) => number | null;
+  jest
+    .spyOn(reactNative, 'findNodeHandle', 'get')
+    .mockReturnValue((target: {getScrollableNode?: unknown} | null) =>
+      typeof target?.getScrollableNode === 'function' ? 42 : original(target),
+    );
+  jest.spyOn(Animated as unknown as {attachNativeEvent: () => unknown}, 'attachNativeEvent').mockImplementation(() => {
+    calls.stickyAttached++;
+    return {detach: () => {}};
+  });
+}
 
 function makeGeneration(tag: string, stableKeys: boolean, count: number = ITEM_COUNT): Item[] {
   return Array.from({length: count}, (_, index) => ({
@@ -206,6 +223,15 @@ const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: 'native sticky headers on Android',
+    stableKeys: false,
+    extra: {stickyHeaderIndices: [0]},
+    setup: simulateAndroidNativeSticky,
+    exercised: () => {
+      expect(calls.stickyAttached).toBe(1);
+    },
+  },
+  {
     name: 'the ui-thread scroll driver',
     stableKeys: true,
     extra: {experimentalUiThreadScroll: true, stickyHeaderIndices: [0]},
@@ -221,6 +247,7 @@ describe('data generations (fronteira 1.7)', () => {
     calls.viewable = 0;
     calls.endReached = 0;
     calls.firstVisible = 0;
+    calls.stickyAttached = 0;
   });
 
   afterEach(() => {
@@ -229,10 +256,12 @@ describe('data generations (fronteira 1.7)', () => {
     jest.clearAllTimers();
     jest.useRealTimers();
     jest.restoreAllMocks();
+    Platform.OS = ORIGINAL_PLATFORM;
   });
 
   it.each(SCENARIOS)('keeps only the current generation reachable with $name', async (scenario) => {
     const refs: Refs = new Map();
+    scenario.setup?.();
     harness = runGenerations(refs, scenario);
     scenario.exercised?.(harness);
     expect(await reachableLabels(refs)).toEqual(CURRENT);
