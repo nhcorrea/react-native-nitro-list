@@ -460,6 +460,7 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 
 ## Development
 
+- [`example/`](./example) — a small app with a feed, a grid, sections and a chat. Its README shows how to run it.
 - `npm run codegen` — regenerate Nitro bindings (`nitrogen/generated`) after touching `src/NitroListEngine.nitro.ts`, then build.
 - `npm test` — Jest suite for the TS layer.
 - `npm run test:engine` — tests the production engine and generated Nitro interface with ASan/UBSan; only the host transport is stubbed.
