@@ -158,11 +158,13 @@ export type NitroListPrepareItem<T> = (info: {
   signal: AbortSignal;
 }) => void | Promise<void>;
 
+export type NitroListInternalProps<T> = {
+  prepareItem?: NitroListPrepareItem<T>;
+};
+
 export interface NitroListProps<T> {
   data: ReadonlyArray<T> | null | undefined;
   renderItem: NitroListRenderItem<T>;
-  /** Optional speculative resources. Release owned resources when signal aborts. */
-  prepareItem?: NitroListPrepareItem<T>;
   estimatedItemSize: number;
   keyExtractor?: (item: T, index: number) => string;
   getItemType?: (item: T, index: number) => string | number;

@@ -125,6 +125,7 @@ import type {UiThreadValues} from './uiThread';
 import {loadUiThread} from './uiThreadLoader';
 import type {
   NitroListHandle,
+  NitroListInternalProps,
   NitroListProps,
   NitroListRenderItem,
   NitroListRenderMode,
@@ -150,7 +151,6 @@ export type {
   NitroListMaintainVisibleContentPositionConfig,
   NitroListOnViewableItemsChanged,
   NitroListProps,
-  NitroListPrepareItem,
   NitroListRangeChangeEvent,
   NitroListRenderItem,
   NitroListRenderMode,
@@ -336,7 +336,6 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   const {
     data,
     renderItem,
-    prepareItem,
     estimatedItemSize,
     keyExtractor,
     getItemType,
@@ -390,6 +389,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     clipItemsToBounds,
     experimentalEagerMount,
   } = props;
+  const prepareItem = (props as NitroListInternalProps<T>).prepareItem;
 
   const resolvedRenderScrollComponent =
     renderScrollComponent ??
