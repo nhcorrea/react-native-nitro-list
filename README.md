@@ -125,7 +125,7 @@ Cells are keyed by item key. A new function identity never remounts a cell or di
 | `drawDistance` | `number` | How far beyond the viewport to render, in dp. Default `250`. Higher means fewer chances of blank space during fast scrolls at the cost of more mounted cells. At the top or bottom edge, the share that has nowhere to go on one side is rendered on the other. A list that mounts at the top without `getFixedItemSize` commits its first three items alone and fills the window on the next frame, so the first frame with content arrives sooner. |
 | `recycleItems` | `boolean` | Reuse mounted cells for items of the same type (`getItemType`) instead of unmounting the cell that left the window and mounting a new one. Default `false`. Scrolling creates far fewer native views. State held inside the component returned by `renderItem` survives when the cell moves to another item: derive it from `item`, or reset it with a `key` on that component. |
 | `clipItemsToBounds` | `boolean` | Android only. Clips each item to its own bounds, so items mounted outside the viewport are skipped when a frame is drawn instead of being replayed. Default `true`. Content that overflows an item (a badge with a negative offset, for example) is cut at the item's edge, and touches outside the item's bounds don't reach it. Set `false` if your items draw outside their bounds. |
-| `experimentalEagerMount` | `boolean` | Android only, experimental. Mounts each committed Fabric batch as soon as the UI thread is free, instead of at the start of the next frame, so the frame that follows only has to draw. Default `false`. It reaches React Native's mount queue through a private field (`FabricUIManager.mMountItemDispatcher`, checked on React Native 0.86); when the field is not found the prop does nothing. The queue is shared, so while a list with the prop is mounted every pending batch in the app is mounted early, in the same order. No effect on iOS, where Fabric already mounts this way. |
+| `experimentalEagerMount` | `boolean` | Android only, experimental. Mounts each committed Fabric batch as soon as the UI thread is free, instead of at the start of the next frame, so the frame that follows only has to draw. Default `false`. Checked on React Native 0.86; on a version where early mounting is unavailable, the prop does nothing. While a list with the prop is mounted, every pending batch in the app is mounted early, in the same order. No effect on iOS, where Fabric already mounts this way. |
 | `horizontal` | `boolean` | Row layout: offsets, measurements, sticky headers and viewability all run on the x axis (cells report their width). |
 | `numColumns` | `number` | Grid layout. Rows advance by their tallest cell. Changing the value re-measures everything, since cell width changed. Ignored when `horizontal`. |
 | `overrideItemLayout` | `(layout: { span }, item, index) => void` | Set a per-item column span by mutating `layout.span`. |
@@ -371,7 +371,7 @@ The `/dev` entry point also exports:
 
 - `NitroListBenchmarkScreen` — a ready-made harness you can mount on a dev route to run scripted scroll runs and print snapshots.
 - `NITRO_LIST_PERF_COMPILED` — whether instrumentation is active in this build.
-- `NitroListDevFlags` / `NITRO_LIST_DEV_FLAG_KEYS` — runtime kill-switches for internal scheduling fast-paths, all defaulting to on. Flip one at runtime to isolate a behaviour while debugging, without rebuilding.
+- `NitroListDevFlags` / `NITRO_LIST_DEV_FLAG_KEYS` — runtime switches for debugging. Keep the defaults in production.
 
 ## Development warnings
 
@@ -456,7 +456,7 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 | Rows re-render on every data update | Pass a stable `itemsAreEqual`, and keep `renderItem` referentially stable. |
 | `maintainVisibleContentPosition` does nothing | A custom `renderScrollComponent` isn't forwarding the prop, or has `removeClippedSubviews` on. |
 | Animations stutter while scrolling | See the Reanimated feature flags noted in [UI-thread scroll mode](#ui-thread-scroll-mode-experimental). |
-| Frames drop on Android when many text cells mount at once | Text layout on the UI thread. React Native's prepared text layout (`enablePreparedTextLayout` with `enableAndroidTextMeasurementOptimizations`) moves it off the mount: on a Redmi 10C, a fast fling through a grid without `recycleItems` went from 66 ms to 17 ms of frozen frames with it. NitroList was checked with these flags; they are internal and global in React Native 0.86–0.88, and already on by default in its main branch (the future 0.89). |
+| Frames drop on Android when many text cells mount at once | Text layout on the UI thread. Turn on `recycleItems`, and consider React Native's prepared text layout (`enablePreparedTextLayout` with `enableAndroidTextMeasurementOptimizations`), which moves text layout off the mount. NitroList works with these flags; they are app-wide React Native feature flags in 0.86–0.88 and already on by default in React Native's main branch. |
 
 ## Development
 
