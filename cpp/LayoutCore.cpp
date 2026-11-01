@@ -465,7 +465,9 @@ size_t LayoutCore::getMemoryFootprint() {
          typeStats_.capacity() * sizeof(TypeStats) + remapSizes_.capacity() * sizeof(float) +
          remapMeasured_.capacity() * sizeof(uint8_t) + blockBase_.capacity() * sizeof(double) +
          blockSum_.capacity() * sizeof(double) + blockDirty_.capacity() * sizeof(uint8_t) +
-         dirtyBlocks_.capacity() * sizeof(int32_t);
+         dirtyBlocks_.capacity() * sizeof(int32_t) +
+         frozen_.size() * (sizeof(std::pair<const int32_t, float>) + 2 * sizeof(void*)) +
+         frozen_.bucket_count() * sizeof(void*);
 }
 
 bool LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {

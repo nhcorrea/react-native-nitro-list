@@ -1754,6 +1754,32 @@ static void testEstimateRejectsNonFiniteAndNegative() {
   CHECK(core.getTotalSize() >= 0.0);
 }
 
+static void testFootprintCountsFrozenObservations() {
+  using margelo::nitro::nitrolist::LayoutCoreTestAccess;
+  const int count = 8192;
+  LayoutCore core;
+  core.setEstimate(100);
+  core.setTypeAverages(true);
+  core.setItemCount(count);
+  std::vector<double> pairs(static_cast<size_t>(count) * 2);
+  auto round = [&](double size) {
+    for (int i = 0; i < count; ++i) {
+      pairs[2 * i] = i;
+      pairs[2 * i + 1] = size;
+    }
+    core.setItemSizes(pairs.data(), count, 1);
+  };
+  round(100);
+  round(140);
+  const size_t before = core.getMemoryFootprint();
+  round(180);
+  CHECK(LayoutCoreTestAccess::frozenNodes(core) == static_cast<size_t>(count));
+  const size_t buckets = LayoutCoreTestAccess::frozenBuckets(core) * sizeof(void*);
+  CHECK(core.getMemoryFootprint() >= before + count * (sizeof(int32_t) + sizeof(float)) + buckets);
+  core.invalidateItemSizesFrom(0, true);
+  CHECK(core.getMemoryFootprint() >= before + LayoutCoreTestAccess::frozenBuckets(core) * sizeof(void*));
+}
+
 int main(int argc, char** argv) {
   if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
     return runReplay(argv[2]);
@@ -1803,6 +1829,7 @@ int main(int argc, char** argv) {
   testSeedTypeMeansRejectsNonFinite();
   testOversizedAndNonFiniteSizesAreRejected();
   testEstimateRejectsNonFiniteAndNegative();
+  testFootprintCountsFrozenObservations();
   if (failures == 0) {
     std::printf("OK — all LayoutCore tests passed\n");
     return 0;
