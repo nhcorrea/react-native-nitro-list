@@ -60,3 +60,5 @@ jobs:
           clang++ -std=c++20 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wall -Wextra \
             -I. tests/LayoutCoreTests.cpp LayoutCore.cpp -o layoutcore-tests
           ./layoutcore-tests
+      - name: Hybrid engine host tests
+        run: sh scripts/test-engine.sh
