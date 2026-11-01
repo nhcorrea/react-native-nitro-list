@@ -3,8 +3,8 @@ const rules = [
   { type: 'fix', release: 'patch', title: '🐛 Bug Fixes' },
   { type: 'perf', release: 'patch', title: '💨 Performance Improvements' },
   { type: 'refactor', release: 'patch', title: '🔄 Code Refactors' },
-  { type: 'docs', release: false, title: '📚 Documentation' },
-  { type: 'chore', release: false, title: '🛠️ Other changes' },
+  { type: 'docs', release: false, title: '📚 Documentation', hidden: true },
+  { type: 'chore', release: false, title: '🛠️ Other changes', hidden: true },
 ]
 
 const sortMap = Object.fromEntries(
@@ -32,9 +32,10 @@ module.exports = {
       {
         preset: 'conventionalcommits',
         presetConfig: {
-          types: rules.map(({ type, title }) => ({
+          types: rules.map(({ type, title, hidden = false }) => ({
             type,
             section: title,
+            hidden,
           })),
         },
         writerOpts: {
