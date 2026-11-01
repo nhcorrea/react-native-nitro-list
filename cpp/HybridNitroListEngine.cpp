@@ -3,14 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace margelo::nitro::nitrolist {
 
 namespace {
 
 int32_t toIndex(double value) {
-  if (!std::isfinite(value)) {
-    return 0;
+  if (std::isnan(value)) {
+    return std::numeric_limits<int32_t>::min();
   }
   return static_cast<int32_t>(std::clamp(value, -2147483648.0, 2147483647.0));
 }
@@ -93,15 +94,19 @@ void HybridNitroListEngine::setOnRangeChange(const std::optional<RangeCallback>&
 void HybridNitroListEngine::configure(double itemCount, double estimatedItemSize,
                                       double drawDistance, bool horizontal, double numColumns,
                                       double measurementEpsilon) {
+  if (!std::isfinite(itemCount) || !std::isfinite(estimatedItemSize) || !std::isfinite(drawDistance) ||
+      !std::isfinite(numColumns) || !std::isfinite(measurementEpsilon)) {
+    return;
+  }
   {
     std::lock_guard<std::mutex> guard(stateMutex_);
     ++sequence_;
-    drawDistance_ = drawDistance;
+    drawDistance_ = std::max(0.0, drawDistance);
     horizontal_ = horizontal;
     core_.setMeasurementEpsilon(measurementEpsilon);
     itemCount_ = std::max(0, toIndex(itemCount));
     core_.setItemCount(itemCount_);
-    core_.setEstimate(estimatedItemSize);
+    core_.setEstimate(std::max(0.0, estimatedItemSize));
     core_.setColumnCount(std::max(1, toIndex(numColumns)));
   }
   maybeEmitRange();
@@ -126,10 +131,10 @@ void HybridNitroListEngine::updateData(const std::shared_ptr<ArrayBuffer>& confi
   {
     std::lock_guard<std::mutex> guard(stateMutex_);
     if (c[8] < dataRevision_) return;
-    drawDistance_ = c[3];
+    drawDistance_ = std::max(0.0, c[3]);
     horizontal_ = c[4] != 0;
     core_.setMeasurementEpsilon(c[6]);
-    core_.setEstimate(c[2]);
+    core_.setEstimate(std::max(0.0, c[2]));
     // Preserve old tail sources until every surviving measurement has moved.
     if (count > itemCount_) core_.setItemCount(count);
     if (c[7] != 0) core_.invalidateItemSizesFrom(0, true);
@@ -149,6 +154,9 @@ void HybridNitroListEngine::updateData(const std::shared_ptr<ArrayBuffer>& confi
 }
 
 void HybridNitroListEngine::setScrollOffset(double offset) {
+  if (!std::isfinite(offset)) {
+    return;
+  }
   {
     std::lock_guard<std::mutex> guard(stateMutex_);
     if (offset == scrollOffset_) {
@@ -165,6 +173,7 @@ double HybridNitroListEngine::setScrollOffsetAndFill(double offset,
   int32_t capacity = 0;
   auto* out = const_cast<double*>(doublesOf(slab, capacity));
   if (out == nullptr || capacity < 12) return -1;
+  if (!std::isfinite(offset)) return -2;
   std::lock_guard<std::mutex> guard(stateMutex_);
   scrollOffset_ = offset;
   return fillSnapshotLocked(out, capacity);
@@ -243,6 +252,11 @@ void HybridNitroListEngine::setEstimatesFrozen(bool frozen) {
 }
 
 void HybridNitroListEngine::setViewport(double width, double height) {
+  if (!std::isfinite(width) || !std::isfinite(height)) {
+    return;
+  }
+  width = std::max(0.0, width);
+  height = std::max(0.0, height);
   {
     std::lock_guard<std::mutex> guard(stateMutex_);
     if (width == viewportWidth_ && height == viewportHeight_) {

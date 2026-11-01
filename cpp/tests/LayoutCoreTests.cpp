@@ -1741,6 +1741,19 @@ static void testOversizedAndNonFiniteSizesAreRejected() {
   CHECK_EQ_F(core.getTotalSize(), 940.0f);
 }
 
+static void testEstimateRejectsNonFiniteAndNegative() {
+  LayoutCore core;
+  core.setEstimate(100);
+  core.setItemCount(10);
+  CHECK(!core.setEstimate(NAN));
+  CHECK(!core.setEstimate(INFINITY));
+  core.setItemCount(20);
+  CHECK(std::isfinite(core.getTotalSize()));
+  CHECK_EQ_F(core.getTotalSize(), 2000.0f);
+  core.setEstimate(-50);
+  CHECK(core.getTotalSize() >= 0.0);
+}
+
 int main(int argc, char** argv) {
   if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
     return runReplay(argv[2]);
@@ -1789,6 +1802,7 @@ int main(int argc, char** argv) {
   testBlockedOffsetsLargeDifferential();
   testSeedTypeMeansRejectsNonFinite();
   testOversizedAndNonFiniteSizesAreRejected();
+  testEstimateRejectsNonFiniteAndNegative();
   if (failures == 0) {
     std::printf("OK — all LayoutCore tests passed\n");
     return 0;

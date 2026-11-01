@@ -156,8 +156,11 @@ void LayoutCore::setClockForTesting(ClockFn clock) {
 
 bool LayoutCore::setEstimate(double value) {
   std::lock_guard<std::mutex> guard(mutex_);
-  const float rounded = roundToOctave(value);
-  if (rounded == estimate_) {
+  if (!std::isfinite(value)) {
+    return false;
+  }
+  const float rounded = roundToOctave(std::max(0.0, value));
+  if (!std::isfinite(rounded) || rounded == estimate_) {
     return false;
   }
   estimate_ = rounded;

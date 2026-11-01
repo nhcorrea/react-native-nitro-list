@@ -1,6 +1,7 @@
 #include "HybridNitroListEngine.hpp"
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <thread>
@@ -71,6 +72,89 @@ static void testScrollDirectionBiasesBuffers() {
   const double top = 20600 / 100.0, bottom = (20600 + 600) / 100.0;
   assert(start >= 0 && end > start);
   assert(end - bottom > top - start);
+}
+
+static std::shared_ptr<ArrayBuffer> feedConfig(double estimate, double drawDistance) {
+  return doubles({1, 10000, estimate, drawDistance, 0, 1, 0, 1, 1, -1, -1, 0, 0, 0, 0, 0, 0});
+}
+
+static void testNonFiniteScrollAndViewportAreIgnored() {
+  HybridNitroListEngine engine;
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  engine.updateData(feedConfig(100, 250), empty, empty, empty, empty);
+  engine.setViewport(400, 600);
+  engine.setScrollOffset(50000);
+  auto slab = std::make_shared<ArrayBuffer>(64 * sizeof(double));
+  auto* h = reinterpret_cast<double*>(slab->data());
+  assert(engine.fillLayoutSlab(slab) == 12 && h[2] == 497 && h[3] == 508);
+  const size_t memory = engine.getExternalMemorySize();
+  const double nan = std::nan(""), inf = INFINITY;
+  for (double bad : {nan, inf, -inf}) {
+    engine.setScrollOffset(bad);
+    assert(engine.setScrollOffsetAndFill(bad, slab) == -2);
+    engine.setViewport(400, bad);
+    engine.setViewport(bad, 600);
+    assert(engine.fillLayoutSlab(slab) == 12 && h[2] == 497 && h[3] == 508 && h[8] == 50000);
+  }
+  assert(engine.getExternalMemorySize() == memory);
+}
+
+static double rangeStart(HybridNitroListEngine& engine, double* end) {
+  auto slab = std::make_shared<ArrayBuffer>(256 * sizeof(double));
+  auto* h = reinterpret_cast<double*>(slab->data());
+  assert(engine.fillLayoutSlab(slab) > 0);
+  *end = h[3];
+  return h[2];
+}
+
+static void testDataConfigClampsNegativeEstimateAndDraw() {
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  HybridNitroListEngine negativeEstimate;
+  negativeEstimate.updateData(feedConfig(-50, 0), empty, empty, empty, empty);
+  assert(negativeEstimate.getTotalSize() >= 0);
+  assert(negativeEstimate.getItemOffset(1) >= negativeEstimate.getItemOffset(0));
+  HybridNitroListEngine zeroDraw, negativeDraw;
+  zeroDraw.updateData(feedConfig(100, 0), empty, empty, empty, empty);
+  negativeDraw.updateData(feedConfig(100, -1000), empty, empty, empty, empty);
+  for (HybridNitroListEngine* engine : {&zeroDraw, &negativeDraw}) {
+    engine->setViewport(400, 600);
+    engine->setScrollOffset(50000);
+  }
+  double zeroEnd = 0, negativeEnd = 0;
+  const double zeroStart = rangeStart(zeroDraw, &zeroEnd);
+  const double negativeStart = rangeStart(negativeDraw, &negativeEnd);
+  assert(zeroStart == negativeStart && zeroEnd == negativeEnd);
+  HybridNitroListEngine configured;
+  configured.configure(10, 100, 0, false, 1, 0);
+  configured.configure(20, std::nan(""), std::nan(""), false, 1, 0);
+  assert(configured.getTotalSize() == 1000);
+  configured.configure(20, -50, -10, false, 1, 0);
+  assert(std::isfinite(configured.getTotalSize()) && configured.getTotalSize() >= 0);
+}
+
+static void testNonFiniteIndicesDoNotAliasItemZero() {
+  HybridNitroListEngine engine;
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  engine.updateData(doubles({1, 10, 100, 0, 0, 1, 0, 1, 1, -1, -1, 0, 0, 0, 0, 0, 0}), empty, empty, empty, empty);
+  engine.setItemSize(0, 333);
+  const double nan = std::nan(""), inf = INFINITY;
+  engine.setItemSize(nan, 777);
+  engine.setItemSize(inf, 777);
+  engine.setItemSize(-inf, 777);
+  assert(engine.getItemSize(0) == 333);
+  assert(engine.getItemSize(nan) == 0 && engine.getItemSize(inf) == 0 && engine.getItemSize(-inf) == 0);
+  assert(engine.countUnmeasured(0, inf) == 9);
+  auto before = std::make_shared<ArrayBuffer>(64 * sizeof(double));
+  auto after = std::make_shared<ArrayBuffer>(64 * sizeof(double));
+  std::memset(before->data(), 0, before->size());
+  std::memset(after->data(), 0, after->size());
+  engine.fillTypeStats(before);
+  auto types = std::make_shared<ArrayBuffer>(4 * sizeof(uint16_t));
+  auto* t = reinterpret_cast<uint16_t*>(types->data());
+  for (int k = 0; k < 4; k++) t[k] = 7;
+  engine.setItemTypesRange(nan, types);
+  engine.fillTypeStats(after);
+  assert(std::memcmp(before->data(), after->data(), before->size()) == 0);
 }
 
 int main() {
@@ -145,5 +229,8 @@ int main() {
   testDisposeReleasesMemory();
   testPendingSnapshotReleasedByNextPublication();
   testScrollDirectionBiasesBuffers();
+  testNonFiniteScrollAndViewportAreIgnored();
+  testDataConfigClampsNegativeEstimateAndDraw();
+  testNonFiniteIndicesDoNotAliasItemZero();
   std::cout << "Hybrid engine tests passed\n";
 }
