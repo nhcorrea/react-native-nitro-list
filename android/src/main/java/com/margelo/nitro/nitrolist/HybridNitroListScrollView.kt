@@ -391,32 +391,34 @@ private object ChildClipping {
   }
 }
 
-private object PendingDestinations {
+internal object PendingDestinations {
   private const val WINDOW_MS = 500L
 
-  private class Pending(val content: View, val listener: View.OnLayoutChangeListener)
+  private class Pending(val content: WeakReference<View>, val listener: View.OnLayoutChangeListener)
 
   private val pending = WeakHashMap<ViewGroup, Pending>()
 
   fun clear(view: ViewGroup) {
     val current = pending.remove(view) ?: return
-    current.content.removeOnLayoutChangeListener(current.listener)
+    current.content.get()?.removeOnLayoutChangeListener(current.listener)
   }
 
   fun hold(view: ViewGroup, x: Int, y: Int) {
     val content = view.getChildAt(0) ?: return
     val horizontal = view is ReactHorizontalScrollView
     val deadline = SystemClock.uptimeMillis() + WINDOW_MS
+    val target = WeakReference(view)
     val listener = View.OnLayoutChangeListener { _, _, _, _, _, oldLeft, oldTop, oldRight, oldBottom ->
+      val scroller = target.get() ?: return@OnLayoutChangeListener
       if (SystemClock.uptimeMillis() > deadline) {
-        clear(view)
+        clear(scroller)
         return@OnLayoutChangeListener
       }
-      val previousMax = if (horizontal) oldRight - oldLeft - view.width else oldBottom - oldTop - view.height
-      val current = if (horizontal) view.scrollX else view.scrollY
-      if (current != (if (horizontal) x else y) && current == maxOf(0, previousMax)) view.scrollTo(x, y)
+      val previousMax = if (horizontal) oldRight - oldLeft - scroller.width else oldBottom - oldTop - scroller.height
+      val current = if (horizontal) scroller.scrollX else scroller.scrollY
+      if (current != (if (horizontal) x else y) && current == maxOf(0, previousMax)) scroller.scrollTo(x, y)
     }
-    pending[view] = Pending(content, listener)
+    pending[view] = Pending(WeakReference(content), listener)
     content.addOnLayoutChangeListener(listener)
   }
 }

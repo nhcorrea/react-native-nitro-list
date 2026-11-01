@@ -78,6 +78,10 @@ android {
     buildConfig true
     prefab true
   }
+
+  testOptions {
+    unitTests.returnDefaultValues = true
+  }
 }
 
 dependencies {
@@ -86,6 +90,7 @@ dependencies {
     implementation project(":react-native-nitro-modules")
   }
   implementation "androidx.core:core-ktx:1.13.1"
+  testImplementation "junit:junit:4.13.2"
 }
 
 afterEvaluate {
