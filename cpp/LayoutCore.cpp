@@ -454,6 +454,7 @@ void LayoutCore::resetAll() {
 
 size_t LayoutCore::getMemoryFootprint() {
   std::lock_guard<std::mutex> guard(mutex_);
+  const size_t frozenBuckets = frozen_.bucket_count() > 1 ? frozen_.bucket_count() : 0;
   return sizes_.capacity() * sizeof(float) + offsets_.capacity() * sizeof(double) +
          measured_.capacity() * sizeof(uint8_t) + types_.capacity() * sizeof(uint16_t) +
          spans_.capacity() * sizeof(uint16_t) + rowStart_.capacity() * sizeof(int32_t) +
@@ -462,7 +463,7 @@ size_t LayoutCore::getMemoryFootprint() {
          blockSum_.capacity() * sizeof(double) + blockDirty_.capacity() * sizeof(uint8_t) +
          dirtyBlocks_.capacity() * sizeof(int32_t) +
          frozen_.size() * (sizeof(std::pair<const int32_t, float>) + 2 * sizeof(void*)) +
-         frozen_.bucket_count() * sizeof(void*);
+         frozenBuckets * sizeof(void*);
 }
 
 bool LayoutCore::setItemTypes(const uint16_t* types, int32_t count) {
