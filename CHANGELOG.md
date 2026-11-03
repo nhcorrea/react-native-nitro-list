@@ -1,3 +1,9 @@
+## [2.5.1](https://github.com/[secure]/react-native-nitro-list/compare/v2.5.0...v2.5.1) (2026-11-03)
+
+### 🐛 Bug Fixes
+
+* **android:** call getFlingAnimator explicitly so kotlin 2.2 compiles ([a06b54b](https://github.com/[secure]/react-native-nitro-list/commit/a06b54b7fcbe30d50d10707630dbe8073f3a611f))
+
 ## [2.5.0](https://github.com/[secure]/react-native-nitro-list/compare/v2.4.0...v2.5.0) (2026-11-02)
 
 ### ✨ Features
