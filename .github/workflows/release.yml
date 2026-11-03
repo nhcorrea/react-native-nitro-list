@@ -6,6 +6,11 @@ on:
       - main
       - next
   workflow_dispatch:
+    inputs:
+      publish_version:
+        description: 'Publish a version that was tagged but never reached npm (for example 2.5.1). Leave empty to run semantic-release.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ concurrency:
 jobs:
   release:
     name: Release
+    if: github.event_name != 'workflow_dispatch' || inputs.publish_version == ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -66,3 +72,88 @@ jobs:
           GIT_COMMITTER_NAME: ${{ github.actor }}
           GIT_COMMITTER_EMAIL: '${{ github.actor }}@users.noreply.github.com'
         run: npx semantic-release
+
+  publish-tagged:
+    name: Publish a tagged version
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ inputs.publish_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Use npm 11
+        run: npm install -g npm@11
+
+      - name: Check that HEAD is the tagged version and npm does not have it
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          current=$(node -p "require('./package.json').version")
+          if [ "$current" != "$VERSION" ]; then
+            echo "package.json is at $current, not $VERSION"
+            exit 1
+          fi
+          if ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "tag v$VERSION does not exist"
+            exit 1
+          fi
+          if ! git diff --quiet "v$VERSION" HEAD -- . ':(exclude).github'; then
+            echo "HEAD differs from v$VERSION outside .github:"
+            git diff --stat "v$VERSION" HEAD -- . ':(exclude).github'
+            exit 1
+          fi
+          published=$(npm view "$name@$VERSION" version 2>/dev/null || true)
+          if [ -n "$published" ]; then
+            echo "$name@$VERSION is already on npm"
+            exit 1
+          fi
+          echo "publishing $name@$VERSION from $(git rev-parse --short HEAD), same tree as v$VERSION outside .github"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Jest
+        run: npm test
+
+      - name: LayoutCore host tests
+        run: npm run test:cpp
+
+      - name: Build lib
+        run: npm run build
+
+      - name: Verify the tarball npm would publish
+        run: npm run verify:package
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public --tag latest
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 {f = 1; print; next} f && /^## \[/ {exit} f {print}' CHANGELOG.md \
+            | sed "s#github.com/\[secure\]/#github.com/${GITHUB_REPOSITORY_OWNER}/#g" > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "GitHub release v$VERSION already exists"
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md --verify-tag
+          fi
