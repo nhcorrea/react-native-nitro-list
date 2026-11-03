@@ -45,7 +45,7 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
       if (view is ViewGroup) PendingDestinations.clear(view)
       when (view) {
         is ReactScrollView -> {
-          view.flingAnimator.cancel()
+          view.getFlingAnimator().cancel()
           view.abortAnimation()
           if (animated) view.reactSmoothScrollTo(destX, destY)
           else {
@@ -54,7 +54,7 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
           }
         }
         is ReactHorizontalScrollView -> {
-          view.flingAnimator.cancel()
+          view.getFlingAnimator().cancel()
           view.abortAnimation()
           if (animated) view.reactSmoothScrollTo(destX, destY)
           else {
