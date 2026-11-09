@@ -95,6 +95,22 @@ const DEV_FLAG_LABELS: Record<NitroListDevFlagKey, string> = {
   experimentalReservedF: 'rsvf',
   benchViewRecycling: 'vr',
   benchPreparedText: 'pt',
+  experimentalSlot01: 'x01',
+  experimentalSlot02: 'x02',
+  experimentalSlot03: 'x03',
+  experimentalSlot04: 'x04',
+  experimentalSlot05: 'x05',
+  experimentalSlot06: 'x06',
+  experimentalSlot07: 'x07',
+  experimentalSlot08: 'x08',
+  experimentalSlot09: 'x09',
+  experimentalSlot10: 'x10',
+  experimentalSlot11: 'x11',
+  experimentalSlot12: 'x12',
+  experimentalSlot13: 'x13',
+  experimentalSlot14: 'x14',
+  experimentalSlot15: 'x15',
+  experimentalSlot16: 'x16',
 };
 
 interface BenchItem {

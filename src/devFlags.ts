@@ -37,6 +37,22 @@ export const NitroListDevFlags = {
   experimentalReservedF: false,
   benchViewRecycling: false,
   benchPreparedText: false,
+  experimentalSlot01: false,
+  experimentalSlot02: false,
+  experimentalSlot03: false,
+  experimentalSlot04: false,
+  experimentalSlot05: false,
+  experimentalSlot06: false,
+  experimentalSlot07: false,
+  experimentalSlot08: false,
+  experimentalSlot09: false,
+  experimentalSlot10: false,
+  experimentalSlot11: false,
+  experimentalSlot12: false,
+  experimentalSlot13: false,
+  experimentalSlot14: false,
+  experimentalSlot15: false,
+  experimentalSlot16: false,
 };
 
 export type NitroListDevFlagKey = keyof typeof NitroListDevFlags;
