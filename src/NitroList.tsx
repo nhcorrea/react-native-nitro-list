@@ -125,7 +125,6 @@ import type {UiThreadValues} from './uiThread';
 import {loadUiThread} from './uiThreadLoader';
 import type {
   NitroListHandle,
-  NitroListInternalProps,
   NitroListProps,
   NitroListRenderItem,
   NitroListRenderMode,
@@ -150,6 +149,7 @@ export type {
   NitroListItemLayout,
   NitroListMaintainVisibleContentPositionConfig,
   NitroListOnViewableItemsChanged,
+  NitroListPrepareItem,
   NitroListProps,
   NitroListRangeChangeEvent,
   NitroListRenderItem,
@@ -383,10 +383,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     alwaysRender,
     contentContainerStyle,
     recycleItems,
+    prepareItem,
     clipItemsToBounds,
     experimentalEagerMount,
   } = props;
-  const prepareItem = (props as NitroListInternalProps<T>).prepareItem;
 
   const resolvedRenderScrollComponent =
     renderScrollComponent ??
@@ -846,7 +846,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
   });
   useEffect(() => cancelFlingPrewarm, [cancelFlingPrewarm]);
   useEffect(() => {
-    if (NitroListDevFlags.experimentalResourcePreparation && prepareItem != null) scheduleIdleReserveRef.current();
+    if (prepareItem != null) scheduleIdleReserveRef.current();
     return () => { resourcePreparationRef.current?.clear(); };
   }, [items, dataVersion, prepareItem]);
 
@@ -2484,7 +2484,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     reserve.timer = null;
     if (reserve.admission != null || recycleItems !== true || itemCount === 0) return;
     const gate = mountGateRef.current!;
-    const prepareResources = NitroListDevFlags.experimentalResourcePreparation && prepareItem != null;
+    const prepareResources = prepareItem != null;
     if (!prepareResources && !gate.available) return;
     const activity = scrollActivityRef.current;
     const viewportH = mainViewportRef.current;

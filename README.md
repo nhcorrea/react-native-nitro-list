@@ -109,6 +109,7 @@ The differences worth knowing:
 | `autoFixedItemSizes` | `boolean` | Opt-in; needs `getItemType`. After at least 32 near-identical samples, a type can use a learned fixed size. The cache distinguishes tagged types, exact cross-axis constraints, font scale and the list/template. It does not share trust across list instances. `onLayout` verifies subsequent sizes and unfreezes a mismatch. Disabled with `overrideItemLayout`, where one type can span different widths. |
 | `itemsAreEqual` | `(prev, next, index) => boolean` | A new data array whose items are recreated-but-equal re-renders zero rows. The latest function is used, so it does not need a stable reference. Compare visual content only — the key is already equal by construction. |
 | `dataVersion` | `unknown` | Escape hatch for in-place mutation: change this value to force the list to treat `data` as changed even when the array identity did not. |
+| `prepareItem` | `({ item, index, key, signal }) => void \| Promise<void>` | Experimental; needs `recycleItems`. Called for the items just past the rendered window once the list is idle, so the app can warm up what they will need (an `Image.prefetch`, for example). With the prop set, the list calls it instead of mounting those items ahead of time, so they mount when they scroll into the window. At most two calls run at once and 32 items are tracked. `signal` aborts when an item leaves that range, when its data changes or when the list unmounts. Keep the function reference stable: a new function prepares every item again. |
 
 ### Callbacks
 

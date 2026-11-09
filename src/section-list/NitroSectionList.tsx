@@ -59,7 +59,8 @@ type OmittedListProps =
   | 'overrideItemLayout'
   | 'columnWrapperStyle'
   | 'onViewableItemsChanged'
-  | 'ItemSeparatorComponent';
+  | 'ItemSeparatorComponent'
+  | 'prepareItem';
 
 export type NitroSectionListProps<
   ItemT,

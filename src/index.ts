@@ -6,6 +6,7 @@ export type {
   NitroListItemLayout,
   NitroListMaintainVisibleContentPositionConfig,
   NitroListOnViewableItemsChanged,
+  NitroListPrepareItem,
   NitroListProps,
   NitroListRenderItem,
   NitroListRenderMode,
