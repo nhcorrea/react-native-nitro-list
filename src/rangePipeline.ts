@@ -54,6 +54,14 @@ export interface RangePipelineCtx {
   commitCounterRef: Ref<number>;
   pendingSizesRef: Ref<{count: number}>;
   cellBridgeRef: Ref<CellBridge>;
+  lastCommittedLayoutVersionRef: Ref<number>;
+  updateAlignPadRef: Ref<() => void>;
+  updateEndSpaceRef: Ref<() => void>;
+  recomputeSnapOffsetsRef: Ref<() => void>;
+  settleInitialTargetRef: Ref<() => void>;
+  syncOffsetAfterLayoutRef: Ref<() => void>;
+  fireOnLoadIfReadyRef: Ref<() => void>;
+  maybeExpandDrawDistanceRef: Ref<() => void>;
   checkEdgeCallbacksRef: Ref<() => void>;
   captureMvcpAnchorRef: Ref<(engineOffset: number) => void>;
   evaluateViewabilityRef: Ref<() => void>;
@@ -157,6 +165,39 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     admitSlice();
   };
 
+  let skippedLayoutVersion = -1;
+  const renderedLayoutUnchanged = (): boolean => {
+    const rendered = ctx.cellBridgeRef.current.renderedLayout;
+    if (
+      rendered == null ||
+      !ctx.layout.hasCurrentSnapshot() ||
+      ctx.pendingCommitRef.current > ctx.commitCounterRef.current ||
+      ctx.isPrewarmingRangeRef.current
+    ) {
+      return false;
+    }
+    let position = 0;
+    for (const range of rendered.ranges) {
+      ctx.layout.ensureLayout(range.start, range.end);
+      for (let index = range.start; index <= range.end; index++) {
+        if (ctx.readItemOffset(index) !== rendered.tops[position++]) return false;
+      }
+    }
+    return position === rendered.tops.length;
+  };
+  const commitLayoutRevision = (version: number): void => {
+    if (ctx.lastCommittedLayoutVersionRef.current === version) return;
+    ctx.lastCommittedLayoutVersionRef.current = version;
+    ctx.evaluateViewabilityRef.current();
+    ctx.updateAlignPadRef.current();
+    ctx.updateEndSpaceRef.current();
+    ctx.recomputeSnapOffsetsRef.current();
+    ctx.settleInitialTargetRef.current();
+    ctx.syncOffsetAfterLayoutRef.current();
+    ctx.fireOnLoadIfReadyRef.current();
+    ctx.maybeExpandDrawDistanceRef.current();
+  };
+
   const commitLiveRange = (
     start: number,
     end: number,
@@ -176,14 +217,24 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       ctx.latestRangeRef.current = stable;
     }
     const tracked = ctx.store.get('range');
-    if (tracked.start === stable.start && tracked.end === stable.end && tracked.layoutVersion === version) {
-      return;
+    if (tracked.start === stable.start && tracked.end === stable.end) {
+      if (tracked.layoutVersion === version) return;
+      if (NitroListDevFlags.experimentalSlot03) {
+        if (skippedLayoutVersion === version) return;
+        if (renderedLayoutUnchanged()) {
+          skippedLayoutVersion = version;
+          commitLayoutRevision(version);
+          return;
+        }
+      }
     }
     ctx.setRangeTracked({start: stable.start, end: stable.end, layoutVersion: version});
   };
 
   let lastSequence = -1;
   let lastDataRevision = -1;
+  let lastRawStart = 0;
+  let lastRawEnd = -1;
   let sequenceEngine: NitroListEngine | null = null;
   const consumeSnapshot = (slab: Float64Array, written: number, commitRange = true): boolean => {
     if (!validSnapshot(slab, written) || slab[6] !== ctx.dataRevisionRef.current) return false;
@@ -191,6 +242,8 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       sequenceEngine = ctx.engineRef.current;
       lastSequence = -1;
       lastDataRevision = -1;
+      lastRawStart = 0;
+      lastRawEnd = -1;
     }
     if (slab[7] <= lastSequence) return false;
     lastSequence = slab[7];
@@ -199,8 +252,11 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       end = slab[3],
       offset = slab[8];
     const versionChanged = version !== ctx.lastSeenLayoutVersionRef.current;
-    const rangeChanged =
-      start !== ctx.latestRangeRef.current.start || end !== ctx.latestRangeRef.current.end;
+    const rangeChanged = NitroListDevFlags.experimentalSlot03
+      ? start !== lastRawStart || end !== lastRawEnd
+      : start !== ctx.latestRangeRef.current.start || end !== ctx.latestRangeRef.current.end;
+    lastRawStart = start;
+    lastRawEnd = end;
     if (commitRange && (versionChanged || rangeChanged) && NITRO_LIST_PERF_COMPILED) {
       NitroListPerfMonitor.recordRangeEvent();
       if (end >= start) NitroListPerfMonitor.recordFirstRange(ctx.mountTimestampRef.current);

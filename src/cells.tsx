@@ -38,6 +38,7 @@ export type CellBridge = {
   cells: Set<CellRecord>;
   onLayoutSettled: () => void;
   onAutoFixedMismatch: (index: number, sizeDp: number, identity?: MeasurementIdentity) => void;
+  renderedLayout?: {ranges: ReadonlyArray<{start: number; end: number}>; tops: number[]} | null;
 };
 
 export type CellRecord = {
@@ -359,7 +360,7 @@ export function assignCellSlots(
   canPark: (slot: number) => boolean,
   occupantIndex?: (slot: number) => number | undefined,
   protectedIndex?: number,
-): {pool: CellPool; slots: number[]; parked: number[]} {
+): {pool: CellPool; slots: number[]; parked: number[]; stable?: boolean} {
   const focusedEntry = protectedIndex == null ? undefined : entries.find(entry => entry.index === protectedIndex);
   const focusedSlot = focusedEntry == null ? undefined : previous.slots.get(focusedEntry.metadata.reactKey);
   const focusPosition = focusedSlot == null ? -1 : previous.order.indexOf(focusedSlot);
@@ -487,7 +488,48 @@ export function assignCellSlots(
       pool.demand.delete(typeKey);
     }
   }
-  return {pool, slots, parked};
+  if (!NitroListDevFlags.experimentalSlot03) return {pool, slots, parked};
+  let stable = pending.length === 0 && protectedIndex == null;
+  if (stable) {
+    for (const [typeKey, count] of pool.demand) {
+      if (count !== windowDemand.get(typeKey) && !parkedHasType(parked, pool.types, typeKey)) {
+        stable = false;
+        break;
+      }
+    }
+  }
+  return {pool, slots, parked, stable};
+}
+
+type SlotPlan = {
+  pool: CellPool;
+  entries: ReadonlyArray<CellEntry>;
+  items: ReadonlyArray<unknown>;
+  revision: MeasurementRevision;
+  slots: number[];
+  parked: number[];
+};
+
+function reuseSlotPlan(
+  plan: SlotPlan | null,
+  previous: CellPool,
+  entries: ReadonlyArray<CellEntry>,
+  items: ReadonlyArray<unknown>,
+  revision: MeasurementRevision,
+): {pool: CellPool; slots: number[]; parked: number[]; stable?: boolean} | null {
+  if (
+    plan == null ||
+    plan.pool !== previous ||
+    plan.items !== items ||
+    plan.revision !== revision ||
+    plan.entries.length !== entries.length
+  ) {
+    return null;
+  }
+  for (let position = 0; position < entries.length; position++) {
+    if (plan.entries[position].metadata.reactKey !== entries[position].metadata.reactKey) return null;
+  }
+  return {pool: {...previous, elements: new Map()}, slots: plan.slots, parked: plan.parked, stable: true};
 }
 
 function parkedHasType(parked: ReadonlyArray<number>, types: ReadonlyMap<number, string>, typeKey: string): boolean {
@@ -927,15 +969,21 @@ export const NitroListCells = React.memo(function NitroListCells({
     typeKey: string;
     explicitFixedSize: number | undefined;
   };
+  const idle = NitroListDevFlags.experimentalSlot03;
+  const lazyRefs = NitroListDevFlags.experimentalLazyCellRefs || idle;
+  const slotPlanRef = useRef<SlotPlan | null>(null);
+  let nextPlan: SlotPlan | null = null;
+  const renderedTops: number[] | null =
+    idle && alwaysRender == null && alwaysRenderKeyIndices == null && firstPaintLimit <= 0 ? [] : null;
   const metadataRef = useRef<Map<number, CellMetadata> | null>(
-    NitroListDevFlags.experimentalLazyCellRefs ? null : new Map<number, CellMetadata>(),
+    lazyRefs ? null : new Map<number, CellMetadata>(),
   );
   if (metadataRef.current === null) metadataRef.current = new Map<number, CellMetadata>();
   const nextMetadata = new Map<number, CellMetadata>();
-  const poolRef = useRef<CellPool | null>(NitroListDevFlags.experimentalLazyCellRefs ? null : emptyCellPool());
+  const poolRef = useRef<CellPool | null>(lazyRefs ? null : emptyCellPool());
   if (poolRef.current === null) poolRef.current = emptyCellPool();
   const elementCacheRef = useRef<CellElementCache | null>(
-    NitroListDevFlags.experimentalLazyCellRefs ? null : {shared: null, elements: new Map()},
+    lazyRefs ? null : {shared: null, elements: new Map()},
   );
   if (elementCacheRef.current === null) elementCacheRef.current = {shared: null, elements: new Map()};
   const shared: CellSharedProps = {
@@ -980,6 +1028,10 @@ export const NitroListCells = React.memo(function NitroListCells({
     committedMarkerRef.current = marker;
     originRef.current = origin;
     shiftRef.current = shift;
+    if (idle) {
+      slotPlanRef.current = nextPlan;
+      cellBridge.renderedLayout = renderedTops == null || flow ? null : {ranges: mergedRanges, tops: renderedTops};
+    }
   });
   let origin = originRef.current;
   let shift = 0;
@@ -1033,6 +1085,7 @@ export const NitroListCells = React.memo(function NitroListCells({
       const top = readItemOffset(i);
       if (top < firstTop) firstTop = top;
       if (top > lastTop) lastTop = top;
+      if (renderedTops != null) renderedTops.push(top);
       entries.push({index: i, item, metadata, top});
     }
   }
@@ -1095,7 +1148,10 @@ export const NitroListCells = React.memo(function NitroListCells({
   };
   if (recycleItems) {
     const previousPool = poolRef.current;
-    const assigned = assignCellSlots(
+    const protectedIndex = flow && focusedIndex >= 0 ? focusedIndex : undefined;
+    const assigned = (idle && protectedIndex == null
+      ? reuseSlotPlan(slotPlanRef.current, previousPool, entries, items, measurementRevision)
+      : null) ?? assignCellSlots(
       previousPool,
       entries,
       (slot) => {
@@ -1110,9 +1166,19 @@ export const NitroListCells = React.memo(function NitroListCells({
       },
       (slot) =>
         (previousPool.elements.get(slot) as React.ReactElement<NitroListItemContainerProps> | undefined)?.props.index,
-      flow && focusedIndex >= 0 ? focusedIndex : undefined,
+      protectedIndex,
     );
     nextPool = assigned.pool;
+    if (assigned.stable === true) {
+      nextPlan = {
+        pool: nextPool,
+        entries,
+        items,
+        revision: measurementRevision,
+        slots: assigned.slots,
+        parked: assigned.parked,
+      };
+    }
     if (shifted) {
       const previousAt: PreviousCellProps = (position) =>
         previousElements == null
@@ -1267,7 +1333,7 @@ export function areItemContainerPropsEqual(
     prev.recycled === next.recycled &&
     prev.flow === next.flow &&
     Object.is(prev.dataVersion, next.dataVersion) &&
-    prev.parked === next.parked &&
+    (NitroListDevFlags.experimentalSlot03 || prev.parked === next.parked) &&
     prev.away === next.away &&
     prev.occupant === next.occupant &&
     prev.measurementRevision === next.measurementRevision &&
