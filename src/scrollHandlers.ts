@@ -2,10 +2,12 @@ import type {
   LayoutChangeEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  ScrollView,
 } from 'react-native';
 
 import {NitroListDevFlags} from './devFlags';
 import {MVCP_POSITION_EPSILON} from './measurement';
+import {setNativeScrollEventThrottle} from './nativeScroll';
 import {NITRO_LIST_PERF_COMPILED, NitroListPerfMonitor} from './PerfMonitor';
 import {
   classifyScrollEcho,
@@ -23,6 +25,12 @@ import {
 export const SCROLL_ECHO_EPSILON_DP = 0.5;
 export const SCROLL_COMMAND_ECHO_MAX_AGE_MS = 250;
 export const FLING_MIN_VELOCITY_DP_S = 1500;
+export const SCROLL_RHYTHM_RESTORE = 0;
+export const SCROLL_RHYTHM_SLOW_MS = 48;
+export const SCROLL_RHYTHM_SLOW_VELOCITY_DP_S = 750;
+export const SCROLL_RHYTHM_FAST_VELOCITY_DP_S = 1100;
+export const SCROLL_RHYTHM_TOUCH_HOLD_MS = 160;
+export const SCROLL_RHYTHM_CALM_EVENTS = 4;
 
 type Ref<V> = {current: V};
 type SharedValue<V> = {value: V};
@@ -98,6 +106,8 @@ export interface ScrollHandlersCtx {
   userOnScrollRef: Ref<
     ((e: NativeSyntheticEvent<NativeScrollEvent>) => void) | undefined
   >;
+  scrollRhythmEligible: boolean;
+  scrollViewRef: Ref<ScrollView | null>;
 }
 
 export interface ScrollHandlersApi {
@@ -142,6 +152,40 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     if (anchor != null) anchor.offset -= pending;
     ctx.applyMvcpCorrectionRef.current(pending);
   }
+  };
+
+  const rhythm = {slow: false, switches: 0, calm: 0, touchAt: 0};
+  const switchScrollRhythm = (slow: boolean): void => {
+    rhythm.slow = slow;
+    rhythm.switches++;
+    rhythm.calm = 0;
+    setNativeScrollEventThrottle(ctx.scrollViewRef.current, slow ? SCROLL_RHYTHM_SLOW_MS : SCROLL_RHYTHM_RESTORE);
+  };
+  const adaptScrollRhythm = (velocity: number, nowMs: number): void => {
+    const speed = Math.abs(velocity);
+    if (rhythm.slow) {
+      if (speed >= SCROLL_RHYTHM_FAST_VELOCITY_DP_S || !ctx.scrollActivityRef.current.dragging) {
+        switchScrollRhythm(false);
+      }
+      return;
+    }
+    if (!ctx.scrollActivityRef.current.dragging || rhythm.switches > 0 || speed >= SCROLL_RHYTHM_SLOW_VELOCITY_DP_S) {
+      rhythm.calm = 0;
+      return;
+    }
+    rhythm.calm++;
+    if (rhythm.calm >= SCROLL_RHYTHM_CALM_EVENTS && nowMs - rhythm.touchAt >= SCROLL_RHYTHM_TOUCH_HOLD_MS) {
+      switchScrollRhythm(true);
+    }
+  };
+  const beginScrollRhythmGesture = (): void => {
+    if (rhythm.slow) switchScrollRhythm(false);
+    rhythm.switches = 0;
+    rhythm.calm = 0;
+    rhythm.touchAt = Date.now();
+  };
+  const endScrollRhythmGesture = (): void => {
+    if (rhythm.slow) switchScrollRhythm(false);
   };
 
   const handleOuterScroll = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
@@ -199,6 +243,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     }
     velocitySample.offset = scrollY;
     velocitySample.time = nowMs;
+    if (ctx.scrollRhythmEligible || rhythm.slow) adaptScrollRhythm(velocitySample.velocity, nowMs);
     ctx.noteVelocityForAdaptive(velocitySample.velocity);
     ctx.lastScrollOffsetRef.current = scrollY;
     if (ctx.scrollOffsetSharedValue != null) {
@@ -273,6 +318,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     const activity = ctx.scrollActivityRef.current;
     activity.dragging = true;
     activity.momentum = false;
+    if (ctx.scrollRhythmEligible || rhythm.slow) beginScrollRhythmGesture();
     ctx.holdGestureEstimates();
     ctx.cancelFlingPrewarm();
     if (ctx.uiThreadDriverActiveRef.current && ctx.isPrewarmingRangeRef.current) {
@@ -293,6 +339,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   const handleScrollEndDrag = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
     const activity = ctx.scrollActivityRef.current;
     activity.dragging = false;
+    if (rhythm.slow) endScrollRhythmGesture();
     if (ctx.uiThreadDriverActiveRef.current) {
       ctx.lastScrollOffsetRef.current = ctx.isHorizontalRef.current
         ? e.nativeEvent.contentOffset.x

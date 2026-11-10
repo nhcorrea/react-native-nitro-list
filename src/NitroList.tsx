@@ -2672,6 +2672,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       setEngineViewport,
       updateSticky,
       userOnScrollRef,
+      scrollRhythmEligible:
+        NitroListDevFlags.experimentalSlot02 &&
+        Platform.OS === 'android' &&
+        userOnScroll == null &&
+        scrollOffsetSharedValue == null &&
+        experimentalUiThreadScroll !== true &&
+        !NitroListDevFlags.jsScrollEventThrottle1 &&
+        stickyIndices.length === 0,
+      scrollViewRef: scrollRef,
     } satisfies ScrollHandlersCtx);
   });
 

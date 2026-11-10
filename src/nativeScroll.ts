@@ -36,6 +36,14 @@ export function setNativeClipChildren(viewTag: number, enabled: boolean): void {
   androidScrollView.setClipChildren(viewTag, enabled);
 }
 
+export function setNativeScrollEventThrottle(view: ScrollView | null, throttleMs: number): void {
+  if (Platform.OS !== 'android' || view == null) return;
+  const tag = view.getScrollableNode?.();
+  if (typeof tag !== 'number' || !Number.isInteger(tag) || tag <= 0) return;
+  androidScrollView ??= NitroModules.createHybridObject<NitroListScrollView>('NitroListScrollView');
+  androidScrollView.setScrollEventThrottle(tag, throttleMs);
+}
+
 export function observeNativeMounts(
   markerTag: number,
   onMounted: (sequence: number, mountMs: number) => void,

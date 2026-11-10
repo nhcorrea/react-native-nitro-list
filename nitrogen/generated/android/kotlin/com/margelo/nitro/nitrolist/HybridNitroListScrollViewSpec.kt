@@ -41,6 +41,10 @@ abstract class HybridNitroListScrollViewSpec: HybridObject() {
   @Keep
   abstract fun setClipChildren(viewTag: Double, enabled: Boolean): Unit
   
+  @DoNotStrip
+  @Keep
+  abstract fun setScrollEventThrottle(viewTag: Double, throttleMs: Double): Unit
+  
   abstract fun observeMounts(markerTag: Double, onMounted: (sequence: Double, mountMs: Double) -> Unit): Double
   
   @DoNotStrip

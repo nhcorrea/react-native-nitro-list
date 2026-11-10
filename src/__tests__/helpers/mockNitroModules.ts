@@ -39,6 +39,16 @@ export function resetNativeClipForTests(): void {
   clipCalls.length = 0;
 }
 
+const throttleCalls: Array<[number, number]> = [];
+
+export function nativeScrollThrottleCallsForTests(): ReadonlyArray<[number, number]> {
+  return throttleCalls;
+}
+
+export function resetNativeScrollThrottleForTests(): void {
+  throttleCalls.length = 0;
+}
+
 export function nativeEagerMountHoldersForTests(): number {
   return eagerMountHolders;
 }
@@ -53,6 +63,9 @@ const nativeScrollView = {
   setClipChildren(tag: number, enabled: boolean): void {
     clipCalls.push([tag, enabled]);
     clippedViews.set(tag, enabled);
+  },
+  setScrollEventThrottle(tag: number, throttleMs: number): void {
+    throttleCalls.push([tag, throttleMs]);
   },
 };
 

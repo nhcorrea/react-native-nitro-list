@@ -17,6 +17,7 @@ import com.facebook.react.uimanager.UIManagerHelper
 import com.facebook.react.uimanager.common.UIManagerType
 import com.facebook.react.views.scroll.ReactHorizontalScrollView
 import com.facebook.react.views.scroll.ReactScrollView
+import com.facebook.react.views.scroll.ReactScrollViewHelper
 import com.margelo.nitro.NitroModules
 import java.lang.reflect.InvocationTargetException
 import java.lang.ref.WeakReference
@@ -76,6 +77,24 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
     ChildClipping.request(viewTag.toInt(), enabled)
   }
 
+  override fun setScrollEventThrottle(viewTag: Double, throttleMs: Double) {
+    if (!viewTag.isFinite() || viewTag <= 0 || viewTag > Int.MAX_VALUE ||
+        viewTag != viewTag.toInt().toDouble() || !throttleMs.isFinite() || throttleMs < 0 ||
+        throttleMs > 1000) return
+    val context = NitroModules.applicationContext ?: return
+    val tag = viewTag.toInt()
+    val throttle = throttleMs.toInt()
+    UiThreadUtil.runOnUiThread {
+      val manager = UIManagerHelper.getUIManagerForReactTag(context, tag) ?: return@runOnUiThread
+      val view = try {
+        manager.resolveView(tag)
+      } catch (_: IllegalViewOperationException) {
+        return@runOnUiThread
+      }
+      if (view != null) ScrollRhythm.apply(view, throttle)
+    }
+  }
+
   override fun observeMounts(markerTag: Double, onMounted: (sequence: Double, mountMs: Double) -> Unit): Double {
     if (!markerTag.isFinite() || markerTag <= 0 || markerTag > Int.MAX_VALUE) return -1.0
     return MountObserver.observe(markerTag.toInt(), onMounted).toDouble()
@@ -96,6 +115,21 @@ class HybridNitroListScrollView : HybridNitroListScrollViewSpec() {
 
   override fun markTransition(origin: Double, sequence: Double, revision: Double, count: Double, flags: Double) {
     TransitionDiagnostics.mark(origin.toInt(), sequence.toLong(), revision.toLong(), count.toInt(), flags.toInt())
+  }
+}
+
+private object ScrollRhythm {
+  private val originals = WeakHashMap<View, Int>()
+
+  fun apply(view: View, throttle: Int) {
+    val target = view as? ReactScrollViewHelper.HasScrollEventThrottle ?: return
+    if (throttle <= 0) {
+      val original = originals.remove(view) ?: return
+      target.scrollEventThrottle = original
+      return
+    }
+    val original = originals.getOrPut(view) { target.scrollEventThrottle }
+    target.scrollEventThrottle = maxOf(original, throttle)
   }
 }
 
