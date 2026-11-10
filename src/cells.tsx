@@ -3,6 +3,7 @@ import React, {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   useInsertionEffect,
 } from 'react';
 import {findNodeHandle, PixelRatio, Platform, StyleSheet, TextInput, View, type LayoutChangeEvent} from 'react-native';
@@ -272,6 +273,35 @@ export type CellPool = {
 };
 
 export const MAX_PARKED_CELLS = 32;
+export const FLOW_REST_MS = 500;
+
+type FlowRest = {start: number; end: number; suspended: boolean; timer: ReturnType<typeof setTimeout> | null};
+type FlowRestStep = {start: number; end: number; suspended: boolean; moved: boolean};
+
+function nextFlowRestTick(tick: number): number {
+  return tick + 1;
+}
+
+function commitFlowRest(rest: FlowRest, step: FlowRestStep, wake: React.Dispatch<React.SetStateAction<number>>): void {
+  rest.start = step.start;
+  rest.end = step.end;
+  rest.suspended = step.suspended;
+  if (!step.moved) return;
+  if (rest.timer != null) clearTimeout(rest.timer);
+  rest.timer = setTimeout(() => {
+    rest.timer = null;
+    rest.suspended = false;
+    wake(nextFlowRestTick);
+  }, FLOW_REST_MS);
+}
+
+function clearFlowRestOnUnmount(rest: FlowRest): () => void {
+  return () => {
+    if (rest.timer != null) clearTimeout(rest.timer);
+    rest.timer = null;
+  };
+}
+
 const PARKED_AWAY_OFFSET = -(2 ** 20);
 const CELLS_STORE_KEYS = [
   'momentumWindowPaused',
@@ -801,6 +831,11 @@ export const NitroListCells = React.memo(function NitroListCells({
     else commit();
   };
   const originRef = useRef(0);
+  const flowRestRef = useRef<FlowRest | null>(null);
+  if (flowRestRef.current === null) flowRestRef.current = {start: 0, end: -1, suspended: false, timer: null};
+  const flowRest = flowRestRef.current;
+  const [, setFlowRestTick] = useState(0);
+  useEffect(() => clearFlowRestOnUnmount(flowRest), [flowRest]);
   const originClipRef = useRef<OriginClip | null>(null);
   originClipRef.current ??= createOriginClip();
   const originClip = originClipRef.current;
@@ -899,6 +934,7 @@ export const NitroListCells = React.memo(function NitroListCells({
   };
   const nextElements = new Map<string, React.ReactElement<NitroListItemContainerProps>>();
   let nextPool: CellPool | null = null;
+  let flowRestStep: FlowRestStep | null = null;
   const momentumHolding = Platform.OS === 'android' && NitroListDevFlags.experimentalMomentumWindowPause &&
     store.get('momentumWindowPaused') === true && heldOutputRef.current != null;
   const holding = momentumHolding || (
@@ -922,6 +958,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     heldOutputRef.current = renderedOutput;
     committedMarkerRef.current = marker;
     originRef.current = origin;
+    if (flowRestStep != null) commitFlowRest(flowRest, flowRestStep, setFlowRestTick);
   });
   let origin = originRef.current;
   let renderedEntryCount = 0;
@@ -984,11 +1021,17 @@ export const NitroListCells = React.memo(function NitroListCells({
       ? readItemOffset(Math.max(0, range.start))
       : firstTop;
   if (Number.isFinite(anchorTop)) origin = nextCellOrigin(origin, anchorTop);
-  let flow = NitroListDevFlags.experimentalContiguousFlow && Platform.OS === 'android' &&
-    !horizontal && columnLayout == null && resolvedColumns === 1 && mergedRanges.length === 1 &&
+  const flowCapable = NitroListDevFlags.experimentalContiguousFlow && Platform.OS === 'android' &&
+    !horizontal && columnLayout == null && resolvedColumns === 1 &&
     alwaysRender == null && alwaysRenderKeyIndices == null && anchoredEndSpaceAnchor == null &&
-    !hideRelatedCell && (stickyIndex == null || stickyIndex < 0) &&
+    !hideRelatedCell && (stickyIndex == null || stickyIndex < 0);
+  let flow = flowCapable && mergedRanges.length === 1 &&
     Number.isFinite(firstTop) && firstTop >= 0 && firstTop < CELL_ORIGIN_SEGMENT * 16;
+  if (NitroListDevFlags.experimentalSlot01 && flowCapable && recycleItems && range != null && range.end >= range.start) {
+    const moved = flowRest.end >= flowRest.start && (range.start > flowRest.start || range.end < flowRest.end);
+    flowRestStep = {start: range.start, end: range.end, suspended: moved || flowRest.suspended, moved};
+    if (flowRestStep.suspended) flow = false;
+  }
   if (flow && focusedIndex >= 0) {
     const committedOrder = new Map<string, number>();
     if (recycleItems) {
