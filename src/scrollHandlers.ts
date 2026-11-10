@@ -162,6 +162,10 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     setNativeScrollEventThrottle(ctx.scrollViewRef.current, slow ? SCROLL_RHYTHM_SLOW_MS : SCROLL_RHYTHM_RESTORE);
   };
   const adaptScrollRhythm = (velocity: number, nowMs: number): void => {
+    if (!ctx.scrollRhythmEligible) {
+      if (rhythm.slow) switchScrollRhythm(false);
+      return;
+    }
     const speed = Math.abs(velocity);
     if (rhythm.slow) {
       if (speed >= SCROLL_RHYTHM_FAST_VELOCITY_DP_S || !ctx.scrollActivityRef.current.dragging) {

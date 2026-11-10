@@ -124,7 +124,7 @@ export class NitroListHarness<T = string> {
     this.horizontal = props.horizontal === true;
   }
 
-  private renderScrollComponent = (
+  renderScrollComponent = (
     scrollProps: NitroListRenderScrollComponentProps,
   ): React.ReactElement => {
     this.scrollProps = scrollProps;

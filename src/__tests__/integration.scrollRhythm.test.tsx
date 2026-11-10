@@ -1,12 +1,12 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import React from 'react';
-import {Platform, View} from 'react-native';
+import {Platform, ScrollView, View} from 'react-native';
 
 import {NitroListDevFlags} from '../devFlags';
 import {clearMeasurementCache} from '../measurementCache';
 import type {NitroListProps} from '../NitroList';
 import {SCROLL_RHYTHM_RESTORE, SCROLL_RHYTHM_SLOW_MS} from '../scrollHandlers';
-import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
+import {itemKey, makeItems, NitroListHarness} from './helpers/harness';
 import {nativeScrollThrottleCallsForTests, resetNativeScrollThrottleForTests} from './helpers/mockNitroModules';
 
 const SCROLL_TAG = 42;
@@ -35,7 +35,8 @@ describe('scroll event rhythm', () => {
   });
 
   async function mount(props: Partial<NitroListProps<string>> = {}): Promise<NitroListHarness> {
-    const mounted = renderNitroList({
+    const mounted = new NitroListHarness({
+      renderScrollComponent: undefined,
       data: makeItems(2000),
       renderItem: () => <View />,
       getFixedItemSize: () => 64,
@@ -44,6 +45,11 @@ describe('scroll event rhythm', () => {
       ...props,
     });
     harness = mounted;
+    const native = require('react-native') as typeof import('react-native');
+    const TestScrollView = React.forwardRef((scrollProps: React.ComponentProps<typeof ScrollView>, ref) =>
+      mounted.renderScrollComponent({...scrollProps, ref} as Parameters<typeof mounted.renderScrollComponent>[0]));
+    jest.spyOn(native as {ScrollView: unknown}, 'ScrollView', 'get').mockReturnValue(TestScrollView);
+    mounted.mount();
     mounted.layout(360, 628);
     await mounted.settle(50);
     return mounted;
@@ -110,6 +116,31 @@ describe('scroll event rhythm', () => {
     offset = drag(mounted, offset, 400, 640);
     mounted.momentumEnd(offset);
     expect(nativeScrollThrottleCallsForTests()).toEqual([]);
+  });
+
+  it('preserves the throttle chosen by a custom scroll component', async () => {
+    NitroListDevFlags.experimentalSlot02 = true;
+    const mounted = await mount({
+      renderScrollComponent: (props) => <ScrollView {...props} scrollEventThrottle={8} />,
+    });
+    mounted.beginDrag(0);
+    mounted.endDrag(drag(mounted, 0, 500, 640));
+    expect(nativeScrollThrottleCallsForTests()).toEqual([]);
+  });
+
+  it('restores the rhythm if the app begins listening during a slow drag', async () => {
+    NitroListDevFlags.experimentalSlot02 = true;
+    const mounted = await mount();
+    mounted.beginDrag(0);
+    const offset = drag(mounted, 0, 500, 640);
+    const onScroll = jest.fn();
+    mounted.update({onScroll});
+    drag(mounted, offset, 500, 48, 48);
+    expect(nativeScrollThrottleCallsForTests()).toEqual([
+      [SCROLL_TAG, SCROLL_RHYTHM_SLOW_MS],
+      [SCROLL_TAG, SCROLL_RHYTHM_RESTORE],
+    ]);
+    expect(onScroll).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the rhythm alone without the slot', async () => {

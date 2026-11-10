@@ -2688,6 +2688,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       scrollRhythmEligible:
         NitroListDevFlags.experimentalSlot02 &&
         Platform.OS === 'android' &&
+        renderScrollComponent == null &&
         userOnScroll == null &&
         scrollOffsetSharedValue == null &&
         experimentalUiThreadScroll !== true &&
