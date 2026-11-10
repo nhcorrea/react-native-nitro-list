@@ -525,6 +525,62 @@ type CellEntry = {
   top: number;
 };
 
+export const WINDOW_SHIFT_FOLD_LIMIT = CELL_ORIGIN_SEGMENT / 2;
+const WINDOW_SHIFT_EPSILON = 1 / 1024;
+
+type PreviousCellProps = (position: number) => NitroListItemContainerProps | undefined;
+
+function resolveWindowShift(
+  entries: CellEntry[],
+  previousAt: PreviousCellProps,
+  committed: number,
+  origin: number,
+): number {
+  let bestDelta = 0;
+  let bestLength = 0;
+  let runDelta = 0;
+  let runLength = 0;
+  for (let position = 0; position < entries.length; position++) {
+    const props = previousAt(position);
+    const entry = entries[position];
+    if (
+      props == null ||
+      props.parked === true ||
+      props.origin !== origin ||
+      props.index !== entry.index ||
+      props.item !== entry.item
+    ) {
+      continue;
+    }
+    const delta = entry.top - props.top - committed;
+    if (runLength > 0 && Math.abs(delta - runDelta) < WINDOW_SHIFT_EPSILON) {
+      runLength++;
+    } else {
+      runDelta = delta;
+      runLength = 1;
+    }
+    if (runLength > bestLength) {
+      bestLength = runLength;
+      bestDelta = runDelta;
+    }
+  }
+  if (bestLength === 0) return 0;
+  const next = Math.abs(bestDelta) < WINDOW_SHIFT_EPSILON ? committed : committed + bestDelta;
+  return Math.abs(next) > WINDOW_SHIFT_FOLD_LIMIT ? 0 : next;
+}
+
+function applyWindowShift(entries: CellEntry[], previousAt: PreviousCellProps, shift: number): void {
+  for (let position = 0; position < entries.length; position++) {
+    const entry = entries[position];
+    const relative = entry.top - shift;
+    const props = previousAt(position);
+    entry.top =
+      props != null && props.parked !== true && Math.abs(props.top - relative) < WINDOW_SHIFT_EPSILON
+        ? props.top
+        : relative;
+  }
+}
+
 type CellSharedProps = Pick<
   NitroListItemContainerProps,
   | 'recycled'
@@ -801,6 +857,7 @@ export const NitroListCells = React.memo(function NitroListCells({
     else commit();
   };
   const originRef = useRef(0);
+  const shiftRef = useRef(0);
   const originClipRef = useRef<OriginClip | null>(null);
   originClipRef.current ??= createOriginClip();
   const originClip = originClipRef.current;
@@ -922,8 +979,10 @@ export const NitroListCells = React.memo(function NitroListCells({
     heldOutputRef.current = renderedOutput;
     committedMarkerRef.current = marker;
     originRef.current = origin;
+    shiftRef.current = shift;
   });
   let origin = originRef.current;
+  let shift = 0;
   let renderedEntryCount = 0;
   if (holding) {
     return slotPublication
@@ -1020,6 +1079,8 @@ export const NitroListCells = React.memo(function NitroListCells({
     : Platform.OS === 'android' && NitroListDevFlags.experimentalTranslatedCellOrigin
       ? [styles.cellOrigin, {top: 0, transform: [{translateY: origin}]}]
       : [styles.cellOrigin, {top: origin}];
+  const shifted = NitroListDevFlags.experimentalSlot01 && !flow && !horizontal && columnLayout == null &&
+    resolvedColumns === 1 && !(Platform.OS === 'android' && NitroListDevFlags.experimentalTranslatedCellOrigin);
   const build: CellBuildContext = {
     shared,
     previous: previousElements,
@@ -1052,6 +1113,16 @@ export const NitroListCells = React.memo(function NitroListCells({
       flow && focusedIndex >= 0 ? focusedIndex : undefined,
     );
     nextPool = assigned.pool;
+    if (shifted) {
+      const previousAt: PreviousCellProps = (position) =>
+        previousElements == null
+          ? undefined
+          : (previousPool.elements.get(assigned.slots[position]) as
+              | React.ReactElement<NitroListItemContainerProps>
+              | undefined)?.props;
+      shift = resolveWindowShift(entries, previousAt, shiftRef.current, cellOrigin);
+      applyWindowShift(entries, previousAt, shift);
+    }
     for (let position = 0; position < entries.length; position++) {
       const slot = assigned.slots[position];
       nextPool.elements.set(slot, buildCellElement(entries[position], `slot-${slot}`, build));
@@ -1063,7 +1134,8 @@ export const NitroListCells = React.memo(function NitroListCells({
         ensureLayout(element.props.index, element.props.index);
         parkedTop = readItemOffset(element.props.index);
       }
-      const near = parkedTop >= firstTop && parkedTop <= lastTop;
+      const parkedPosition = shifted ? parkedTop + shift : parkedTop;
+      const near = parkedPosition >= firstTop && parkedPosition <= lastTop;
       const parkedElement = flow
         ? React.cloneElement(element, {parked: true, away: true, flow: false, origin: cellOrigin, top: parkedTop})
         : element.props.parked && element.props.flow !== true && (!near || element.props.away) && element.props.origin === origin && element.props.top === parkedTop
@@ -1079,12 +1151,19 @@ export const NitroListCells = React.memo(function NitroListCells({
     }
     build.previous = null;
     renderedOutput = (
-      <View ref={originClip.attach} collapsable={false} style={originStyle}
+      <View ref={originClip.attach} collapsable={false}
+        style={shifted ? [styles.cellOrigin, {top: cellOrigin + shift}] : originStyle}
         nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-flow-root' : 'nitrolist-absolute-root') : undefined}>
         {children}
       </View>
     );
     return slotPublication ? presentSlotPlan(renderedOutput, marker, publicationRef, publicationToken) : renderedOutput;
+  }
+  if (shifted) {
+    const previousAt: PreviousCellProps = (position) =>
+      previousElements?.get(entries[position].metadata.reactKey)?.props;
+    shift = resolveWindowShift(entries, previousAt, shiftRef.current, cellOrigin);
+    applyWindowShift(entries, previousAt, shift);
   }
   const renderedChildren = new Array<React.ReactElement>(entries.length);
   for (let k = 0; k < entries.length; k++) {
@@ -1108,7 +1187,8 @@ export const NitroListCells = React.memo(function NitroListCells({
   }
   build.previous = null;
   renderedOutput = (
-    <View ref={originClip.attach} collapsable={false} style={originStyle}
+    <View ref={originClip.attach} collapsable={false}
+        style={shifted ? [styles.cellOrigin, {top: cellOrigin + shift}] : originStyle}
         nativeID={NitroListDevFlags.experimentalContiguousFlow ? (flow ? 'nitrolist-flow-root' : 'nitrolist-absolute-root') : undefined}>
       {renderedChildren}
     </View>
