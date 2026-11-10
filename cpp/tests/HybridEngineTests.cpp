@@ -17,6 +17,22 @@ static std::shared_ptr<ArrayBuffer> config(double count, double revision, double
   return doubles({1, count, 100, 0, 0, 1, 0, reset, revision, -1, -1, 0, 0, 0, 0, 0, 0});
 }
 
+static void testLazyTypeMeansConfig() {
+  HybridNitroListEngine eager, lazy;
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  eager.updateData(config(1000, 1, 1), empty, empty, empty, empty);
+  lazy.updateData(doubles({1,1000,100,0,0,1,0,1,1,-1,-1,0,0,0,0,0,0,1}), empty, empty, empty, empty);
+  for (int i = 0; i < 50; ++i) {
+    eager.setItemSize(i, 130 + i); lazy.setItemSize(i, 130 + i);
+    assert(eager.getItemSize(999) == lazy.getItemSize(999));
+    assert(eager.getTotalSize() == lazy.getTotalSize());
+    assert(eager.getItemOffset(999) == lazy.getItemOffset(999));
+  }
+  lazy.updateData(doubles({1,1000,100,0,0,1,0,0,2,-1,-1,0,0,0,0,0,0,0}), empty, empty, empty, empty);
+  eager.setItemSize(60, 200); lazy.setItemSize(60, 200);
+  assert(eager.getTotalSize() == lazy.getTotalSize());
+}
+
 static void testDisposeReleasesMemory() {
   HybridNitroListEngine engine;
   auto empty = std::make_shared<ArrayBuffer>(0);
@@ -223,6 +239,7 @@ int main() {
   engine.updateData(doubles({1,0,100,0,0,1,0,0,3,-1,-1,0,0,0,0,0,0}), empty, empty, empty, empty);
   assert(engine.fillLayoutSlab(full) == 0);
   assert(reinterpret_cast<double*>(full->data())[10] == 2);
+  testLazyTypeMeansConfig();
   testDisposeReleasesMemory();
   testPendingSnapshotReleasedByNextPublication();
   testScrollDirectionBiasesBuffers();

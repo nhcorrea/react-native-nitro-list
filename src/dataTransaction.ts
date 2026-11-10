@@ -17,6 +17,7 @@ export function writeDataConfig(target: Float64Array, values: {
   spanCount: number;
   typeOffset: number;
   spanStart: number;
+  lazyTypeMeans?: boolean;
 }): void {
   target[0] = DATA_CONFIG_SCHEMA;
   target[1] = values.count;
@@ -35,4 +36,5 @@ export function writeDataConfig(target: Float64Array, values: {
   target[14] = values.spanCount;
   target[15] = values.typeOffset;
   target[16] = values.spanStart;
+  if (target.length > DATA_CONFIG_LENGTH) target[17] = Number(values.lazyTypeMeans === true);
 }

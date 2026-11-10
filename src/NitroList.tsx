@@ -1884,6 +1884,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       }
     }
     fixedDataBufferRef.current = fixedData;
+    const lazyTypeMeans = NitroListDevFlags.experimentalSlot04;
+    if (lazyTypeMeans && dataConfigBufferRef.current!.length === DATA_CONFIG_LENGTH) {
+      dataConfigBufferRef.current = nativeFloat64Array(DATA_CONFIG_LENGTH + 1);
+    }
     const config = dataConfigBufferRef.current!;
     const spansPending = columnLayout != null && (reset || columnLayout !== sentColumnLayoutRef.current);
     if (
@@ -1898,7 +1902,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       config[3] === effectiveDrawDistance &&
       config[4] === Number(isHorizontal) &&
       config[5] === resolvedColumns &&
-      config[6] === MEASUREMENT_EPSILON_DP
+      config[6] === MEASUREMENT_EPSILON_DP &&
+      (config.length === DATA_CONFIG_LENGTH || config[17] === Number(lazyTypeMeans))
     ) {
       return;
     }
@@ -1910,7 +1915,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       invalidateFrom, typeStart: prepared.start, typeCount: prepared.count, typeOffset: prepared.offset,
       fixedCount, remapCount: remap?.mappedCount ?? 0,
       spanCount: !spansPending ? 0 : itemCount - (reset ? 0 : columnLayout.changedFrom),
-      spanStart: reset || !spansPending ? 0 : columnLayout.changedFrom});
+      spanStart: reset || !spansPending ? 0 : columnLayout.changedFrom, lazyTypeMeans});
     engine.updateData(config.buffer, prepared.types.buffer,
       (columnLayout?.spans.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer(),
       fixedData.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer());

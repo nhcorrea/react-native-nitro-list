@@ -55,6 +55,7 @@ double defaultClockMs() {
 
 bool LayoutCore::setItemCount(int32_t count) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   if (count == itemCount_ || count < 0) {
     return false;
   }
@@ -156,6 +157,7 @@ void LayoutCore::setClockForTesting(ClockFn clock) {
 
 bool LayoutCore::setEstimate(double value) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   if (!std::isfinite(value)) {
     return false;
   }
@@ -193,8 +195,9 @@ bool LayoutCore::setItemSize(int32_t index, double size) {
   if (measured_[index] != 0 && std::abs(sizes_[index] - rounded) <= measurementEpsilon_) {
     return false;
   }
+  const float previousSize = hasPendingTypeMeans_ ? sizeWithPendingMeanLocked(index) : sizes_[index];
   recordMeasurementLocked(index, rounded);
-  geometryChanged_ = geometryChanged_ || sizes_[index] != rounded;
+  geometryChanged_ = geometryChanged_ || previousSize != rounded;
   sizes_[index] = rounded;
   markItemDirtyLocked(index);
   applyTypeMeansLocked();
@@ -243,8 +246,9 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
     if (measured_[idx] != 0 && std::abs(sizes_[idx] - rounded) <= measurementEpsilon_) {
       continue;
     }
+    const float previousSize = hasPendingTypeMeans_ ? sizeWithPendingMeanLocked(idx) : sizes_[idx];
     recordMeasurementLocked(idx, rounded);
-    geometryChanged_ = geometryChanged_ || sizes_[idx] != rounded;
+    geometryChanged_ = geometryChanged_ || previousSize != rounded;
     sizes_[idx] = rounded;
     markItemDirtyLocked(idx);
     anyChanged = true;
@@ -257,6 +261,7 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
 
 bool LayoutCore::resetItemSizes() {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   resetTypeObservationsLocked();
   frozen_.clear();
   bool anyChanged = false;
@@ -282,6 +287,7 @@ bool LayoutCore::resetItemSizes() {
 void LayoutCore::invalidateItemSizesFrom(int32_t start, bool clearPriors, const double* keptPairs,
                                          int32_t keptCount) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   start = std::clamp(start, 0, itemCount_);
   if (clearPriors) typeStats_.clear();
   std::vector<bool> kept;
@@ -309,6 +315,7 @@ void LayoutCore::invalidateItemSizesFrom(int32_t start, bool clearPriors, const 
 
 bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   if (pairs == nullptr || pairCount <= 0 || itemCount_ == 0) {
     return false;
   }
@@ -418,6 +425,8 @@ void LayoutCore::resetAll() {
   std::vector<uint16_t>().swap(spans_);
   std::vector<int32_t>().swap(rowStart_);
   std::vector<TypeStats>().swap(typeStats_);
+  std::vector<uint8_t>().swap(pendingTypeMeans_);
+  hasPendingTypeMeans_ = false;
   columnCount_ = 1;
   itemCount_ = 0;
   estimate_ = 0.0f;
@@ -458,7 +467,8 @@ size_t LayoutCore::getMemoryFootprint() {
   return sizes_.capacity() * sizeof(float) + offsets_.capacity() * sizeof(double) +
          measured_.capacity() * sizeof(uint8_t) + types_.capacity() * sizeof(uint16_t) +
          spans_.capacity() * sizeof(uint16_t) + rowStart_.capacity() * sizeof(int32_t) +
-         typeStats_.capacity() * sizeof(TypeStats) + remapSizes_.capacity() * sizeof(float) +
+         typeStats_.capacity() * sizeof(TypeStats) + pendingTypeMeans_.capacity() * sizeof(uint8_t) +
+         remapSizes_.capacity() * sizeof(float) +
          remapMeasured_.capacity() * sizeof(uint8_t) + blockBase_.capacity() * sizeof(double) +
          blockSum_.capacity() * sizeof(double) + blockDirty_.capacity() * sizeof(uint8_t) +
          dirtyBlocks_.capacity() * sizeof(int32_t) +
@@ -480,6 +490,7 @@ bool LayoutCore::setItemTypesRange(int32_t start, const uint16_t* types, int32_t
 }
 
 bool LayoutCore::assignTypesLocked(int32_t start, const uint16_t* types, int32_t count, bool replaceAll) {
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   if (static_cast<int32_t>(types_.size()) < itemCount_) {
     types_.resize(itemCount_, 0);
   }
@@ -526,6 +537,7 @@ int32_t LayoutCore::countUnmeasured(int32_t from, int32_t to) {
 
 bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double scale) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   if (!typeAverages_ || pairs == nullptr || pairCount <= 0) {
     return false;
   }
@@ -574,6 +586,7 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double sc
 
 void LayoutCore::setTypeAverages(bool enabled) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   if (typeAverages_ == enabled) {
     return;
   }
@@ -629,7 +642,7 @@ double LayoutCore::getSize(int32_t index) {
   if (index < 0 || index >= itemCount_) {
     return 0.0;
   }
-  return sizes_[index];
+  return hasPendingTypeMeans_ ? sizeWithPendingMeanLocked(index) : sizes_[index];
 }
 
 int32_t LayoutCore::getLayoutVersion() {
@@ -831,6 +844,7 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
 
 void LayoutCore::setColumnCount(int32_t columns) {
   std::lock_guard<std::mutex> guard(mutex_);
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
   const int32_t clamped = std::max(1, columns);
   if (clamped == columnCount_) {
     return;
@@ -911,6 +925,11 @@ void LayoutCore::rebuildBlockLocked(int32_t block, bool& anyChanged) {
   const int32_t last = std::min(itemCount_, first + kBlockSize);
   double local = 0.0;
   for (int32_t i = first; i < last; i++) {
+    if (hasPendingTypeMeans_) {
+      const float next = sizeWithPendingMeanLocked(i);
+      anyChanged = anyChanged || sizes_[i] != next;
+      sizes_[i] = next;
+    }
     if (offsets_[i] != local) {
       offsets_[i] = local;
       anyChanged = true;
@@ -1043,6 +1062,10 @@ void LayoutCore::ensureClean() {
       anyChanged = true;
     }
   }
+  if (hasPendingTypeMeans_) {
+    std::fill(pendingTypeMeans_.begin(), pendingTypeMeans_.end(), 0);
+    hasPendingTypeMeans_ = false;
+  }
   minDirtyIndex_ = INT32_MAX;
   wideDirtyIndex_ = INT32_MAX;
   for (const int32_t block : dirtyBlocks_) {
@@ -1162,8 +1185,30 @@ bool LayoutCore::applyTypeMeansLocked() {
   if (!anyDrifted) {
     return false;
   }
+  if (lazyTypeMeans_ && columnCount_ == 1) {
+    pendingTypeMeans_.resize(typeStats_.size(), 0);
+    for (size_t type = 0; type < typeStats_.size(); ++type) {
+      auto& stats = typeStats_[type];
+      if (stats.num > 0 && std::abs(stats.mean - stats.appliedMean) > typeMeanSweepBar(stats.appliedMean)) {
+        pendingTypeMeans_[type] = 1;
+        stats.appliedMean = stats.mean;
+      }
+    }
+    hasPendingTypeMeans_ = true;
+    for (int32_t first = 0; first < itemCount_; first += kBlockSize) {
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+      ++typeMeanVisits_;
+#endif
+      markItemDirtyLocked(first);
+    }
+    // A dirty block establishes whether geometry actually changed when read.
+    return itemCount_ > 0;
+  }
   bool anyChanged = false;
   for (int32_t i = 0; i < itemCount_; i++) {
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+    ++typeMeanVisits_;
+#endif
     if (measured_[i] != 0) {
       continue;
     }
@@ -1190,6 +1235,32 @@ bool LayoutCore::applyTypeMeansLocked() {
     }
   }
   return anyChanged;
+}
+
+void LayoutCore::setLazyTypeMeans(bool enabled) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (lazyTypeMeans_ == enabled) return;
+  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  lazyTypeMeans_ = enabled;
+  if (!enabled) std::vector<uint8_t>().swap(pendingTypeMeans_);
+}
+
+float LayoutCore::sizeWithPendingMeanLocked(int32_t index) const {
+  const auto type = types_[index];
+  if (measured_[index] == 0 && type < pendingTypeMeans_.size() && pendingTypeMeans_[type]) {
+    return roundToOctave(typeStats_[type].appliedMean);
+  }
+  return sizes_[index];
+}
+
+void LayoutCore::materializeTypeMeansLocked() {
+  for (int32_t i = 0; i < itemCount_; ++i) {
+    const float next = sizeWithPendingMeanLocked(i);
+    geometryChanged_ = geometryChanged_ || sizes_[i] != next;
+    sizes_[i] = next;
+  }
+  std::fill(pendingTypeMeans_.begin(), pendingTypeMeans_.end(), 0);
+  hasPendingTypeMeans_ = false;
 }
 
 float LayoutCore::estimateForTypeLocked(uint16_t type) const {

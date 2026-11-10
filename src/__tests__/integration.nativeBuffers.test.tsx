@@ -1,6 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 
 import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
+import {NitroListDevFlags} from '../devFlags';
 import {nativeArrayBufferAllocationsForTests} from './helpers/mockNitroModules';
 
 let harness: NitroListHarness | undefined;
@@ -10,12 +11,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  NitroListDevFlags.experimentalSlot04 = false;
   harness?.unmount();
   harness = undefined;
   jest.useRealTimers();
 });
 
 describe('engine buffers', () => {
+  it('extends the config only for slot 04 and can turn it off again', () => {
+    harness = renderNitroList({data: makeItems(100), estimatedItemSize: 50, renderItem: () => null});
+    expect(harness.mirror.dataCommits.at(-1)?.length).toBe(17);
+    NitroListDevFlags.experimentalSlot04 = true;
+    harness.update({estimatedItemSize: 51});
+    expect(harness.mirror.dataCommits.at(-1)?.length).toBe(18);
+    expect(harness.mirror.dataCommits.at(-1)?.[17]).toBe(1);
+    NitroListDevFlags.experimentalSlot04 = false;
+    harness.update({estimatedItemSize: 52});
+    expect(harness.mirror.dataCommits.at(-1)?.[17]).toBe(0);
+    expect(harness.mirror.jsBuffers).toEqual([]);
+  });
+
   it('passes only native buffers across scroll, measurement, data updates and reads', async () => {
     const data = makeItems(400);
     harness = renderNitroList({

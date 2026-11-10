@@ -121,7 +121,7 @@ void HybridNitroListEngine::updateData(const std::shared_ptr<ArrayBuffer>& confi
   const auto* s = shortsOf(spans, spansCapacity);
   const auto* f = doublesOf(fixedSizes, fixedCapacity);
   const auto* r = doublesOf(remap, remapCapacity);
-  if (c == nullptr || configCount != 17 || c[0] != 1) return;
+  if (c == nullptr || (configCount != 17 && configCount != 18) || c[0] != 1) return;
   for (int32_t i = 0; i < configCount; ++i) if (!std::isfinite(c[i])) return;
   const int32_t count = std::max(0, toIndex(c[1]));
   const int32_t typeCount = toIndex(c[11]), fixedCount = toIndex(c[12]);
@@ -131,6 +131,7 @@ void HybridNitroListEngine::updateData(const std::shared_ptr<ArrayBuffer>& confi
   {
     std::lock_guard<std::mutex> guard(stateMutex_);
     if (c[8] < dataRevision_) return;
+    if (configCount == 18) core_.setLazyTypeMeans(c[17] != 0);
     drawDistance_ = std::max(0.0, c[3]);
     horizontal_ = c[4] != 0;
     core_.setMeasurementEpsilon(c[6]);

@@ -14,6 +14,9 @@ using margelo::nitro::nitrolist::LayoutCore;
 
 namespace margelo::nitro::nitrolist {
 struct LayoutCoreTestAccess {
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+  static uint64_t meanVisits(LayoutCore& core) { return core.typeMeanVisits_; }
+#endif
   static size_t frozenNodes(LayoutCore& core) {
     std::lock_guard<std::mutex> guard(core.mutex_);
     return core.frozen_.size();
@@ -1775,10 +1778,105 @@ static void testFootprintCountsFrozenObservations() {
   CHECK(core.getMemoryFootprint() >= before + LayoutCoreTestAccess::frozenBuckets(core) * sizeof(void*));
 }
 
+// Same public operations against the frozen eager implementation, with reads
+// delayed across batches so pending means also encounter structural changes.
+static void testLazyTypeMeansDifferential() {
+  using margelo::nitro::nitrolist::LayoutCoreTestAccess;
+  for (int typeCount = 2; typeCount <= 4; ++typeCount) {
+    std::mt19937 rng(104729 + typeCount);
+    LayoutCore eager, lazy;
+    lazy.setLazyTypeMeans(true);
+    int count = 1027;
+    std::vector<uint16_t> types(count);
+    for (auto& type : types) type = 1 + rng() % typeCount;
+    for (auto* core : {&eager, &lazy}) {
+      core->setTypeAverages(true);
+      core->setEstimate(80);
+      core->setItemCount(count);
+      core->setItemTypes(types.data(), count);
+    }
+    auto compare = [&]() {
+      for (int i = 0; i < count; ++i) CHECK(eager.getSize(i) == lazy.getSize(i));
+      CHECK(eager.getTotalSize() == lazy.getTotalSize());
+      CHECK(eager.getLayoutVersion() == lazy.getLayoutVersion());
+      for (int i = 0; i < count; ++i) CHECK(eager.getOffset(i) == lazy.getOffset(i));
+      for (double offset : {0.0, 2356.25, eager.getTotalSize() - 1000}) {
+        const auto a = eager.getEngagedRange(offset, 600, 250);
+        const auto b = lazy.getEngagedRange(offset, 600, 250);
+        CHECK(a.start == b.start && a.end == b.end && a.version == b.version);
+      }
+    };
+    compare();
+    for (int step = 0; step < 1500; ++step) {
+      const int op = rng() % 16;
+      const int index = rng() % count;
+      if (op < 8) {
+        const double size = (rng() % 2400) / 8.0;
+        eager.setItemSize(index, size); lazy.setItemSize(index, size);
+      } else if (op == 8) {
+        double pairs[8];
+        for (int k = 0; k < 4; ++k) { pairs[2*k] = rng() % count; pairs[2*k+1] = (rng() % 2400) / 8.0; }
+        eager.setItemSizes(pairs, 4, 1); lazy.setItemSizes(pairs, 4, 1);
+      } else if (op == 9) {
+        types[index] = 1 + rng() % typeCount;
+        eager.setItemTypesRange(index, &types[index], 1);
+        lazy.setItemTypesRange(index, &types[index], 1);
+      } else if (op == 10) {
+        const bool clear = rng() % 4 == 0;
+        eager.invalidateItemSizesFrom(index, clear); lazy.invalidateItemSizesFrom(index, clear);
+      } else if (op == 11) {
+        const bool frozen = rng() % 2;
+        eager.setEstimatesFrozen(frozen); lazy.setEstimatesFrozen(frozen);
+      } else if (op == 12) {
+        // Prepend three items, remapping before replacing types as updateData does.
+        std::vector<double> remap;
+        for (int i = 0; i < count; ++i) { remap.push_back(i); remap.push_back(i+3); }
+        eager.setItemCount(count+3); lazy.setItemCount(count+3);
+        eager.remapItemSizes(remap.data(), count); lazy.remapItemSizes(remap.data(), count);
+        count += 3; types.insert(types.begin(), 3, 1);
+        eager.setItemTypes(types.data(), count); lazy.setItemTypes(types.data(), count);
+      } else if (op == 13) {
+        const double seed[] = {1, 95.25, 2, 121.5};
+        eager.seedTypeMeans(seed, 2, 1); lazy.seedTypeMeans(seed, 2, 1);
+      } else if (op == 14) {
+        const double estimate = 60 + rng() % 80;
+        eager.setEstimate(estimate); lazy.setEstimate(estimate);
+      } else {
+        const int columns = 1 + rng() % 3;
+        eager.setColumnCount(columns); lazy.setColumnCount(columns);
+      }
+      if (step % 7 == 0) compare();
+      if (failures) return;
+    }
+    compare();
+    lazy.setLazyTypeMeans(false);
+    compare();
+    eager.resetAll(); lazy.resetAll();
+    CHECK(eager.getMemoryFootprint() == 0 && lazy.getMemoryFootprint() == 0);
+  }
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+  LayoutCore eager, lazy;
+  lazy.setLazyTypeMeans(true);
+  for (auto* core : {&eager, &lazy}) {
+    core->setTypeAverages(true); core->setEstimate(80); core->setItemCount(100000);
+    core->getTotalSize(); core->setItemSize(0, 100);
+  }
+  const auto a = LayoutCoreTestAccess::meanVisits(eager);
+  const auto b = LayoutCoreTestAccess::meanVisits(lazy);
+  CHECK(a == 100000 && b == 782);
+  CHECK(eager.getSize(99999) == lazy.getSize(99999));
+  CHECK(eager.getTotalSize() == lazy.getTotalSize());
+  CHECK(eager.getOffset(99999) == lazy.getOffset(99999));
+  std::printf("lazy means T1: eager=%llu item visits, lazy=%llu block visits\n",
+              static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+#endif
+}
+
 int main(int argc, char** argv) {
   if (argc >= 3 && std::strcmp(argv[1], "--dump-json") == 0) {
     return runReplay(argv[2]);
   }
+  testLazyTypeMeansDifferential();
   testIncrementalGridAgainstPacking();
   testResetReleasesFrozenObservations();
   testOctaveRounding();

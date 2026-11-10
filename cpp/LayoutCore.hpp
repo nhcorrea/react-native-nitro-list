@@ -46,6 +46,7 @@ public:
   int32_t countUnmeasured(int32_t from, int32_t to);
 
   void setTypeAverages(bool enabled);
+  void setLazyTypeMeans(bool enabled);
 
   bool seedTypeMeans(const double* pairs, int32_t pairCount, double scale);
 
@@ -103,6 +104,8 @@ private:
   void updateTypeMeanLocked(int32_t index, bool wasMeasured, float prevSize, float newSize);
 
   bool applyTypeMeansLocked();
+  float sizeWithPendingMeanLocked(int32_t index) const;
+  void materializeTypeMeansLocked();
   void recordMeasurementLocked(int32_t index, float size);
   void pruneFrozenLocked();
   void remapFrozenLocked(const double* pairs, int32_t pairCount);
@@ -137,6 +140,12 @@ private:
   bool typeAverages_ = false;
   bool estimatesFrozen_ = false;
   std::vector<TypeStats> typeStats_;
+  bool lazyTypeMeans_ = false;
+  bool hasPendingTypeMeans_ = false;
+  std::vector<uint8_t> pendingTypeMeans_;
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+  uint64_t typeMeanVisits_ = 0;
+#endif
 
   int32_t itemCount_ = 0;
   float estimate_ = 0.0f;
