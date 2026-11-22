@@ -1,3 +1,10 @@
+## [2.6.2](https://github.com/[secure]/react-native-nitro-list/compare/v2.6.1...v2.6.2) (2026-11-22)
+
+### 🐛 Bug Fixes
+
+* **example:** adopt UIScene lifecycle for iOS simulator launch ([87fc429](https://github.com/[secure]/react-native-nitro-list/commit/87fc4291e1d6fecac2bdc3d25ca70de5e4f2fd21))
+* **ios:** prevent blank screens in native host and fabric view recycling ([93f7cdb](https://github.com/[secure]/react-native-nitro-list/commit/93f7cdb763647e50becce6f544ca72dc534648c5))
+
 ## [2.6.1](https://github.com/[secure]/react-native-nitro-list/compare/v2.6.0...v2.6.1) (2026-11-22)
 
 ### 🐛 Bug Fixes
