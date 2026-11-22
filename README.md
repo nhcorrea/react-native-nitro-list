@@ -383,7 +383,7 @@ How it works under the hood:
 - **Scales to 100k+ items & live chat prepends:** Lists up to 4,096 items pack synchronously in ~2 ms; larger datasets pack only the head and tail synchronously and pull middle chunks on-demand with bounded memory. Pure prepends and appends shift existing native chunks in O(1) and pack only the newly inserted items.
 - **When to use `renderItem` vs `nativeTemplate`:** Keep standard `renderItem` JSX for cells with interactive inputs, complex animations, SVG/custom native modules, or third-party React components. Opt into `nativeTemplate` for high-volume data-driven feeds, chat timelines, and image grids where you want native RecyclerView/UICollectionView-class efficiency and immunity to JS-thread stalls.
 
-> **Verified on real low-end Android hardware (Redmi 10C, Android 13, 5 paired repetitions):** With `nativeTemplate` enabled on dynamic feed, 3-column photo grid, chat reversal, chat prepend, and 100k jump scenarios, `NitroList` cuts JS instructions **10×–31×** (to 16–30 M during flings), cuts UI-thread work **30%–53%**, cuts total process instructions **1.8×–6.1×**, and maintains **0.0% blank frames (5/5)** even under 100 ms JS-thread freezes.
+> **Verified on low-end Android hardware (Android 13, 5 paired repetitions):** With `nativeTemplate` enabled on dynamic feed, 3-column photo grid, chat reversal, chat prepend, and 100k jump scenarios, `NitroList` cuts JS instructions **10×–31×** (to 16–30 M during flings), cuts UI-thread work **30%–53%**, cuts total process instructions **1.8×–6.1×**, and maintains **0.0% blank frames (5/5)** even under 100 ms JS-thread freezes.
 
 ## Native image prefetching
 
@@ -616,7 +616,7 @@ Dev builds print a one-time `[nitro-list]` warning, with the fix, when they dete
 
 ## Benchmarks
 
-To validate real-world behavior under tight CPU/GPU budgets, we run paired benchmarks on a low-end Android device (**Redmi 10C**, Snapdragon 680, Android 13, `arm64-v8a` release APK) across **5 alternating repetitions** per scenario using Linux `simpleperf` hardware instruction counters (`JS`, `UI`, `Total` in millions of retired instructions), process CPU time (`cpuMs`), Android `FrameTimeline` (`hitchTimeRatio`), and mounted-row visual coverage (`blank%`). Reference libraries (**FlashList 2.3.3** and **LegendList 3.7.1**) are configured with each library's documented recommended props (`recycleItems`, `getItemType`, `estimatedItemSize`).
+To validate real-world behavior under tight CPU/GPU budgets, we run paired benchmarks on a low-end Android device (Android 13, `arm64-v8a` release APK) across **5 alternating repetitions** per scenario using Linux `simpleperf` hardware instruction counters (`JS`, `UI`, `Total` in millions of retired instructions), process CPU time (`cpuMs`), Android `FrameTimeline` (`hitchTimeRatio`), and mounted-row visual coverage (`blank%`). Reference libraries (**FlashList 2.3.3** and **LegendList 3.7.1**) are configured with each library's documented recommended props (`recycleItems`, `getItemType`, `estimatedItemSize`).
 
 | Scenario | NitroList *(JSX default)* | NitroList *(`nativeTemplate` opt-in)* | FlashList 2.3.3 | LegendList 3.7.1 |
 | --- | --- | --- | --- | --- |
