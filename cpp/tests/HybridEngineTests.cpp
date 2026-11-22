@@ -305,8 +305,19 @@ static void testSlotPoolAndEngineRegistryNativeFlow() {
                static_cast<double>(oldCount), 0, 0, 0}),
       empty, empty, empty, remapBuf);
   const double expectedShift = engine.getItemOffset(prevAnchor + 5) - anchorOffsetBefore;
+  // Calling readSlotTransforms with an undersized buffer must report the full slotCount AND
+  // preserve pendingExternalMvcpShiftDp so the caller can grow buffers and retry without losing MVCP!
+  double tinyOffsets[2];
+  int32_t tinyMeta[2 * 3];
+  double tinyPending = -1.0;
+  int32_t tinyNeed = state->readSlotTransforms(
+      tinyOffsets, tinyMeta, 2, totalOut, stickyOut, stickyTransOut, &tinyPending);
+  assert(tinyNeed == state->slotPool.slotCount() && tinyNeed > 2);
+  assert(tinyPending == 0.0);
+  // Retrying with sufficient capacity drains the exact pending MVCP shift!
   nTrans = state->readSlotTransforms(
       offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut, &pendingShiftOut);
+  assert(nTrans == tinyNeed);
   assert(expectedShift > 200.0 && std::abs(pendingShiftOut - expectedShift) < 0.01);
   // Second read must see pendingShift drained to 0!
   nTrans = state->readSlotTransforms(
@@ -331,6 +342,9 @@ static void testSlotPoolAndEngineRegistryNativeFlow() {
   *reinterpret_cast<int32_t*>(extraBuf->data()) = 150;
   double prewarmCount = engine.reconcileSlots(extraBuf, 0, outDeltas);
   assert(prewarmCount >= 0 && state->isJsPrewarmActive());
+  // Far offset keeps prewarm active; matching targetOff allows native sync without clearing early.
+  assert(state->isJsPrewarmActiveAtOffset(0.0));
+  assert(!state->isJsPrewarmActiveAtOffset(targetOff));
   engine.setEstimatesFrozen(false);
   nTrans = state->readSlotTransforms(
       offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut, &pendingShiftOut);
@@ -373,6 +387,12 @@ static void testLevel3GridReadTemplateSlotsAndNativeSync() {
   int32_t stickyOut = -1;
   double stickyTransOut = 0.0;
   double pendingShiftOut = 0.0;
+  // Undersized buffer reports total slot count so caller can grow and retry without truncation.
+  double tinyOffsets[2];
+  int32_t tinyInfo[2 * 6];
+  int32_t needCount = state->readTemplateSlots(
+      tinyOffsets, tinyInfo, 2, totalOut, stickyOut, stickyTransOut, &pendingShiftOut);
+  assert(needCount == step1.slotCount && needCount > 2);
   int32_t count = state->readTemplateSlots(
       offsetsOut, infoOut, 64, totalOut, stickyOut, stickyTransOut, &pendingShiftOut);
   assert(count == step1.slotCount && totalOut > 0.0);

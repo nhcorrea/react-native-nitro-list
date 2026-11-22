@@ -350,7 +350,8 @@ struct EngineCoreState {
       return 0;
     }
     const auto& slots = slotPool.slots();
-    const int32_t count = std::min(maxSlots, static_cast<int32_t>(slots.size()));
+    const int32_t totalSlots = static_cast<int32_t>(slots.size());
+    const int32_t count = std::min(maxSlots, totalSlots);
     for (int32_t s = 0; s < count; ++s) {
       const auto& slot = slots[static_cast<size_t>(s)];
       const bool validActive = slot.active && slot.itemIndex >= 0 && slot.itemIndex < itemCount;
@@ -364,10 +365,14 @@ struct EngineCoreState {
     outStickyIndex = sticky.index;
     outStickyTranslateYDp = sticky.translateDp;
     if (outPendingMvcpShiftDp != nullptr) {
-      *outPendingMvcpShiftDp = pendingExternalMvcpShiftDp;
-      pendingExternalMvcpShiftDp = 0.0;
+      if (totalSlots <= maxSlots) {
+        *outPendingMvcpShiftDp = pendingExternalMvcpShiftDp;
+        pendingExternalMvcpShiftDp = 0.0;
+      } else {
+        *outPendingMvcpShiftDp = 0.0;
+      }
     }
-    return count;
+    return totalSlots;
   }
 
   // Level 3: Writes per-slot transforms + item/grid metadata for pure-native template rendering:
@@ -394,7 +399,8 @@ struct EngineCoreState {
       return 0;
     }
     const auto& slots = slotPool.slots();
-    const int32_t count = std::min(maxSlots, static_cast<int32_t>(slots.size()));
+    const int32_t totalSlots = static_cast<int32_t>(slots.size());
+    const int32_t count = std::min(maxSlots, totalSlots);
     for (int32_t s = 0; s < count; ++s) {
       const auto& slot = slots[static_cast<size_t>(s)];
       const bool validActive = slot.active && slot.itemIndex >= 0 && slot.itemIndex < itemCount;
@@ -416,10 +422,14 @@ struct EngineCoreState {
     outStickyIndex = sticky.index;
     outStickyTranslateYDp = sticky.translateDp;
     if (outPendingMvcpShiftDp != nullptr) {
-      *outPendingMvcpShiftDp = pendingExternalMvcpShiftDp;
-      pendingExternalMvcpShiftDp = 0.0;
+      if (totalSlots <= maxSlots) {
+        *outPendingMvcpShiftDp = pendingExternalMvcpShiftDp;
+        pendingExternalMvcpShiftDp = 0.0;
+      } else {
+        *outPendingMvcpShiftDp = 0.0;
+      }
     }
-    return count;
+    return totalSlots;
   }
 
   void markSlotCommitted(int32_t slotId, uint32_t generation) {
@@ -453,6 +463,16 @@ struct EngineCoreState {
   bool isJsPrewarmActive() {
     std::lock_guard<std::mutex> guard(stateMutex);
     return !disposed && jsPrewarmActive;
+  }
+
+  bool isJsPrewarmActiveAtOffset(double absoluteOffsetDp) {
+    std::lock_guard<std::mutex> guard(stateMutex);
+    if (disposed || !jsPrewarmActive) return false;
+    const double engineOffset = absoluteOffsetDp + pendingExternalMvcpShiftDp - paddingStart;
+    if (std::isfinite(engineOffset) && std::abs(engineOffset - scrollOffset) <= 2.0) {
+      return false;
+    }
+    return true;
   }
 
   void setMvcpEnabled(bool enabled) {

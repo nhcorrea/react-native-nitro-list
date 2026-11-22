@@ -1470,6 +1470,19 @@ struct PooledCell {
       slotCount = state->readTemplateSlots(
           _offsetsBuf.data(), _infoBuf.data(), static_cast<int32_t>(_offsetsBuf.size()),
           totalSizeDp, stickyIndex, stickyTransDp, &extraMvcp);
+      if (slotCount > static_cast<int32_t>(_offsetsBuf.size())) {
+        const size_t nextCap = static_cast<size_t>(slotCount) + 16;
+        _offsetsBuf.resize(nextCap, 0.0);
+        _infoBuf.resize(nextCap * 6, 0);
+        double retryMvcp = 0.0;
+        slotCount = state->readTemplateSlots(
+            _offsetsBuf.data(), _infoBuf.data(), static_cast<int32_t>(_offsetsBuf.size()),
+            totalSizeDp, stickyIndex, stickyTransDp, &retryMvcp);
+        extraMvcp += retryMvcp;
+      }
+      if (_slotCells.size() < static_cast<size_t>(slotCount)) {
+        _slotCells.resize(static_cast<size_t>(slotCount));
+      }
       currentMomentumShift = onDrainedMvcpShift(extraMvcp);
     }
   }

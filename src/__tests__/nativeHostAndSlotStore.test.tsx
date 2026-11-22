@@ -1,7 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import React from 'react';
-import {Platform, StyleSheet, Text} from 'react-native';
-import {act} from 'react-test-renderer';
+import {Platform, ScrollView, StyleSheet, Text} from 'react-native';
+import {act, create} from 'react-test-renderer';
+import {NitroList} from '../NitroList';
 
 import {createImagePrefetcher} from '../imagePrefetch';
 import {resetNativeHostCacheForTests} from '../nativeHost';
@@ -583,6 +584,63 @@ describe('NitroList Native Host + NitroListSlots integration', () => {
     expect(session.templateSchemaJson).not.toBeNull();
     expect(session.templateChunks).toHaveLength(1);
     expect(session.templateChunks[0]).toMatchObject({startIndex: 0, count: 10, totalCount: 10, reset: true});
+  });
+
+  it('silences JS scrollEventThrottle on iOS under native host when using default ScrollView without onScroll', async () => {
+    Object.defineProperty(Platform, 'OS', {value: 'ios', configurable: true});
+    resetNativeHostCacheForTests();
+    const items = makeItems(30);
+    const renderItem = ({item}: {item: string}) => <Text>{item}</Text>;
+
+    let tree!: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(
+        <NitroList
+          data={items}
+          recycleItems
+          estimatedItemSize={60}
+          keyExtractor={itemKey}
+          renderItem={renderItem}
+        />,
+      );
+    });
+    const scrollView = tree.root.findByType(ScrollView);
+    expect(scrollView.props.scrollEventThrottle).toBe(1_000_000_000);
+
+    const onScroll = jest.fn();
+    await act(async () => {
+      tree.update(
+        <NitroList
+          data={items}
+          recycleItems
+          estimatedItemSize={60}
+          keyExtractor={itemKey}
+          renderItem={renderItem}
+          onScroll={onScroll}
+        />,
+      );
+    });
+    expect(scrollView.props.scrollEventThrottle).toBe(16);
+    await act(async () => {
+      tree.unmount();
+    });
+
+    // Custom renderScrollComponent keeps scrollEventThrottle at 16 and forwards user onScroll
+    const customOnScroll = jest.fn();
+    const mounted = renderNitroList({
+      data: items,
+      recycleItems: true,
+      estimatedItemSize: 60,
+      keyExtractor: itemKey,
+      renderItem,
+      onScroll: customOnScroll,
+    });
+    harness = mounted;
+    mounted.layout(390, 844);
+    await mounted.settle(50);
+    expect(mounted.scrollProps.scrollEventThrottle).toBe(16);
+    mounted.scroll(240);
+    expect(customOnScroll).toHaveBeenCalledTimes(1);
   });
 
   it('uses O(1) shiftNativeTemplateData + incremental packing on pure prepend and append', async () => {

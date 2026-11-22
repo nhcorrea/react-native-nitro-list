@@ -163,9 +163,10 @@ Java_com_margelo_nitro_nitrolist_NativeHostBridge_nativeReadTransforms(
       offsets.data(), meta.data(), cap, totalSizeDp, stickyIndex, stickyTranslateYDp,
       &pendingMvcpShiftDp);
 
-  if (count > 0) {
-    env->SetDoubleArrayRegion(outOffsetsDp, 0, count, reinterpret_cast<const jdouble*>(offsets.data()));
-    env->SetIntArrayRegion(outMeta, 0, count * 3, reinterpret_cast<const jint*>(meta.data()));
+  const int32_t copied = std::min(count, cap);
+  if (copied > 0) {
+    env->SetDoubleArrayRegion(outOffsetsDp, 0, copied, reinterpret_cast<const jdouble*>(offsets.data()));
+    env->SetIntArrayRegion(outMeta, 0, copied * 3, reinterpret_cast<const jint*>(meta.data()));
   }
   if (outHeader != nullptr && env->GetArrayLength(outHeader) >= 4) {
     jdouble header[4] = {
@@ -303,9 +304,10 @@ Java_com_margelo_nitro_nitrolist_NativeHostBridge_nativeReadTemplateSlots(
       offsets.data(), info.data(), cap, totalSizeDp, stickyIndex, stickyTranslateYDp,
       &pendingMvcpShiftDp);
 
-  if (count > 0) {
-    env->SetDoubleArrayRegion(outOffsetsDp, 0, count, reinterpret_cast<const jdouble*>(offsets.data()));
-    env->SetIntArrayRegion(outInfo, 0, count * 6, reinterpret_cast<const jint*>(info.data()));
+  const int32_t copied = std::min(count, cap);
+  if (copied > 0) {
+    env->SetDoubleArrayRegion(outOffsetsDp, 0, copied, reinterpret_cast<const jdouble*>(offsets.data()));
+    env->SetIntArrayRegion(outInfo, 0, copied * 6, reinterpret_cast<const jint*>(info.data()));
   }
   if (outHeader != nullptr && env->GetArrayLength(outHeader) >= 4) {
     jdouble header[4] = {

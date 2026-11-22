@@ -4091,7 +4091,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     onMomentumScrollEnd: handleMomentumScrollEnd,
     onLayout: handleOuterLayout,
     scrollEventThrottle:
-      experimentalUiThreadScroll === true || NitroListDevFlags.jsScrollEventThrottle1 ? 1 : 16,
+      experimentalUiThreadScroll === true || NitroListDevFlags.jsScrollEventThrottle1
+        ? 1
+        : nativeHostEligible && !userWantsJsScroll && renderScrollComponent == null && Platform.OS === 'ios'
+          ? 1_000_000_000
+          : 16,
     contentContainerStyle,
     contentOffset: scrollMountOffset,
     maintainVisibleContentPosition: mvcpEnabled && !nativeHostEligible ? MVCP_SCROLL_VIEW_CONFIG : undefined,

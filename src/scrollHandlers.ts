@@ -258,7 +258,7 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     if (NITRO_LIST_PERF_COMPILED && NitroListPerfMonitor.enabled) {
       NitroListPerfMonitor.markScrollDispatch();
     }
-    if (!ctx.uiThreadDriverActiveRef.current) {
+    if (!ctx.uiThreadDriverActiveRef.current && ctx.nativeHostIdRef.current <= 0) {
       const pushed = ctx.lastPushedEngineOffsetRef.current;
       if (
         NitroListDevFlags.scrollEchoGuard &&

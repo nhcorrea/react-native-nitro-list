@@ -272,6 +272,7 @@ export const NativeHostStickySlot = React.memo(function NativeHostStickySlot({
   const stickyIndex = useStoreValue(store, 'stickyIndex');
   const renderMode = useStoreValue(store, 'renderMode');
   const tagRef = useRef<number>(-1);
+  const registeredHostIdRef = useRef<number>(-1);
 
   const attachSticky = useCallback(
     (view: View | null) => {
@@ -279,16 +280,41 @@ export const NativeHostStickySlot = React.memo(function NativeHostStickySlot({
       if (view == null) {
         if (tagRef.current > 0 && hostId > 0) setNativeStickyViewTag(hostId, -1);
         tagRef.current = -1;
+        registeredHostIdRef.current = -1;
         return;
       }
       const tag = findNodeHandle(view);
-      if (tag != null && tag > 0 && tag !== tagRef.current) {
+      if (tag != null && tag > 0 && (tag !== tagRef.current || hostId !== registeredHostIdRef.current)) {
         tagRef.current = tag;
-        if (hostId > 0) setNativeStickyViewTag(hostId, tag);
+        if (hostId > 0) {
+          registeredHostIdRef.current = hostId;
+          setNativeStickyViewTag(hostId, tag);
+        } else {
+          registeredHostIdRef.current = -1;
+        }
       }
     },
     [hostIdRef],
   );
+
+  useEffect(() => {
+    const hostId = hostIdRef.current;
+    const tag = tagRef.current;
+    if (hostId > 0 && tag > 0 && registeredHostIdRef.current !== hostId) {
+      registeredHostIdRef.current = hostId;
+      setNativeStickyViewTag(hostId, tag);
+    }
+  }, [hostIdRef, stickyIndex]);
+
+  useEffect(() => {
+    return () => {
+      const currentHost = hostIdRef.current;
+      if (currentHost > 0 && registeredHostIdRef.current === currentHost) {
+        setNativeStickyViewTag(currentHost, -1);
+      }
+      registeredHostIdRef.current = -1;
+    };
+  }, [hostIdRef]);
 
   const stickyItem = stickyIndex >= 0 && stickyIndex < itemCount ? items[stickyIndex] : undefined;
   if (stickyItem === undefined) return null;
