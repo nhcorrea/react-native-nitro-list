@@ -18,6 +18,7 @@
 #include "JHybridNitroListNativeHostSpec.hpp"
 #include "JFunc_void_double_double_double_double_double_double_double_std__shared_ptr_ArrayBuffer_.hpp"
 #include "JFunc_void_double_double.hpp"
+#include "JFunc_void_double_std__string.hpp"
 #include "JHybridNitroListScrollViewSpec.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 #include "HybridNitroListEngine.hpp"
@@ -55,6 +56,7 @@ void registerAllNatives() {
   margelo::nitro::nitrolist::JHybridNitroListNativeHostSpec::CxxPart::registerNatives();
   margelo::nitro::nitrolist::JFunc_void_double_double_double_double_double_double_double_std__shared_ptr_ArrayBuffer__cxx::registerNatives();
   margelo::nitro::nitrolist::JFunc_void_double_double_cxx::registerNatives();
+  margelo::nitro::nitrolist::JFunc_void_double_std__string_cxx::registerNatives();
   margelo::nitro::nitrolist::JHybridNitroListScrollViewSpec::CxxPart::registerNatives();
 
   // Register Nitro Hybrid Objects

@@ -709,6 +709,23 @@ double LayoutCore::getSize(int32_t index) {
   return currentSizeLocked(index);
 }
 
+void LayoutCore::getColumnSpan(int32_t index, int32_t& outCol, int32_t& outSpan) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (columnCount_ <= 1 || index < 0 || index >= itemCount_) {
+    outCol = 0;
+    outSpan = 1;
+    return;
+  }
+  ensureClean();
+  outSpan = spanAtLocked(index);
+  const int32_t rs = index < static_cast<int32_t>(rowStart_.size()) ? rowStart_[index] : index;
+  int32_t col = 0;
+  for (int32_t i = rs; i < index; ++i) {
+    col += spanAtLocked(i);
+  }
+  outCol = col;
+}
+
 int32_t LayoutCore::getLayoutVersion() {
   std::lock_guard<std::mutex> guard(mutex_);
   ensureClean();

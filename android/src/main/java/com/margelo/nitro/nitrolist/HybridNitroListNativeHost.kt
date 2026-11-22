@@ -99,6 +99,14 @@ internal object NativeHostBridge {
   @JvmStatic external fun nativeIsPrewarmActive(
     engineId: Long,
   ): Boolean
+
+  @JvmStatic external fun nativeReadTemplateSlots(
+    engineId: Long,
+    outOffsetsDp: DoubleArray,
+    outInfo: IntArray,
+    maxSlots: Int,
+    outHeader: DoubleArray,
+  ): Int
 }
 
 @Keep
@@ -201,6 +209,68 @@ class HybridNitroListNativeHost : HybridNitroListNativeHostSpec() {
   override fun cancelImagePrefetch() {
     NitroImagePrefetch.cancelAll()
   }
+
+  override fun attachNativeSlotContainer(
+    hostId: Double,
+    containerViewTag: Double,
+    numColumns: Double,
+    crossAxisGapDp: Double,
+  ) {
+    if (!hostId.isFinite() || hostId <= 0 || !containerViewTag.isFinite() || containerViewTag <= 0) return
+    val cols = if (numColumns.isFinite() && numColumns >= 1.0) numColumns.toInt() else 1
+    val gap = if (crossAxisGapDp.isFinite() && crossAxisGapDp >= 0.0) crossAxisGapDp else 0.0
+    NativeHostManager.attachNativeSlotContainer(hostId.toInt(), containerViewTag.toInt(), cols, gap)
+  }
+
+  override fun setNativeTemplateSchema(hostId: Double, schemaJson: String) {
+    if (!hostId.isFinite() || hostId <= 0 || schemaJson.isEmpty()) return
+    NativeHostManager.setNativeTemplateSchema(hostId.toInt(), schemaJson)
+  }
+
+  override fun setNativeTemplateData(
+    hostId: Double,
+    startIndex: Double,
+    count: Double,
+    totalCount: Double,
+    reset: Boolean,
+    packedData: ArrayBuffer,
+  ) {
+    if (!hostId.isFinite() || hostId <= 0 || !startIndex.isFinite() || !count.isFinite() || !totalCount.isFinite()) return
+    val s = startIndex.toInt()
+    val c = count.toInt()
+    val t = totalCount.toInt()
+    if (s < 0 || c <= 0 || t <= 0) return
+    NativeHostManager.setNativeTemplateData(hostId.toInt(), s, c, t, reset, packedData)
+  }
+
+  override fun shiftNativeTemplateData(hostId: Double, delta: Double, totalCount: Double) {
+    if (!hostId.isFinite() || hostId <= 0 || !delta.isFinite() || !totalCount.isFinite()) return
+    val d = delta.toInt()
+    val t = totalCount.toInt()
+    if (d == 0 || t < 0) return
+    NativeHostManager.shiftNativeTemplateData(hostId.toInt(), d, t)
+  }
+
+  override fun setNativePressHandler(
+    hostId: Double,
+    onPress: (index: Double, action: String) -> Unit,
+  ) {
+    if (!hostId.isFinite() || hostId <= 0) return
+    NativeHostManager.setNativePressHandler(hostId.toInt(), onPress)
+  }
+
+  override fun setNativeDataRequestHandler(
+    hostId: Double,
+    onRequestData: (startIndex: Double, count: Double) -> Unit,
+  ) {
+    if (!hostId.isFinite() || hostId <= 0) return
+    NativeHostManager.setNativeDataRequestHandler(hostId.toInt(), onRequestData)
+  }
+
+  override fun clearNativeTemplate(hostId: Double) {
+    if (!hostId.isFinite() || hostId <= 0) return
+    NativeHostManager.clearNativeTemplate(hostId.toInt())
+  }
 }
 
 @OptIn(UnstableReactNativeAPI::class)
@@ -291,6 +361,12 @@ private object NativeHostManager {
     var slotArray = arrayOfNulls<SlotBinding>(INITIAL_SLOT_CAP)
     var maxSlotIndex = -1
 
+    // Level 3: Pure-native declarative template renderer (zero JS during scroll!)
+    val templateEngine = NativeTemplateEngine()
+    var templateLoadNotified = false
+    var templateReportedContainerDp = 0.0
+    var templateInfoBuf = IntArray(INITIAL_SLOT_CAP * 6)
+
     // Reusable zero-allocation UI-thread scratch buffers
     val scrollHeader = DoubleArray(10)
     var deltasBuf = IntArray(INITIAL_SLOT_CAP * 4)
@@ -313,6 +389,7 @@ private object NativeHostManager {
       if (next > offsetsBuf.size) {
         offsetsBuf = DoubleArray(next)
         metaBuf = IntArray(next * 3)
+        templateInfoBuf = IntArray(next * 6)
         deltasBuf = IntArray(next * 4)
         sizeIdsBuf = IntArray(next)
         sizeValsBuf = DoubleArray(next)
@@ -587,6 +664,9 @@ private object NativeHostManager {
           if (detached) return@OnLayoutChangeListener
           attachContentLayoutListener(v)
           if (hasPendingMountWork) drainPendingRegistrations()
+          if (templateEngine.isActive && !templateLoadNotified && v.width > 0 && v.height > 0 && !inPreDraw) {
+            handleScrollChange(v, v.scrollX, v.scrollY)
+          }
           if ((preDrawDirty || pendingAwaitingGenCount > 0) && !inPreDraw) {
             runPreDraw(fromLayout = true)
           }
@@ -659,6 +739,7 @@ private object NativeHostManager {
         slotArray[i] = null
       }
       maxSlotIndex = -1
+      templateEngine.clear()
       scrollView = null
       stickyView = null
     }
@@ -756,7 +837,7 @@ private object NativeHostManager {
       }
 
       val inflightJsMs = if (jsWakeSentMs > 0L) (nowMs - jsWakeSentMs).coerceAtLeast(0L).toDouble() else 0.0
-      val effectiveJsLatencyMs = maxOf(jsLatencyMs, inflightJsMs)
+      val effectiveJsLatencyMs = if (templateEngine.isActive) -1.0 else maxOf(jsLatencyMs, inflightJsMs)
 
       val deltaCount = NativeHostBridge.nativeOnScroll(
         engineId = engineId,
@@ -788,6 +869,34 @@ private object NativeHostManager {
 
       // Immediately position sticky header overlay on UI thread (0.0 dp lag!)
       applyStickyTransform(stickyIndex, stickyTranslateDp, density)
+
+      // Level 3: Pure-native declarative template path — bind, measure, MVCP, and position ALL
+      // slots synchronously on UI thread BEFORE performDraw with ZERO JS wakeups!
+      if (templateEngine.isActive) {
+        val stickyChanged = stickyIndex != lastStickyIndex
+        lastStickyIndex = stickyIndex
+        if (deltaCount > 0 || changed || transformsDirty || !templateLoadNotified || abs(mvcpMomentumShiftPx) >= 0.5) {
+          runTemplateSync(sv, density, offsetDp, vpDp, fromLayout = false)
+        }
+        if (stickyChanged) {
+          val emptyBuf = ArrayBuffer.allocate(4)
+          onSlotRebinds(
+            0.0,
+            rangeStart.toDouble(),
+            rangeEnd.toDouble(),
+            layoutVersion.toDouble(),
+            totalSizeDp,
+            stickyIndex.toDouble(),
+            lastVelocityDpS,
+            emptyBuf,
+          )
+        }
+        if (hasMore && !pacingScheduled) {
+          pacingScheduled = true
+          Choreographer.getInstance().postFrameCallback(pacingCallback)
+        }
+        return
+      }
 
       // Check if JS actually needs to wake up:
       // Wake JS ONLY if a slot was created/rebound, stickyIndex changed, or range/version changed.
@@ -868,7 +977,86 @@ private object NativeHostManager {
         val b = slotArray[i] ?: continue
         b.appliedTargetPx = Double.NaN
       }
+      templateEngine.invalidateAppliedCoords()
       performMvcpScrollTo(sv, desired, density)
+    }
+
+    fun runTemplateSync(
+      sv: View,
+      density: Double,
+      offsetDp: Double,
+      vpDp: Double,
+      fromLayout: Boolean,
+    ) {
+      if (!templateEngine.isActive || detached) return
+      val res = templateEngine.syncAndPositionSlots(
+        engineId = engineId,
+        sv = sv,
+        resolveContainer = { tag -> resolveViewByTag(tag) as? ViewGroup },
+        horizontal = horizontal,
+        mvcpEnabled = mvcpEnabled,
+        inMomentum = inMomentum,
+        suppressDataRequest = inMomentum && abs(lastVelocityDpS) > 18000.0,
+        density = density,
+        mvcpMomentumShiftPx = mvcpMomentumShiftPx,
+        offsetsBuf = offsetsBuf,
+        infoBuf = templateInfoBuf,
+        transHeader = transHeader,
+        sizeIdsBuf = sizeIdsBuf,
+        sizeValsBuf = sizeValsBuf,
+        sizeGensBuf = sizeGensBuf,
+        sizeHeader = sizeHeader,
+        onApplyMvcpDelta = { mvcpDeltaDp ->
+          val deltaPx = mvcpDeltaDp * density
+          if (inMomentum) {
+            mvcpMomentumShiftPx += deltaPx
+          } else {
+            val shiftInt = deltaPx.roundToInt()
+            if (shiftInt != 0) {
+              val cur = if (horizontal) sv.scrollX else sv.scrollY
+              performMvcpScrollTo(sv, cur + shiftInt, density)
+            }
+          }
+          mvcpMomentumShiftPx
+        },
+        onDrainedMvcpShift = {
+          applyDrainedMvcpShift(sv, density)
+          mvcpMomentumShiftPx
+        },
+      )
+      if (res.slotCount > 0) {
+        applyStickyTransform(res.stickyIndex, res.stickyTranslateDp, density)
+        val total = res.totalSizeDp
+        // Keep JS completely silent during mid-list scrolling: notify JS onContentSize ONLY on
+        // first mount (so onLoad fires), when total exceeds container headroom, or near list end!
+        val nearEnd = vpDp > 0.0 && (offsetDp + vpDp * 3.0) >= minOf(templateReportedContainerDp, total)
+        val needsReport =
+          !templateLoadNotified ||
+          total > templateReportedContainerDp ||
+          (nearEnd && abs(total - templateReportedContainerDp) > 0.5)
+        if (needsReport && total > 0.0) {
+          val nextReported = if (!templateLoadNotified || nearEnd || templateReportedContainerDp <= 0.0) {
+            total
+          } else {
+            total + maxOf(vpDp * 2.0, total * 0.1)
+          }
+          templateLoadNotified = true
+          templateReportedContainerDp = nextReported
+          lastReportedTotalSize = nextReported
+          val ver = if (res.layoutVersion >= 0) res.layoutVersion else lastReportedVersion + 1
+          lastReportedVersion = ver
+          if (fromLayout) {
+            pendingContentSize = true
+            pendingContentSizeTotal = nextReported
+            pendingContentSizeVersion = ver
+          } else {
+            pendingContentSize = false
+            onContentSize(nextReported, ver.toDouble())
+          }
+        }
+        preDrawDirty = false
+        transformsDirty = false
+      }
     }
 
     private fun applyDrainedMvcpShift(sv: View, density: Double) {
@@ -969,6 +1157,14 @@ private object NativeHostManager {
 
         val density = PixelUtil.getDisplayMetricDensity().toDouble()
         if (density <= 0.0) return
+
+        // Level 3: Pure-native declarative templates render/measure/position synchronously on UI thread!
+        if (templateEngine.isActive) {
+          val offsetDp = (if (horizontal) sv.scrollX else sv.scrollY).toDouble() / density
+          val vpDp = (if (horizontal) sv.width else sv.height).toDouble() / density
+          runTemplateSync(sv, density, offsetDp, vpDp, fromLayout)
+          return
+        }
 
         val capacity = maxOf(offsetsBuf.size, maxSlotIndex + 16)
         ensureSlotCapacity(capacity)
@@ -1309,6 +1505,114 @@ private object NativeHostManager {
         session.handleScrollChange(sv, sv.scrollX, sv.scrollY)
       }
       session.runPreDraw()
+    }
+  }
+
+  fun attachNativeSlotContainer(hostId: Int, containerViewTag: Int, numColumns: Int, crossAxisGapDp: Double) {
+    val session = hosts[hostId] ?: return
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      val resolved = session.resolveViewByTag(containerViewTag) as? ViewGroup
+      session.templateEngine.setContainer(containerViewTag, numColumns, crossAxisGapDp, resolved)
+      session.preDrawDirty = true
+      session.transformsDirty = true
+      val sv = session.resolveScrollView()
+      if (sv != null) {
+        if (!NativeHostBridge.nativeIsPrewarmActive(session.engineId)) {
+          session.handleScrollChange(sv, sv.scrollX, sv.scrollY)
+        }
+        session.runPreDraw()
+      }
+    }
+  }
+
+  fun setNativeTemplateSchema(hostId: Int, schemaJson: String) {
+    val session = hosts[hostId] ?: return
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      session.templateEngine.setSchema(schemaJson)
+      session.templateLoadNotified = false
+      session.templateReportedContainerDp = 0.0
+      session.preDrawDirty = true
+      session.transformsDirty = true
+      val sv = session.resolveScrollView()
+      if (sv != null) {
+        if (!NativeHostBridge.nativeIsPrewarmActive(session.engineId)) {
+          session.handleScrollChange(sv, sv.scrollX, sv.scrollY)
+        }
+        session.runPreDraw()
+      }
+    }
+  }
+
+  fun setNativeTemplateData(
+    hostId: Int,
+    startIndex: Int,
+    count: Int,
+    totalCount: Int,
+    reset: Boolean,
+    packedData: ArrayBuffer,
+  ) {
+    val session = hosts[hostId] ?: return
+    // Copy ArrayBuffer bytes synchronously on JSI thread before posting to UI thread so JS can
+    // never race with UI-thread unpacking!
+    val src = packedData.getBuffer(false)
+    val len = src.remaining()
+    if (len < 16) return
+    val copy = ArrayBuffer.allocate(len)
+    val dst = copy.getBuffer(false)
+    dst.put(src.duplicate())
+    dst.rewind()
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      session.templateEngine.setDataChunk(startIndex, count, totalCount, reset, copy)
+      session.preDrawDirty = true
+      session.transformsDirty = true
+      val sv = session.resolveScrollView()
+      if (sv != null) {
+        if (!NativeHostBridge.nativeIsPrewarmActive(session.engineId)) {
+          session.handleScrollChange(sv, sv.scrollX, sv.scrollY)
+        }
+        session.runPreDraw()
+      }
+    }
+  }
+
+  fun setNativePressHandler(hostId: Int, onPress: (Double, String) -> Unit) {
+    val session = hosts[hostId] ?: return
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      session.templateEngine.setPressHandler(onPress)
+    }
+  }
+
+  fun setNativeDataRequestHandler(hostId: Int, onRequestData: (Double, Double) -> Unit) {
+    val session = hosts[hostId] ?: return
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      session.templateEngine.setDataRequestHandler(onRequestData)
+    }
+  }
+
+  fun shiftNativeTemplateData(hostId: Int, delta: Int, totalCount: Int) {
+    val session = hosts[hostId] ?: return
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      session.templateEngine.shiftDataIndices(delta, totalCount)
+      session.preDrawDirty = true
+      session.transformsDirty = true
+    }
+  }
+
+  fun clearNativeTemplate(hostId: Int) {
+    val session = hosts[hostId] ?: return
+    UiThreadUtil.runOnUiThread {
+      if (session.detached) return@runOnUiThread
+      session.templateEngine.clear()
+      session.templateLoadNotified = false
+      session.templateReportedContainerDp = 0.0
+      session.preDrawDirty = true
+      session.transformsDirty = true
     }
   }
 }

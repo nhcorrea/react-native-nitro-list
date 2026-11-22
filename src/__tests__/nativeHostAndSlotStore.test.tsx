@@ -5,6 +5,12 @@ import {act} from 'react-test-renderer';
 
 import {createImagePrefetcher} from '../imagePrefetch';
 import {resetNativeHostCacheForTests} from '../nativeHost';
+import {
+  compileNativeTemplate,
+  packNativeTemplateChunk,
+  resolveNativeImageUri,
+  type NativeTemplateConfig,
+} from '../nativeTemplate';
 import {NitroListPerfMonitor} from '../PerfMonitor';
 import {
   SLOT_DELTA_FLAG_ACTIVE,
@@ -395,5 +401,226 @@ describe('NitroList Native Host + NitroListSlots integration', () => {
     const innerStyle = StyleSheet.flatten(innerViews[1].props.style) as Record<string, unknown>;
     expect(innerStyle.paddingLeft).toBe(8);
     expect(innerStyle.paddingRight).toBe(8);
+  });
+
+  it('compiles and packs Level 3 native templates with UTF-8, dedup, numbers, booleans, and nulls', () => {
+    type Row = {id: string; title: string; avatar: string; aspect?: number; mine: boolean; photo?: string | null};
+    const config: NativeTemplateConfig<Row> = {
+      nativeIdPrefix: 'row-',
+      getTestId: (item) => item.id,
+      getTemplateKey: (item) => (item.photo ? 'photo' : 'post'),
+      templates: {
+        post: {
+          type: 'column',
+          padding: 12,
+          children: [
+            {type: 'image', uriField: 'avatar', width: 40, height: 40, borderRadius: 20},
+            {type: 'text', textField: 'title', fontSize: 15, fontWeight: '600'},
+          ],
+        },
+        photo: {
+          type: 'column',
+          children: [
+            {type: 'text', textField: 'title', visibleField: 'showTitle'},
+            {type: 'image', uriField: 'photo', aspectRatioField: 'aspect'},
+          ],
+        },
+      },
+      extractFields: (item) => ({
+        avatar: item.avatar,
+        title: item.title,
+        photo: item.photo ?? null,
+        aspect: item.aspect,
+        showTitle: item.mine,
+      }),
+    };
+
+    const compiled = compileNativeTemplate(config);
+    const parsedSchema = JSON.parse(compiled.schemaJson) as Record<string, unknown>;
+    expect(parsedSchema.v).toBe(1);
+    expect(parsedSchema.nidP).toBe('row-');
+    expect(compiled.stringFields).toEqual(['avatar', 'title', 'photo', '$testId']);
+    expect(compiled.numberFields).toEqual(['showTitle', 'aspect']);
+
+    const rows: Row[] = [
+      {id: 'r0', title: 'Olá ação 🚀', avatar: 'https://cdn/a.png', mine: true, photo: null},
+      {id: 'r1', title: 'Olá ação 🚀', avatar: 'https://cdn/a.png', mine: false, photo: 'https://cdn/p.jpg', aspect: 1.5},
+    ];
+    const buf = packNativeTemplateChunk(rows, 0, rows.length, compiled, config);
+    const dv = new DataView(buf);
+    expect(dv.getInt32(0, true)).toBe(2); // count
+    expect(dv.getInt32(4, true)).toBe(4); // S
+    expect(dv.getInt32(8, true)).toBe(2); // F
+    const strPoolOffset = dv.getInt32(12, true);
+    expect(strPoolOffset).toBeGreaterThan(16);
+
+    const u8 = new Uint8Array(buf);
+    expect(u8[16]).toBe(0); // post
+    expect(u8[17]).toBe(1); // photo
+
+    const f32 = new Float32Array(buf, 20, 4);
+    expect(f32[0]).toBe(1); // row 0 showTitle = true
+    expect(Number.isNaN(f32[1])).toBe(true); // row 0 aspect = undefined -> NaN
+    expect(f32[2]).toBe(0); // row 1 showTitle = false
+    expect(f32[3]).toBeCloseTo(1.5, 5); // row 1 aspect
+
+    // Dedup check: row 0 & row 1 share identical byte offset for 'avatar' and 'title'
+    const strTable = new Int32Array(buf, 20 + 16, 16);
+    expect(strTable[0]).toBe(strTable[8]); // avatar offset deduped
+    expect(strTable[2]).toBe(strTable[10]); // title offset deduped
+    expect(strTable[5]).toBe(-1); // row 0 photo is null -> len = -1
+    expect(strTable[13]).toBeGreaterThan(0); // row 1 photo present
+
+    // resolveNativeImageUri handles strings & null cleanly
+    expect(resolveNativeImageUri('https://cdn/x.png')).toBe('https://cdn/x.png');
+    expect(resolveNativeImageUri(null)).toBe('');
+  });
+
+  it('activates Level 3 nativeTemplate with on-demand chunking, press routing, and enabled toggle fallback', async () => {
+    const renderCalls = jest.fn();
+    const onPress = jest.fn();
+    const items = makeItems(6000);
+    const makeTemplate = (enabled: boolean): NativeTemplateConfig<string> => ({
+      enabled,
+      nativeIdPrefix: 'tpl-',
+      onPress,
+      templates: {
+        default: {
+          type: 'column',
+          pressAction: 'open',
+          children: [{type: 'text', textField: 'label'}],
+        },
+      },
+      extractFields: (item) => ({label: item}),
+    });
+
+    const mounted = renderNitroList({
+      data: items,
+      recycleItems: true,
+      estimatedItemSize: 80,
+      keyExtractor: itemKey,
+      nativeTemplate: makeTemplate(true),
+      renderItem: ({item}) => {
+        renderCalls(item);
+        return <Text>{item}</Text>;
+      },
+    });
+    harness = mounted;
+    mounted.layout(360, 640);
+    await mounted.settle(50);
+
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    expect(session).toBeDefined();
+    expect(session.templateSchemaJson).not.toBeNull();
+    // Zero React renderItem calls while nativeTemplate is active!
+    expect(renderCalls).not.toHaveBeenCalled();
+
+    // Large dataset (6000 > 4096): sync head [0..1024) (reset=true) + tail [4976..6000) (reset=false) only!
+    expect(session.templateChunks).toHaveLength(2);
+    expect(session.templateChunks[0]).toMatchObject({startIndex: 0, count: 1024, totalCount: 6000, reset: true});
+    expect(session.templateChunks[1]).toMatchObject({startIndex: 4976, count: 1024, totalCount: 6000, reset: false});
+
+    // Advancing timers does NOT trigger eager background packing!
+    await mounted.settle(500);
+    expect(session.templateChunks).toHaveLength(2);
+
+    // Native on-demand request pulls exactly the requested middle chunk with reset=false!
+    expect(session.onNativeDataRequest).not.toBeNull();
+    await act(async () => {
+      session.onNativeDataRequest?.(2048, 1024);
+    });
+    expect(session.templateChunks).toHaveLength(3);
+    expect(session.templateChunks[2]).toMatchObject({startIndex: 2048, count: 1024, totalCount: 6000, reset: false});
+
+    // Native press callback routes cleanly to JS onPress
+    session.onNativePress?.(42, 'open');
+    expect(onPress).toHaveBeenCalledWith(42, 'open');
+
+    // Toggling enabled=false clears native template and falls back cleanly to standard React slots!
+    mounted.update({nativeTemplate: makeTemplate(false)});
+    await mounted.settle(50);
+    expect(session.templateClearCount).toBe(1);
+    const initFlags = SLOT_DELTA_FLAG_ACTIVE | SLOT_DELTA_FLAG_CREATED | SLOT_DELTA_FLAG_ITEM_CHANGED;
+    await act(async () => {
+      session.onSlotRebinds(
+        2,
+        0,
+        1,
+        1,
+        480000,
+        -1,
+        0,
+        packDeltas([
+          {slotId: 0, itemIndex: 0, generation: 1, flags: initFlags},
+          {slotId: 1, itemIndex: 1, generation: 2, flags: initFlags},
+        ]),
+      );
+    });
+    expect(renderCalls).toHaveBeenCalledWith('item-0');
+    expect(renderCalls).toHaveBeenCalledWith('item-1');
+  });
+
+  it('supports nativeTemplate on iOS as well as Android', async () => {
+    Object.defineProperty(Platform, 'OS', {value: 'ios', configurable: true});
+    resetNativeHostCacheForTests();
+    const items = makeItems(10);
+    const mounted = renderNitroList({
+      data: items,
+      recycleItems: true,
+      estimatedItemSize: 60,
+      keyExtractor: itemKey,
+      nativeTemplate: {
+        templates: {default: {type: 'text', textField: 't'}},
+        extractFields: (item) => ({t: item}),
+      },
+      renderItem: ({item}) => <Text>{item}</Text>,
+    });
+    harness = mounted;
+    mounted.layout(390, 844);
+    await mounted.settle(50);
+
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    expect(session.templateSchemaJson).not.toBeNull();
+    expect(session.templateChunks).toHaveLength(1);
+    expect(session.templateChunks[0]).toMatchObject({startIndex: 0, count: 10, totalCount: 10, reset: true});
+  });
+
+  it('uses O(1) shiftNativeTemplateData + incremental packing on pure prepend and append', async () => {
+    const initial = makeItems(200);
+    const tpl: NativeTemplateConfig<string> = {
+      templates: {default: {type: 'text', textField: 't'}},
+      extractFields: (item) => ({t: item}),
+    };
+    const mounted = renderNitroList({
+      data: initial,
+      recycleItems: true,
+      estimatedItemSize: 60,
+      keyExtractor: itemKey,
+      nativeTemplate: tpl,
+      renderItem: ({item}) => <Text>{item}</Text>,
+    });
+    harness = mounted;
+    mounted.layout(360, 640);
+    await mounted.settle(50);
+
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    expect(session.templateChunks).toHaveLength(1);
+    expect(session.templateChunks[0]).toMatchObject({startIndex: 0, count: 200, reset: true});
+
+    // Pure prepend of 50 older items: shifts existing 200 items & packs ONLY the 50 new ones!
+    const older = Array.from({length: 50}, (_, i) => `older-${i}`);
+    const prepended = [...older, ...initial];
+    mounted.update({data: prepended});
+    await mounted.settle(50);
+    expect(session.templateShifts).toEqual([{delta: 50, totalCount: 250}]);
+    expect(session.templateChunks).toHaveLength(2);
+    expect(session.templateChunks[1]).toMatchObject({startIndex: 0, count: 50, totalCount: 250, reset: false});
+
+    // Pure append of 25 newer items: packs ONLY [250..275) with reset=false!
+    const newer = Array.from({length: 25}, (_, i) => `newer-${i}`);
+    mounted.update({data: [...prepended, ...newer]});
+    await mounted.settle(50);
+    expect(session.templateChunks).toHaveLength(3);
+    expect(session.templateChunks[2]).toMatchObject({startIndex: 250, count: 25, totalCount: 275, reset: false});
   });
 });

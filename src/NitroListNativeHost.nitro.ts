@@ -34,4 +34,31 @@ export interface NitroListNativeHost extends HybridObject<{android: 'kotlin'; io
   // Level 2: Native Image Prefetch
   prefetchImages(uris: string[], widthPx: number, heightPx: number): void;
   cancelImagePrefetch(): void;
+
+  // Level 3: Opt-in Zero-JS Native Declarative Cell Templates
+  attachNativeSlotContainer(
+    hostId: number,
+    containerViewTag: number,
+    numColumns: number,
+    crossAxisGapDp: number,
+  ): void;
+  setNativeTemplateSchema(hostId: number, schemaJson: string): void;
+  setNativeTemplateData(
+    hostId: number,
+    startIndex: number,
+    count: number,
+    totalCount: number,
+    reset: boolean,
+    packedData: ArrayBuffer,
+  ): void;
+  shiftNativeTemplateData(hostId: number, delta: number, totalCount: number): void;
+  setNativePressHandler(
+    hostId: number,
+    onPress: (index: number, action: string) => void,
+  ): void;
+  setNativeDataRequestHandler(
+    hostId: number,
+    onRequestData: (startIndex: number, count: number) => void,
+  ): void;
+  clearNativeTemplate(hostId: number): void;
 }

@@ -103,6 +103,21 @@ export interface MockNativeHostSession {
   ) => void;
   onContentSize: (totalSize: number, layoutVersion: number) => void;
   detached: boolean;
+  templateContainerTag: number;
+  templateNumColumns: number;
+  templateCrossAxisGapDp: number;
+  templateSchemaJson: string | null;
+  templateChunks: Array<{
+    startIndex: number;
+    count: number;
+    totalCount: number;
+    reset: boolean;
+    byteLength: number;
+  }>;
+  onNativePress: ((index: number, action: string) => void) | null;
+  onNativeDataRequest: ((startIndex: number, count: number) => void) | null;
+  templateShifts: Array<{delta: number; totalCount: number}>;
+  templateClearCount: number;
 }
 
 let mockNativeHostEnabled = false;
@@ -163,6 +178,15 @@ const nativeHostMock = {
       onSlotRebinds,
       onContentSize,
       detached: false,
+      templateContainerTag: -1,
+      templateNumColumns: 1,
+      templateCrossAxisGapDp: 0,
+      templateSchemaJson: null,
+      templateChunks: [],
+      onNativePress: null,
+      onNativeDataRequest: null,
+      templateShifts: [],
+      templateClearCount: 0,
     });
     return hostId;
   },
@@ -206,6 +230,67 @@ const nativeHostMock = {
   },
   cancelImagePrefetch(): void {
     cancelPrefetchCount++;
+  },
+  attachNativeSlotContainer(
+    hostId: number,
+    containerViewTag: number,
+    numColumns: number,
+    crossAxisGapDp: number,
+  ): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) {
+      s.templateContainerTag = containerViewTag;
+      s.templateNumColumns = numColumns;
+      s.templateCrossAxisGapDp = crossAxisGapDp;
+    }
+  },
+  setNativeTemplateSchema(hostId: number, schemaJson: string): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.templateSchemaJson = schemaJson;
+  },
+  setNativeTemplateData(
+    hostId: number,
+    startIndex: number,
+    count: number,
+    totalCount: number,
+    reset: boolean,
+    packedData: ArrayBuffer,
+  ): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) {
+      s.templateChunks.push({
+        startIndex,
+        count,
+        totalCount,
+        reset,
+        byteLength: packedData.byteLength,
+      });
+    }
+  },
+  shiftNativeTemplateData(hostId: number, delta: number, totalCount: number): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) {
+      s.templateShifts.push({delta, totalCount});
+    }
+  },
+  setNativePressHandler(hostId: number, onPress: (index: number, action: string) => void): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.onNativePress = onPress;
+  },
+  setNativeDataRequestHandler(
+    hostId: number,
+    onRequestData: (startIndex: number, count: number) => void,
+  ): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.onNativeDataRequest = onRequestData;
+  },
+  clearNativeTemplate(hostId: number): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) {
+      s.templateSchemaJson = null;
+      s.templateChunks = [];
+      s.templateClearCount++;
+    }
   },
 };
 

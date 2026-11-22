@@ -123,6 +123,72 @@ export function syncNativeHostNow(hostId: number): void {
   getNativeHost()?.syncNow(hostId);
 }
 
+export function attachNativeSlotContainer(
+  hostId: number,
+  containerViewTag: number,
+  numColumns: number,
+  crossAxisGapDp: number,
+): void {
+  if (hostId <= 0 || containerViewTag <= 0) return;
+  getNativeHost()?.attachNativeSlotContainer(hostId, containerViewTag, numColumns, crossAxisGapDp);
+}
+
+export function setNativeTemplateSchema(hostId: number, schemaJson: string): void {
+  if (hostId <= 0) return;
+  getNativeHost()?.setNativeTemplateSchema(hostId, schemaJson);
+}
+
+export function setNativeTemplateData(
+  hostId: number,
+  startIndex: number,
+  count: number,
+  totalCount: number,
+  reset: boolean,
+  packedData: ArrayBuffer,
+): void {
+  if (hostId <= 0 || count <= 0) return;
+  getNativeHost()?.setNativeTemplateData(hostId, startIndex, count, totalCount, reset, packedData);
+}
+
+export function shiftNativeTemplateData(
+  hostId: number,
+  delta: number,
+  totalCount: number,
+): void {
+  if (hostId <= 0 || delta === 0) return;
+  getNativeHost()?.shiftNativeTemplateData(hostId, delta, totalCount);
+}
+
+export function setNativePressHandler(
+  hostId: number,
+  onPress: (index: number, action: string) => void,
+): void {
+  if (hostId <= 0) return;
+  getNativeHost()?.setNativePressHandler(hostId, onPress);
+}
+
+export function setNativeDataRequestHandler(
+  hostId: number,
+  onRequestData: (startIndex: number, count: number) => void,
+): void {
+  if (hostId <= 0) return;
+  getNativeHost()?.setNativeDataRequestHandler(hostId, onRequestData);
+}
+
+export function clearNativeTemplate(hostId: number): void {
+  if (hostId <= 0) return;
+  getNativeHost()?.clearNativeTemplate(hostId);
+}
+
+export function isNativeTemplateSupported(): boolean {
+  const host = getNativeHost();
+  return (
+    (Platform.OS === 'android' || Platform.OS === 'ios') &&
+    host != null &&
+    typeof host.setNativeTemplateSchema === 'function'
+  );
+}
+
 export function prefetchNitroListImages(
   uris: ReadonlyArray<string>,
   widthPx = 0,

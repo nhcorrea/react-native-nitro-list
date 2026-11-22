@@ -64,6 +64,13 @@ namespace margelo::nitro::nitrolist {
       virtual void syncNow(double hostId) = 0;
       virtual void prefetchImages(const std::vector<std::string>& uris, double widthPx, double heightPx) = 0;
       virtual void cancelImagePrefetch() = 0;
+      virtual void attachNativeSlotContainer(double hostId, double containerViewTag, double numColumns, double crossAxisGapDp) = 0;
+      virtual void setNativeTemplateSchema(double hostId, const std::string& schemaJson) = 0;
+      virtual void setNativeTemplateData(double hostId, double startIndex, double count, double totalCount, bool reset, const std::shared_ptr<ArrayBuffer>& packedData) = 0;
+      virtual void shiftNativeTemplateData(double hostId, double delta, double totalCount) = 0;
+      virtual void setNativePressHandler(double hostId, const std::function<void(double /* index */, const std::string& /* action */)>& onPress) = 0;
+      virtual void setNativeDataRequestHandler(double hostId, const std::function<void(double /* startIndex */, double /* count */)>& onRequestData) = 0;
+      virtual void clearNativeTemplate(double hostId) = 0;
 
     protected:
       // Hybrid Setup

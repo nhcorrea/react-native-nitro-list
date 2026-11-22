@@ -17,6 +17,7 @@
 #include "JFunc_void_double_double.hpp"
 #include <string>
 #include <vector>
+#include "JFunc_void_double_std__string.hpp"
 
 namespace margelo::nitro::nitrolist {
 
@@ -112,6 +113,34 @@ namespace margelo::nitro::nitrolist {
   void JHybridNitroListNativeHostSpec::cancelImagePrefetch() {
     static const auto method = _javaPart->javaClassStatic()->getMethod<void()>("cancelImagePrefetch");
     method(_javaPart);
+  }
+  void JHybridNitroListNativeHostSpec::attachNativeSlotContainer(double hostId, double containerViewTag, double numColumns, double crossAxisGapDp) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */, double /* containerViewTag */, double /* numColumns */, double /* crossAxisGapDp */)>("attachNativeSlotContainer");
+    method(_javaPart, hostId, containerViewTag, numColumns, crossAxisGapDp);
+  }
+  void JHybridNitroListNativeHostSpec::setNativeTemplateSchema(double hostId, const std::string& schemaJson) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */, jni::alias_ref<jni::JString> /* schemaJson */)>("setNativeTemplateSchema");
+    method(_javaPart, hostId, jni::make_jstring(schemaJson));
+  }
+  void JHybridNitroListNativeHostSpec::setNativeTemplateData(double hostId, double startIndex, double count, double totalCount, bool reset, const std::shared_ptr<ArrayBuffer>& packedData) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */, double /* startIndex */, double /* count */, double /* totalCount */, jboolean /* reset */, jni::alias_ref<JArrayBuffer::javaobject> /* packedData */)>("setNativeTemplateData");
+    method(_javaPart, hostId, startIndex, count, totalCount, reset, JArrayBuffer::wrap(packedData));
+  }
+  void JHybridNitroListNativeHostSpec::shiftNativeTemplateData(double hostId, double delta, double totalCount) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */, double /* delta */, double /* totalCount */)>("shiftNativeTemplateData");
+    method(_javaPart, hostId, delta, totalCount);
+  }
+  void JHybridNitroListNativeHostSpec::setNativePressHandler(double hostId, const std::function<void(double /* index */, const std::string& /* action */)>& onPress) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */, jni::alias_ref<JFunc_void_double_std__string::javaobject> /* onPress */)>("setNativePressHandler_cxx");
+    method(_javaPart, hostId, JFunc_void_double_std__string_cxx::fromCpp(onPress));
+  }
+  void JHybridNitroListNativeHostSpec::setNativeDataRequestHandler(double hostId, const std::function<void(double /* startIndex */, double /* count */)>& onRequestData) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */, jni::alias_ref<JFunc_void_double_double::javaobject> /* onRequestData */)>("setNativeDataRequestHandler_cxx");
+    method(_javaPart, hostId, JFunc_void_double_double_cxx::fromCpp(onRequestData));
+  }
+  void JHybridNitroListNativeHostSpec::clearNativeTemplate(double hostId) {
+    static const auto method = _javaPart->javaClassStatic()->getMethod<void(double /* hostId */)>("clearNativeTemplate");
+    method(_javaPart, hostId);
   }
 
 } // namespace margelo::nitro::nitrolist

@@ -344,6 +344,64 @@ static void testSlotPoolAndEngineRegistryNativeFlow() {
   assert(engine.getExternalMemorySize() == 0);
 }
 
+static void testLevel3GridReadTemplateSlotsAndNativeSync() {
+  HybridNitroListEngine engine;
+  const int64_t id = static_cast<int64_t>(engine.getEngineId());
+  auto state = EngineRegistry::instance().find(id);
+  assert(state != nullptr);
+
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  // 3-column grid with variable spans: item 0 spans 2, item 1 spans 1, items 2..59 span 1
+  auto spansBuf = std::make_shared<ArrayBuffer>(60 * sizeof(uint16_t));
+  auto* spans = reinterpret_cast<uint16_t*>(spansBuf->data());
+  for (int i = 0; i < 60; ++i) spans[i] = 1;
+  spans[0] = 2;
+  engine.updateData(
+      doubles({1, 60, 120, 250, 0, 3, 0, 1, 1, -1, -1, 0, 0, 0, 60, 0, 0}),
+      empty, spansBuf, empty, empty);
+  engine.setViewport(360, 600);
+  engine.configureSlots(12, 0, 0);
+
+  std::vector<SlotDelta> deltas;
+  // nativeSync mode (jsLatencyMs = -1.0)
+  auto step1 = state->onNativeScroll(0.0, 0.0, 0, true, deltas, -1.0);
+  assert(step1.slotCount > 0 && step1.rangeStart == 0 && step1.rangeEnd >= 10);
+
+  double offsetsOut[64];
+  int32_t infoOut[64 * 6];
+  double totalOut = 0.0;
+  int32_t stickyOut = -1;
+  double stickyTransOut = 0.0;
+  double pendingShiftOut = 0.0;
+  int32_t count = state->readTemplateSlots(
+      offsetsOut, infoOut, 64, totalOut, stickyOut, stickyTransOut, &pendingShiftOut);
+  assert(count == step1.slotCount && totalOut > 0.0);
+
+  // Verify col & span metadata for items 0, 1, 2, 3, 4
+  bool saw0 = false, saw1 = false, saw2 = false, saw3 = false;
+  for (int32_t s = 0; s < count; ++s) {
+    const int32_t active = infoOut[s * 6 + 0];
+    const int32_t itemIdx = infoOut[s * 6 + 1];
+    const int32_t col = infoOut[s * 6 + 3];
+    const int32_t span = infoOut[s * 6 + 4];
+    if (!active) continue;
+    if (itemIdx == 0) { assert(col == 0 && span == 2); saw0 = true; }
+    if (itemIdx == 1) { assert(col == 2 && span == 1); saw1 = true; }
+    if (itemIdx == 2) { assert(col == 0 && span == 1); saw2 = true; }
+    if (itemIdx == 3) { assert(col == 1 && span == 1); saw3 = true; }
+  }
+  assert(saw0 && saw1 && saw2 && saw3);
+
+  // Incremental scroll by 1 row in mid-list 3-col grid with nativeSync must rebind smoothly
+  // (1 row = 3 cells), NOT accumulate multiple rows in a coarse lazy-refill burst!
+  auto stepMid = state->onNativeScroll(400.0, 2000.0, 0, true, deltas, -1.0);
+  auto stepNext = state->onNativeScroll(530.0, 2000.0, 0, true, deltas, -1.0);
+  assert(stepNext.rangeEnd > stepMid.rangeEnd);
+  assert(stepNext.rangeEnd - stepMid.rangeEnd <= 6);
+
+  engine.dispose();
+}
+
 int main() {
   HybridNitroListEngine engine;
   auto empty = std::make_shared<ArrayBuffer>(0);
@@ -419,5 +477,6 @@ int main() {
   testDataConfigClampsNegativeEstimateAndDraw();
   testNonFiniteIndicesDoNotAliasItemZero();
   testSlotPoolAndEngineRegistryNativeFlow();
+  testLevel3GridReadTemplateSlotsAndNativeSync();
   std::cout << "Hybrid engine tests passed\n";
 }

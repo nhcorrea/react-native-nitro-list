@@ -271,4 +271,52 @@ Java_com_margelo_nitro_nitrolist_NativeHostBridge_nativeIsPrewarmActive(
   return (state != nullptr && state->isJsPrewarmActive()) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jint JNICALL
+Java_com_margelo_nitro_nitrolist_NativeHostBridge_nativeReadTemplateSlots(
+    JNIEnv* env,
+    jobject /* thiz */,
+    jlong engineId,
+    jdoubleArray outOffsetsDp,
+    jintArray outInfo,
+    jint maxSlots,
+    jdoubleArray outHeader) {
+  auto state = EngineRegistry::instance().find(static_cast<int64_t>(engineId));
+  if (state == nullptr || outOffsetsDp == nullptr || outInfo == nullptr || maxSlots <= 0) {
+    return 0;
+  }
+
+  const int32_t cap = std::min<int32_t>(
+      static_cast<int32_t>(maxSlots),
+      std::min<int32_t>(env->GetArrayLength(outOffsetsDp), env->GetArrayLength(outInfo) / 6));
+  if (cap <= 0) return 0;
+
+  thread_local std::vector<double> offsets;
+  thread_local std::vector<int32_t> info;
+  offsets.resize(static_cast<size_t>(cap));
+  info.resize(static_cast<size_t>(cap) * 6);
+  double totalSizeDp = 0.0;
+  int32_t stickyIndex = -1;
+  double stickyTranslateYDp = 0.0;
+  double pendingMvcpShiftDp = 0.0;
+
+  const int32_t count = state->readTemplateSlots(
+      offsets.data(), info.data(), cap, totalSizeDp, stickyIndex, stickyTranslateYDp,
+      &pendingMvcpShiftDp);
+
+  if (count > 0) {
+    env->SetDoubleArrayRegion(outOffsetsDp, 0, count, reinterpret_cast<const jdouble*>(offsets.data()));
+    env->SetIntArrayRegion(outInfo, 0, count * 6, reinterpret_cast<const jint*>(info.data()));
+  }
+  if (outHeader != nullptr && env->GetArrayLength(outHeader) >= 4) {
+    jdouble header[4] = {
+        static_cast<jdouble>(totalSizeDp),
+        static_cast<jdouble>(stickyIndex),
+        static_cast<jdouble>(stickyTranslateYDp),
+        static_cast<jdouble>(pendingMvcpShiftDp),
+    };
+    env->SetDoubleArrayRegion(outHeader, 0, 4, header);
+  }
+  return static_cast<jint>(count);
+}
+
 } // extern "C"

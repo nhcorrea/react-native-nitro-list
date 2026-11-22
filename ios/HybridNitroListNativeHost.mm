@@ -1,5 +1,6 @@
 #import "HybridNitroListNativeHost.hpp"
 #import "EngineRegistry.hpp"
+#import "NitroNativeTemplateEngine.h"
 
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
@@ -73,7 +74,11 @@ static uint32_t parseGenerationFromView(UIView* view) {
 @property(nonatomic, weak) UIScrollView* scrollView;
 @property(nonatomic, weak) UIView* stickyView;
 @property(nonatomic, strong) CADisplayLink* displayLink;
+@property(nonatomic, strong) NLNativeTemplateEngine* templateEngine;
+@property(nonatomic, assign) BOOL templateLoadNotified;
+@property(nonatomic, assign) double templateReportedContainerPt;
 - (void)applyExternalMvcpShift:(double)deltaPt;
+- (void)runTemplateSync;
 @end
 
 struct IosSlotRecord {
@@ -125,6 +130,9 @@ struct IosSlotRecord {
     _lastReportedTotal = -1.0;
     _lastReportedVersion = -1;
     _lastStickyIndex = -1;
+    _templateEngine = [[NLNativeTemplateEngine alloc] init];
+    _templateLoadNotified = NO;
+    _templateReportedContainerPt = 0.0;
     _offsetsBuf.resize(128, 0.0);
     _metaBuf.resize(128 * 3, 0);
   }
@@ -185,6 +193,7 @@ struct IosSlotRecord {
   }
   _slotViews.clear();
   _slotViewCache.clear();
+  [_templateEngine clear];
   _scrollView = nil;
   _stickyView = nil;
 }
@@ -263,10 +272,33 @@ struct IosSlotRecord {
   const double curPt = sv != nil ? (_horizontal ? sv.contentOffset.x : sv.contentOffset.y) : offsetPt;
   const double effectiveOffsetPt = curPt + _mvcpMomentumShift;
   const int32_t budget = std::abs(_lastVelocity) > 25000.0 ? 8 : 0;
+  const double jsLatency = _templateEngine.isActive ? -1.0 : 0.0;
   std::vector<SlotDelta> deltas;
-  const auto res = state->onNativeScroll(effectiveOffsetPt, _lastVelocity, budget, !_inMomentum, deltas);
+  const auto res =
+      state->onNativeScroll(effectiveOffsetPt, _lastVelocity, budget, !_inMomentum, deltas, jsLatency);
 
   [self applyStickyIndex:res.stickyIndex translate:res.stickyTranslateYDp];
+
+  if (_templateEngine.isActive) {
+    const BOOL stickyChanged = res.stickyIndex != _lastStickyIndex;
+    _lastStickyIndex = res.stickyIndex;
+    if (res.deltaCount > 0 || res.changed || !_templateLoadNotified ||
+        std::abs(_mvcpMomentumShift) >= 0.25) {
+      [self runTemplateSync];
+    }
+    if (stickyChanged && _onSlotRebinds) {
+      auto emptyAb = ArrayBuffer::allocate(4);
+      _onSlotRebinds(0.0,
+                     static_cast<double>(res.rangeStart),
+                     static_cast<double>(res.rangeEnd),
+                     static_cast<double>(res.layoutVersion),
+                     res.totalSizeDp,
+                     static_cast<double>(res.stickyIndex),
+                     _lastVelocity,
+                     emptyAb);
+    }
+    return;
+  }
 
   bool needsJsWake = res.stickyIndex != _lastStickyIndex || res.changed;
   if (!needsJsWake && res.deltaCount > 0) {
@@ -318,6 +350,78 @@ struct IosSlotRecord {
   _suppressVelocity = YES;
   sv.contentOffset = pt;
   _suppressVelocity = NO;
+  [_templateEngine invalidateAppliedCoords];
+}
+
+- (void)runTemplateSync {
+  if (_detached || !_templateEngine.isActive) return;
+  auto state = EngineRegistry::instance().find(_engineId);
+  UIScrollView* sv = _scrollView;
+  if (state == nullptr || sv == nil) return;
+
+  __weak NLHostSessionObjC* weakSelf = self;
+  const auto res = [_templateEngine
+      syncAndPositionWithEngine:state
+                     scrollView:sv
+               resolveContainer:^UIView*(NSInteger tag) {
+                 return findReactViewByTag(tag);
+               }
+                     horizontal:_horizontal
+                    mvcpEnabled:_mvcpEnabled
+                     inMomentum:_inMomentum
+            suppressDataRequest:(_inMomentum && std::abs(_lastVelocity) > 18000.0)
+              mvcpMomentumShift:_mvcpMomentumShift
+               onApplyMvcpDelta:^double(double mvcpDeltaPt) {
+                 NLHostSessionObjC* strongSelf = weakSelf;
+                 if (strongSelf == nil) return 0.0;
+                 if (strongSelf->_inMomentum) {
+                   strongSelf->_mvcpMomentumShift += mvcpDeltaPt;
+                 } else if (UIScrollView* scrollV = strongSelf->_scrollView) {
+                   CGPoint pt = scrollV.contentOffset;
+                   if (strongSelf->_horizontal) pt.x = std::max(0.0, pt.x + mvcpDeltaPt);
+                   else pt.y = std::max(0.0, pt.y + mvcpDeltaPt);
+                   strongSelf->_lastOffset = strongSelf->_horizontal ? pt.x : pt.y;
+                   strongSelf->_suppressVelocity = YES;
+                   scrollV.contentOffset = pt;
+                   strongSelf->_suppressVelocity = NO;
+                 }
+                 return strongSelf->_mvcpMomentumShift;
+               }
+             onDrainedMvcpShift:^double(double drainedPt) {
+               NLHostSessionObjC* strongSelf = weakSelf;
+               if (strongSelf == nil) return 0.0;
+               if (std::abs(drainedPt) > 0.1) {
+                 strongSelf->_mvcpMomentumShift += drainedPt;
+                 UIScrollView* scrollV = strongSelf->_scrollView;
+                 if (scrollV != nil && !scrollV.isDecelerating) {
+                   [strongSelf foldMomentumMvcpShift];
+                 }
+               }
+               return strongSelf->_mvcpMomentumShift;
+             }];
+
+  if (res.slotCount > 0) {
+    [self applyStickyIndex:res.stickyIndex translate:res.stickyTranslateDp];
+    const double total = res.totalSizeDp;
+    const double offsetPt = _horizontal ? sv.contentOffset.x : sv.contentOffset.y;
+    const double vpPt = _horizontal ? sv.bounds.size.width : sv.bounds.size.height;
+    const BOOL nearEnd =
+        vpPt > 0.0 && (offsetPt + vpPt * 3.0) >= std::min(_templateReportedContainerPt, total);
+    const BOOL needsReport =
+        !_templateLoadNotified || total > _templateReportedContainerPt ||
+        (nearEnd && std::abs(total - _templateReportedContainerPt) > 0.5);
+    if (needsReport && total > 0.0 && _onContentSize) {
+      const double nextReported = (!_templateLoadNotified || nearEnd || _templateReportedContainerPt <= 0.0)
+                                      ? total
+                                      : total + std::max(vpPt * 2.0, total * 0.1);
+      _templateLoadNotified = YES;
+      _templateReportedContainerPt = nextReported;
+      _lastReportedTotal = nextReported;
+      const int32_t ver = res.layoutVersion >= 0 ? res.layoutVersion : _lastReportedVersion + 1;
+      _lastReportedVersion = ver;
+      _onContentSize(nextReported, static_cast<double>(ver));
+    }
+  }
 }
 
 - (void)applyStickyIndex:(int32_t)stickyIndex translate:(double)translatePt {
@@ -338,6 +442,10 @@ struct IosSlotRecord {
 }
 
 - (void)applyPreDraw {
+  if (_templateEngine.isActive) {
+    [self runTemplateSync];
+    return;
+  }
   auto state = EngineRegistry::instance().find(_engineId);
   if (state == nullptr) return;
   const size_t cap = std::max<size_t>(_offsetsBuf.size(), _slotViews.size() + 16);
@@ -687,6 +795,142 @@ void HybridNitroListNativeHost::cancelImagePrefetch() {
     [task cancel];
   }
   [gPrefetchTasks removeAllObjects];
+}
+
+void HybridNitroListNativeHost::attachNativeSlotContainer(double hostId,
+                                                          double containerViewTag,
+                                                          double numColumns,
+                                                          double crossAxisGapDp) {
+  if (!std::isfinite(hostId) || hostId <= 0 || !std::isfinite(containerViewTag) ||
+      containerViewTag <= 0) {
+    return;
+  }
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  const NSInteger tag = static_cast<NSInteger>(containerViewTag);
+  const int32_t cols =
+      (std::isfinite(numColumns) && numColumns >= 1.0) ? static_cast<int32_t>(numColumns) : 1;
+  const double gap = (std::isfinite(crossAxisGapDp) && crossAxisGapDp >= 0.0) ? crossAxisGapDp : 0.0;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    UIView* resolved = findReactViewByTag(tag);
+    [session.templateEngine setContainerTag:tag numColumns:cols crossAxisGapPt:gap resolved:resolved];
+    auto state = EngineRegistry::instance().find(session.engineId);
+    if (UIScrollView* sv = session.scrollView) {
+      if (state == nullptr || !state->isJsPrewarmActive()) {
+        [session handleScrollOffset:sv.contentOffset];
+      }
+      [session runTemplateSync];
+    }
+  });
+}
+
+void HybridNitroListNativeHost::setNativeTemplateSchema(double hostId,
+                                                        const std::string& schemaJson) {
+  if (!std::isfinite(hostId) || hostId <= 0 || schemaJson.empty()) return;
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  NSString* json = [NSString stringWithUTF8String:schemaJson.c_str()];
+  if (json == nil) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    [session.templateEngine setSchemaJson:json];
+    session.templateLoadNotified = NO;
+    session.templateReportedContainerPt = 0.0;
+    auto state = EngineRegistry::instance().find(session.engineId);
+    if (UIScrollView* sv = session.scrollView) {
+      if (state == nullptr || !state->isJsPrewarmActive()) {
+        [session handleScrollOffset:sv.contentOffset];
+      }
+      [session runTemplateSync];
+    }
+  });
+}
+
+void HybridNitroListNativeHost::setNativeTemplateData(
+    double hostId, double startIndex, double count, double totalCount, bool reset,
+    const std::shared_ptr<ArrayBuffer>& packedData) {
+  if (!std::isfinite(hostId) || hostId <= 0 || !std::isfinite(startIndex) ||
+      !std::isfinite(count) || !std::isfinite(totalCount) || packedData == nullptr) {
+    return;
+  }
+  const int32_t s = static_cast<int32_t>(startIndex);
+  const int32_t c = static_cast<int32_t>(count);
+  const int32_t t = static_cast<int32_t>(totalCount);
+  const size_t len = packedData->size();
+  if (s < 0 || c <= 0 || t <= 0 || len < 16) return;
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  // Copy bytes synchronously on JSI thread before hopping to main queue
+  NSData* copy = [NSData dataWithBytes:packedData->data() length:len];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    [session.templateEngine setDataChunkStart:s
+                                        count:c
+                                   totalCount:t
+                                        reset:reset ? YES : NO
+                                        bytes:static_cast<const uint8_t*>(copy.bytes)
+                                       length:copy.length];
+    auto state = EngineRegistry::instance().find(session.engineId);
+    if (UIScrollView* sv = session.scrollView) {
+      if (state == nullptr || !state->isJsPrewarmActive()) {
+        [session handleScrollOffset:sv.contentOffset];
+      }
+      [session runTemplateSync];
+    }
+  });
+}
+
+void HybridNitroListNativeHost::shiftNativeTemplateData(double hostId, double delta,
+                                                        double totalCount) {
+  if (!std::isfinite(hostId) || hostId <= 0 || !std::isfinite(delta) || !std::isfinite(totalCount)) {
+    return;
+  }
+  const int32_t d = static_cast<int32_t>(delta);
+  const int32_t t = static_cast<int32_t>(totalCount);
+  if (d == 0 || t < 0) return;
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    [session.templateEngine shiftDataIndicesDelta:d totalCount:t];
+  });
+}
+
+void HybridNitroListNativeHost::setNativePressHandler(
+    double hostId, const std::function<void(double, const std::string&)>& onPress) {
+  if (!std::isfinite(hostId) || hostId <= 0) return;
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  auto cb = onPress;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    [session.templateEngine setPressHandler:std::move(cb)];
+  });
+}
+
+void HybridNitroListNativeHost::setNativeDataRequestHandler(
+    double hostId, const std::function<void(double, double)>& onRequestData) {
+  if (!std::isfinite(hostId) || hostId <= 0) return;
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  auto cb = onRequestData;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    [session.templateEngine setDataRequestHandler:std::move(cb)];
+  });
+}
+
+void HybridNitroListNativeHost::clearNativeTemplate(double hostId) {
+  if (!std::isfinite(hostId) || hostId <= 0) return;
+  NLHostSessionObjC* session = findIosHost(static_cast<int32_t>(hostId));
+  if (session == nil) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (session.detached) return;
+    [session.templateEngine clear];
+    session.templateLoadNotified = NO;
+    session.templateReportedContainerPt = 0.0;
+  });
 }
 
 } // namespace margelo::nitro::nitrolist

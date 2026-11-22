@@ -10,6 +10,7 @@ import type {
 import type {SharedValue} from 'react-native-reanimated';
 import type {ScrollHandlerProcessed} from 'react-native-reanimated';
 import type {ReanimatedScrollEvent as ScrollEvent} from 'react-native-reanimated/lib/typescript/hook/commonTypes';
+import type {NativeTemplateConfig} from './nativeTemplate';
 
 
 export interface NitroListRangeChangeEvent {
@@ -217,4 +218,9 @@ export interface NitroListProps<T> {
   onViewableItemsChanged?: NitroListOnViewableItemsChanged<T>;
   alwaysRender?: NitroListAlwaysRenderConfig;
   contentContainerStyle?: StyleProp<ViewStyle>;
+  /**
+   * Level 3 (opt-in): Declarative native cell templates rendered and bound directly on the UI
+   * thread without invoking React, Fiber, or Fabric during scroll.
+   */
+  nativeTemplate?: NativeTemplateConfig<T>;
 }

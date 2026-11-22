@@ -86,6 +86,44 @@ abstract class HybridNitroListNativeHostSpec: HybridObject() {
   @DoNotStrip
   @Keep
   abstract fun cancelImagePrefetch(): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun attachNativeSlotContainer(hostId: Double, containerViewTag: Double, numColumns: Double, crossAxisGapDp: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setNativeTemplateSchema(hostId: Double, schemaJson: String): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setNativeTemplateData(hostId: Double, startIndex: Double, count: Double, totalCount: Double, reset: Boolean, packedData: ArrayBuffer): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun shiftNativeTemplateData(hostId: Double, delta: Double, totalCount: Double): Unit
+  
+  abstract fun setNativePressHandler(hostId: Double, onPress: (index: Double, action: String) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setNativePressHandler_cxx(hostId: Double, onPress: Func_void_double_std__string): Unit {
+    val __result = setNativePressHandler(hostId, onPress)
+    return __result
+  }
+  
+  abstract fun setNativeDataRequestHandler(hostId: Double, onRequestData: (startIndex: Double, count: Double) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setNativeDataRequestHandler_cxx(hostId: Double, onRequestData: Func_void_double_double): Unit {
+    val __result = setNativeDataRequestHandler(hostId, onRequestData)
+    return __result
+  }
+  
+  @DoNotStrip
+  @Keep
+  abstract fun clearNativeTemplate(hostId: Double): Unit
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {

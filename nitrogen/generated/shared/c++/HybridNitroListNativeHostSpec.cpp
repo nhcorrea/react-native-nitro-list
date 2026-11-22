@@ -27,6 +27,13 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridMethod("syncNow", &HybridNitroListNativeHostSpec::syncNow);
       prototype.registerHybridMethod("prefetchImages", &HybridNitroListNativeHostSpec::prefetchImages);
       prototype.registerHybridMethod("cancelImagePrefetch", &HybridNitroListNativeHostSpec::cancelImagePrefetch);
+      prototype.registerHybridMethod("attachNativeSlotContainer", &HybridNitroListNativeHostSpec::attachNativeSlotContainer);
+      prototype.registerHybridMethod("setNativeTemplateSchema", &HybridNitroListNativeHostSpec::setNativeTemplateSchema);
+      prototype.registerHybridMethod("setNativeTemplateData", &HybridNitroListNativeHostSpec::setNativeTemplateData);
+      prototype.registerHybridMethod("shiftNativeTemplateData", &HybridNitroListNativeHostSpec::shiftNativeTemplateData);
+      prototype.registerHybridMethod("setNativePressHandler", &HybridNitroListNativeHostSpec::setNativePressHandler);
+      prototype.registerHybridMethod("setNativeDataRequestHandler", &HybridNitroListNativeHostSpec::setNativeDataRequestHandler);
+      prototype.registerHybridMethod("clearNativeTemplate", &HybridNitroListNativeHostSpec::clearNativeTemplate);
     });
   }
 

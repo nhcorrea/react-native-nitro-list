@@ -84,13 +84,26 @@ import {createImagePrefetcher, type ImagePrefetcher} from './imagePrefetch';
 import {
   applyNativeHostMvcpShift,
   attachNativeHost,
+  attachNativeSlotContainer,
+  clearNativeTemplate,
   detachNativeHost,
   isNativeHostSupported,
+  isNativeTemplateSupported,
   notifyNativeHostDataCommit,
+  setNativeDataRequestHandler,
   setNativeHostMvcpEnabled,
   setNativeHostUserHasOnScroll,
+  setNativePressHandler,
+  setNativeTemplateData,
+  setNativeTemplateSchema,
+  shiftNativeTemplateData,
   syncNativeHostNow,
 } from './nativeHost';
+import {
+  compileNativeTemplate,
+  packNativeTemplateChunk,
+  type CompiledNativeTemplate,
+} from './nativeTemplate';
 import {
   NativeHostStickySlot,
   NitroListSlots,
@@ -476,6 +489,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     prepareItem,
     getImageUris,
     imagePrefetchConfig,
+    nativeTemplate,
     clipItemsToBounds,
     experimentalEagerMount,
   } = props;
@@ -492,8 +506,15 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     !NitroListDevFlags.experimentalSlot02 &&
     !NitroListDevFlags.experimentalSlot03;
   const nativeHostEligibleRef = useRef(nativeHostEligible);
+  const nativeTemplateActive =
+    nativeHostEligible &&
+    nativeTemplate != null &&
+    nativeTemplate.enabled !== false &&
+    isNativeTemplateSupported();
+  const nativeTemplateActiveRef = useRef(nativeTemplateActive);
   commitBindings.push(() => {
     nativeHostEligibleRef.current = nativeHostEligible;
+    nativeTemplateActiveRef.current = nativeTemplateActive;
   });
 
   const resolvedRenderScrollComponent =
@@ -3369,6 +3390,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     (engine: NitroListEngine | null) => {
       if (
         !nativeHostEligible ||
+        nativeTemplateActiveRef.current ||
         engine == null ||
         itemCount <= 0 ||
         (slotStore.getSlotCount() > 0 && !initialBudgetPendingRef.current)
@@ -3492,7 +3514,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       const stickyIndex = buf[5];
       if (slotCount <= 0) return;
 
-      slotStore.applyNativeDeltas(slotCount, buf.buffer, 8, deltaCount);
+      if (!nativeTemplateActiveRef.current) {
+        slotStore.applyNativeDeltas(slotCount, buf.buffer, 8, deltaCount);
+      } else {
+        packNativeTemplateAroundIndexRef.current(targetIndex);
+      }
       latestRangeRef.current = {start: rangeStart, end: rangeEnd};
       committedRangeRef.current = {start: rangeStart, end: rangeEnd, layoutVersion};
       if (layoutVersion !== lastSeenLayoutVersionRef.current) {
@@ -3520,7 +3546,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       }
       store.set(
         'containerSize',
-        isPrewarmingRangeRef.current
+        isPrewarmingRangeRef.current || nativeTemplateActiveRef.current
           ? totalSize
           : nextContainerSize(
               store.get('containerSize'),
@@ -3529,12 +3555,255 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
               mainViewportRef.current,
             ),
       );
+      if (nativeTemplateActiveRef.current && itemCountRef.current > 0) {
+        if (committedRangeRef.current.end < committedRangeRef.current.start) {
+          committedRangeRef.current = {start: 0, end: 0, layoutVersion};
+        }
+        fireOnLoadIfReadyRef.current();
+        maybeExpandDrawDistanceRef.current();
+      }
       flushWaiters(nativeMeasureWaitersRef.current);
       updateAlignPadRef.current();
       updateEndSpaceRef.current();
       recomputeSnapOffsetsRef.current();
     },
   );
+
+  // Level 3: Opt-in zero-JS native declarative template compiler & chunked binary uploader
+  const compiledNativeTemplate = useMemo<CompiledNativeTemplate | null>(
+    () => (nativeTemplateActive && nativeTemplate != null ? compileNativeTemplate(nativeTemplate) : null),
+    [nativeTemplateActive, nativeTemplate],
+  );
+  const nativeSlotContainerTagRef = useRef(-1);
+  const lastTemplateSchemaRef = useRef<string | null>(null);
+  const lastTemplateDataRef = useRef<{
+    items: ReadonlyArray<T>;
+    dataVersion: unknown;
+    schema: string;
+    hostId: number;
+  } | null>(null);
+  const packedNativeRangeRef = useRef<{headEnd: number; tailStart: number}>({
+    headEnd: 0,
+    tailStart: Number.MAX_SAFE_INTEGER,
+  });
+  const nativeTemplatePressRef = useRef<((index: number, action: string) => void) | undefined>(
+    undefined,
+  );
+  commitBindings.push(() => {
+    nativeTemplatePressRef.current = nativeTemplate?.onPress;
+  });
+  const nativeTemplatePressForwarder = useStableCallback(
+    stableCallbacks,
+    (index: number, action: string) => {
+      nativeTemplatePressRef.current?.(index, action);
+    },
+  );
+  const handleNativeDataRequest = useStableCallback(
+    stableCallbacks,
+    (reqStart: number, reqCount: number) => {
+      const hostId = nativeHostIdRef.current;
+      const compiled = compiledNativeTemplate;
+      if (
+        !nativeTemplateActive ||
+        hostId <= 0 ||
+        compiled == null ||
+        nativeTemplate == null ||
+        itemCount <= 0
+      ) {
+        return;
+      }
+      const start = Math.max(0, Math.min(itemCount - 1, Math.trunc(reqStart)));
+      const count = Math.min(
+        itemCount - start,
+        Math.max(1, Math.min(2048, Math.trunc(reqCount))),
+      );
+      if (count <= 0) return;
+      const buf = packNativeTemplateChunk(items, start, count, compiled, nativeTemplate);
+      setNativeTemplateData(hostId, start, count, itemCount, false, buf);
+    },
+  );
+
+  const packNativeTemplateAroundIndex = useStableCallback(
+    stableCallbacks,
+    (centerIndex: number) => {
+      const hostId = nativeHostIdRef.current;
+      const compiled = compiledNativeTemplate;
+      if (
+        !nativeTemplateActive ||
+        hostId <= 0 ||
+        compiled == null ||
+        nativeTemplate == null ||
+        itemCount <= 0
+      ) {
+        return;
+      }
+      const range = packedNativeRangeRef.current;
+      if (centerIndex < range.headEnd || centerIndex >= range.tailStart) return;
+      const start = Math.max(0, centerIndex - 512);
+      const end = Math.min(itemCount, centerIndex + 512);
+      const count = end - start;
+      if (count <= 0) return;
+      const buf = packNativeTemplateChunk(items, start, count, compiled, nativeTemplate);
+      setNativeTemplateData(hostId, start, count, itemCount, false, buf);
+    },
+  );
+  const packNativeTemplateAroundIndexRef = useRef(packNativeTemplateAroundIndex);
+  commitBindings.push(() => {
+    packNativeTemplateAroundIndexRef.current = packNativeTemplateAroundIndex;
+  });
+
+  const attachNativeSlotContainerView = useStableCallback(
+    stableCallbacks,
+    (view: View | null) => {
+      if (view == null) {
+        nativeSlotContainerTagRef.current = -1;
+        return;
+      }
+      const tag = findNodeHandle(view);
+      if (tag != null && tag > 0) {
+        nativeSlotContainerTagRef.current = tag;
+        const hostId = nativeHostIdRef.current;
+        if (hostId > 0 && nativeTemplateActiveRef.current) {
+          attachNativeSlotContainer(hostId, tag, resolvedColumns, crossAxisGap);
+        }
+      }
+    },
+  );
+
+  const syncNativeTemplateEffect = useStableCallback(stableCallbacks, () => {
+    const hostId = nativeHostIdRef.current;
+    if (!nativeTemplateActive || compiledNativeTemplate == null || nativeTemplate == null) {
+      if (lastTemplateSchemaRef.current != null && hostId > 0) {
+        clearNativeTemplate(hostId);
+      }
+      lastTemplateSchemaRef.current = null;
+      lastTemplateDataRef.current = null;
+      return;
+    }
+    if (hostId <= 0) return;
+
+    const schemaJson = compiledNativeTemplate.schemaJson;
+    if (lastTemplateSchemaRef.current !== schemaJson) {
+      setNativeTemplateSchema(hostId, schemaJson);
+      lastTemplateSchemaRef.current = schemaJson;
+    }
+    if (nativeSlotContainerTagRef.current > 0) {
+      attachNativeSlotContainer(hostId, nativeSlotContainerTagRef.current, resolvedColumns, crossAxisGap);
+    }
+    if (nativeTemplate.onPress != null) {
+      setNativePressHandler(hostId, nativeTemplatePressForwarder);
+    }
+    setNativeDataRequestHandler(hostId, handleNativeDataRequest);
+
+    const prev = lastTemplateDataRef.current;
+    if (
+      prev != null &&
+      prev.items === items &&
+      Object.is(prev.dataVersion, dataVersion) &&
+      prev.schema === schemaJson &&
+      prev.hostId === hostId
+    ) {
+      return;
+    }
+    lastTemplateDataRef.current = {items, dataVersion, schema: schemaJson, hostId};
+    if (itemCount <= 0) return;
+
+    // Fast incremental paths for pure prepend / pure append: avoid re-packing the entire array
+    // and avoid resetting DataStore / hiding visible slots during live chat prepends or streams!
+    if (
+      prev != null &&
+      !dataAnalysis.versionChanged &&
+      prev.schema === schemaJson &&
+      prev.hostId === hostId &&
+      prev.items.length > 0 &&
+      itemCount > prev.items.length
+    ) {
+      const prevLen = prev.items.length;
+      const delta = itemCount - prevLen;
+      if (items[delta] === prev.items[0] && items[itemCount - 1] === prev.items[prevLen - 1]) {
+        // Pure prepend of `delta` items at index 0
+        shiftNativeTemplateData(hostId, delta, itemCount);
+        const packCount = Math.min(delta, 1024);
+        const buf = packNativeTemplateChunk(items, 0, packCount, compiledNativeTemplate, nativeTemplate);
+        setNativeTemplateData(hostId, 0, packCount, itemCount, false, buf);
+        packedNativeRangeRef.current = {
+          headEnd: packedNativeRangeRef.current.headEnd + delta,
+          tailStart:
+            packedNativeRangeRef.current.tailStart === 0
+              ? 0
+              : packedNativeRangeRef.current.tailStart + delta,
+        };
+        return;
+      }
+      if (items[0] === prev.items[0] && items[prevLen - 1] === prev.items[prevLen - 1]) {
+        // Pure append of `delta` items at the end
+        const packStart = itemCount <= 4096 ? prevLen : Math.max(prevLen, itemCount - 1024);
+        const packCount = itemCount - packStart;
+        if (packCount > 0) {
+          const buf = packNativeTemplateChunk(
+            items,
+            packStart,
+            packCount,
+            compiledNativeTemplate,
+            nativeTemplate,
+          );
+          setNativeTemplateData(hostId, packStart, packCount, itemCount, false, buf);
+        }
+        if (itemCount <= 4096) {
+          packedNativeRangeRef.current = {headEnd: itemCount, tailStart: 0};
+        } else {
+          packedNativeRangeRef.current = {
+            headEnd: packedNativeRangeRef.current.headEnd,
+            tailStart: Math.min(packedNativeRangeRef.current.tailStart, packStart),
+          };
+        }
+        return;
+      }
+    }
+
+    const SYNC_LIMIT = 4096;
+    if (itemCount <= SYNC_LIMIT) {
+      const buf = packNativeTemplateChunk(items, 0, itemCount, compiledNativeTemplate, nativeTemplate);
+      setNativeTemplateData(hostId, 0, itemCount, itemCount, true, buf);
+      packedNativeRangeRef.current = {headEnd: itemCount, tailStart: 0};
+      return;
+    }
+
+    // Large dataset (e.g. 100k): pack head + tail synchronously (~2ms total); any middle slice is
+    // pulled on-demand via `setNativeDataRequestHandler` or `packNativeTemplateAroundIndex` so we
+    // never burn JS CPU packing 98k untouched items in the background!
+    const EDGE_SLICE = 1024;
+    const headBuf = packNativeTemplateChunk(items, 0, EDGE_SLICE, compiledNativeTemplate, nativeTemplate);
+    setNativeTemplateData(hostId, 0, EDGE_SLICE, itemCount, true, headBuf);
+    const tailStart = Math.max(EDGE_SLICE, itemCount - EDGE_SLICE);
+    const tailCount = itemCount - tailStart;
+    if (tailCount > 0) {
+      const tailBuf = packNativeTemplateChunk(
+        items,
+        tailStart,
+        tailCount,
+        compiledNativeTemplate,
+        nativeTemplate,
+      );
+      setNativeTemplateData(hostId, tailStart, tailCount, itemCount, false, tailBuf);
+    }
+    packedNativeRangeRef.current = {headEnd: EDGE_SLICE, tailStart};
+    const initIdx = initialTargetRef.current?.index;
+    if (initIdx != null && initIdx >= EDGE_SLICE && initIdx < tailStart) {
+      const start = Math.max(EDGE_SLICE, initIdx - 256);
+      const end = Math.min(tailStart, initIdx + 512);
+      if (end > start) {
+        const initBuf = packNativeTemplateChunk(
+          items,
+          start,
+          end - start,
+          compiledNativeTemplate,
+          nativeTemplate,
+        );
+        setNativeTemplateData(hostId, start, end - start, itemCount, false, initBuf);
+      }
+    }
+  });
 
   const userWantsJsScroll = userOnScroll != null || scrollOffsetSharedValue != null;
   const userWantsJsScrollRef = useRef(userWantsJsScroll);
@@ -3594,7 +3863,11 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     if (hostId > 0) {
       setNativeHostMvcpEnabled(hostId, mvcpEnabled);
       if (dataChanged || geometryChanged) {
-        if (lastDataRemappedRef.current && !geometryChanged) {
+        if (nativeTemplateActiveRef.current && dataChanged && !geometryChanged) {
+          // Defer UI-thread sync until syncNativeTemplateEffect (next layout effect in the same
+          // commit) shifts/uploads the updated DataStore chunks so C++ indices never race ahead!
+          lastDataRemappedRef.current = false;
+        } else if (lastDataRemappedRef.current && !geometryChanged) {
           // Key-preserving remap (prepend/shift): untouched slots keep identical heights & items;
           // syncNativeHostNow drains the atomic C++ MVCP shift without forcing full re-measurement!
           lastDataRemappedRef.current = false;
@@ -3775,6 +4048,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     handleNativeSlotRebinds,
     handleNativeContentSize,
   ]);
+  // Level 3: Sync opt-in native declarative template schema, container & binary data AFTER host attach!
+  useLayoutEffect(syncNativeTemplateEffect, [
+    syncNativeTemplateEffect,
+    nativeTemplateActive,
+    compiledNativeTemplate,
+    items,
+    dataVersion,
+    itemCount,
+    resolvedColumns,
+    crossAxisGap,
+  ]);
   useLayoutEffect(() => {
     const engine = engineRef.current;
     if (engine == null || attachedRangeCallbackRef.current === handleRangeChange) return;
@@ -3828,7 +4112,14 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           {Platform.OS === 'android' && !nativeHostEligible && !NitroListDevFlags.experimentalSlotPublication ? (
             <MountMarkerSlot store={store} onMarker={handleMountMarker} />
           ) : null}
-          {nativeHostEligible ? (
+          {nativeTemplateActive ? (
+            <View
+              ref={attachNativeSlotContainerView}
+              collapsable={false}
+              pointerEvents="box-none"
+              style={StyleSheet.absoluteFill}
+            />
+          ) : nativeHostEligible ? (
             <NitroListSlots
               slotStore={slotStore}
               ctxRef={nativeSlotsCtxRef as {current: NitroListSlotsSharedContext}}

@@ -177,7 +177,8 @@ struct EngineCoreState {
     int32_t layoutVersion = core.getLayoutVersion();
     int32_t deltaCount = 0;
 
-    const bool jsSlow = std::isfinite(jsLatencyMs) && jsLatencyMs > 22.0;
+    const bool nativeSync = std::isfinite(jsLatencyMs) && jsLatencyMs < 0.0;
+    const bool jsSlow = !nativeSync && std::isfinite(jsLatencyMs) && jsLatencyMs > 22.0;
     const double slowRefillScale = jsLatencyMs > 40.0 ? 1.85 : 1.55;
 
     if (itemCount > 0 && vp > 0.0 && drawDistance > 0.0 && numColumns <= 1 &&
@@ -186,7 +187,9 @@ struct EngineCoreState {
       const double visTop = std::max(0.0, scrollOffset);
       const double visBottom = scrollOffset + vp;
       double triggerMargin;
-      if (jsSlow) {
+      if (nativeSync) {
+        triggerMargin = drawDistance * 0.25;
+      } else if (jsSlow) {
         const double leadSec = std::min(0.160, (jsLatencyMs + 28.0) / 1000.0);
         const double maxMargin = drawDistance * slowRefillScale * 0.92;
         triggerMargin = std::min(maxMargin, std::max(drawDistance * 0.85, std::abs(velocityDpS) * leadSec));
@@ -208,7 +211,9 @@ struct EngineCoreState {
     if (!reusedCommitted) {
       const double refillScale = jsSlow ? slowRefillScale : 1.40;
       const double refillDraw =
-          (numColumns <= 1 && (jsSlow || std::abs(velocityDpS) > 200.0)) ? drawDistance * refillScale : drawDistance;
+          (!nativeSync && numColumns <= 1 && (jsSlow || std::abs(velocityDpS) > 200.0))
+              ? drawDistance * refillScale
+              : drawDistance;
       const auto range = core.getEngagedRange(scrollOffset, vp, refillDraw);
       rangeStart = range.start;
       rangeEnd = range.end;
@@ -353,6 +358,58 @@ struct EngineCoreState {
       outMeta[s * 3 + 0] = validActive ? 1 : 0;
       outMeta[s * 3 + 1] = static_cast<int32_t>(slot.generation);
       outMeta[s * 3 + 2] = slot.measures ? 1 : 0;
+    }
+    outTotalSizeDp = core.getTotalSize();
+    const StickyState sticky = computeStickyLocked(scrollOffset);
+    outStickyIndex = sticky.index;
+    outStickyTranslateYDp = sticky.translateDp;
+    if (outPendingMvcpShiftDp != nullptr) {
+      *outPendingMvcpShiftDp = pendingExternalMvcpShiftDp;
+      pendingExternalMvcpShiftDp = 0.0;
+    }
+    return count;
+  }
+
+  // Level 3: Writes per-slot transforms + item/grid metadata for pure-native template rendering:
+  // outOffsetsDp[s] = item offset in dp
+  // outInfo[s * 6 + 0] = active (1) / inactive (0)
+  // outInfo[s * 6 + 1] = itemIndex
+  // outInfo[s * 6 + 2] = generation
+  // outInfo[s * 6 + 3] = col (0..numColumns-1)
+  // outInfo[s * 6 + 4] = span (1..numColumns)
+  // outInfo[s * 6 + 5] = measures (1) / fixed (0)
+  int32_t readTemplateSlots(double* outOffsetsDp,
+                            int32_t* outInfo,
+                            int32_t maxSlots,
+                            double& outTotalSizeDp,
+                            int32_t& outStickyIndex,
+                            double& outStickyTranslateYDp,
+                            double* outPendingMvcpShiftDp = nullptr) {
+    std::lock_guard<std::mutex> guard(stateMutex);
+    if (disposed) {
+      outTotalSizeDp = 0.0;
+      outStickyIndex = -1;
+      outStickyTranslateYDp = 0.0;
+      if (outPendingMvcpShiftDp != nullptr) *outPendingMvcpShiftDp = 0.0;
+      return 0;
+    }
+    const auto& slots = slotPool.slots();
+    const int32_t count = std::min(maxSlots, static_cast<int32_t>(slots.size()));
+    for (int32_t s = 0; s < count; ++s) {
+      const auto& slot = slots[static_cast<size_t>(s)];
+      const bool validActive = slot.active && slot.itemIndex >= 0 && slot.itemIndex < itemCount;
+      outOffsetsDp[s] = validActive ? core.getOffset(slot.itemIndex) : 0.0;
+      int32_t col = 0;
+      int32_t span = 1;
+      if (validActive && numColumns > 1) {
+        core.getColumnSpan(slot.itemIndex, col, span);
+      }
+      outInfo[s * 6 + 0] = validActive ? 1 : 0;
+      outInfo[s * 6 + 1] = validActive ? slot.itemIndex : -1;
+      outInfo[s * 6 + 2] = static_cast<int32_t>(slot.generation);
+      outInfo[s * 6 + 3] = col;
+      outInfo[s * 6 + 4] = span;
+      outInfo[s * 6 + 5] = slot.measures ? 1 : 0;
     }
     outTotalSizeDp = core.getTotalSize();
     const StickyState sticky = computeStickyLocked(scrollOffset);

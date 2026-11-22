@@ -67,6 +67,13 @@ namespace margelo::nitro::nitrolist {
     void syncNow(double hostId) override;
     void prefetchImages(const std::vector<std::string>& uris, double widthPx, double heightPx) override;
     void cancelImagePrefetch() override;
+    void attachNativeSlotContainer(double hostId, double containerViewTag, double numColumns, double crossAxisGapDp) override;
+    void setNativeTemplateSchema(double hostId, const std::string& schemaJson) override;
+    void setNativeTemplateData(double hostId, double startIndex, double count, double totalCount, bool reset, const std::shared_ptr<ArrayBuffer>& packedData) override;
+    void shiftNativeTemplateData(double hostId, double delta, double totalCount) override;
+    void setNativePressHandler(double hostId, const std::function<void(double /* index */, const std::string& /* action */)>& onPress) override;
+    void setNativeDataRequestHandler(double hostId, const std::function<void(double /* startIndex */, double /* count */)>& onRequestData) override;
+    void clearNativeTemplate(double hostId) override;
 
   private:
     jni::global_ref<JHybridNitroListNativeHostSpec::JavaPart> _javaPart;

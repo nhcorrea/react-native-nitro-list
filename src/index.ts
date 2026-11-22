@@ -1,5 +1,17 @@
 export {NitroList} from './NitroList';
 export {prefetchNitroListImages, cancelNitroListImagePrefetch} from './nativeHost';
+export {resolveNativeImageUri} from './nativeTemplate';
+export type {
+  NativeTemplateAlign,
+  NativeTemplateBoxNode,
+  NativeTemplateConfig,
+  NativeTemplateFieldValue,
+  NativeTemplateFontWeight,
+  NativeTemplateImageNode,
+  NativeTemplateNode,
+  NativeTemplateResizeMode,
+  NativeTemplateTextNode,
+} from './nativeTemplate';
 export type {
   NitroListAlwaysRenderConfig,
   NitroListAnchoredEndSpaceConfig,

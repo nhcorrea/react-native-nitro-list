@@ -79,6 +79,7 @@ public:
   double getTotalSize();
   double getOffset(int32_t index);
   double getSize(int32_t index);
+  void getColumnSpan(int32_t index, int32_t& outCol, int32_t& outSpan);
   int32_t getLayoutVersion();
   int32_t readLayout(int32_t start, int32_t count, double* out, int32_t capacityDoubles);
 
