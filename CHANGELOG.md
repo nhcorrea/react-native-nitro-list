@@ -1,3 +1,9 @@
+## [2.6.1](https://github.com/[secure]/react-native-nitro-list/compare/v2.6.0...v2.6.1) (2026-11-22)
+
+### 🐛 Bug Fixes
+
+* **ios:** include ios .hpp headers in npm package and podspec ([583a5c2](https://github.com/[secure]/react-native-nitro-list/commit/583a5c21b10b891637ec933119992677b56cd382))
+
 ## [2.6.0](https://github.com/[secure]/react-native-nitro-list/compare/v2.5.1...v2.6.0) (2026-11-22)
 
 ### ✨ Features
