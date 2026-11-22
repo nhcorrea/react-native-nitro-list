@@ -80,6 +80,135 @@ export function nativeArrayBufferAllocationsForTests(): number {
   return nativeArrayBufferAllocations;
 }
 
+export interface MockNativeHostSession {
+  hostId: number;
+  engineId: number;
+  scrollViewTag: number;
+  stickyViewTag: number;
+  horizontal: boolean;
+  userHasOnScroll: boolean;
+  mvcpEnabled: boolean;
+  paddingStartDp: number;
+  mainAxisGapDp: number;
+  registeredSlots: Map<number, {viewTag: number; measures: boolean}>;
+  onSlotRebinds: (
+    slotCount: number,
+    rangeStart: number,
+    rangeEnd: number,
+    layoutVersion: number,
+    totalSize: number,
+    stickyIndex: number,
+    velocityDpS: number,
+    deltas: ArrayBuffer,
+  ) => void;
+  onContentSize: (totalSize: number, layoutVersion: number) => void;
+  detached: boolean;
+}
+
+let mockNativeHostEnabled = false;
+let nextMockHostId = 1;
+const mockHostSessions = new Map<number, MockNativeHostSession>();
+const prefetchCalls: Array<{uris: string[]; widthPx: number; heightPx: number}> = [];
+let cancelPrefetchCount = 0;
+
+export function setNativeHostMockEnabledForTests(enabled: boolean): void {
+  mockNativeHostEnabled = enabled;
+}
+
+export function getMockNativeHostSessionsForTests(): ReadonlyMap<number, MockNativeHostSession> {
+  return mockHostSessions;
+}
+
+export function getMockPrefetchCallsForTests(): ReadonlyArray<{
+  uris: string[];
+  widthPx: number;
+  heightPx: number;
+}> {
+  return prefetchCalls;
+}
+
+export function getMockCancelPrefetchCountForTests(): number {
+  return cancelPrefetchCount;
+}
+
+export function resetMockNativeHostForTests(): void {
+  mockNativeHostEnabled = false;
+  mockHostSessions.clear();
+  prefetchCalls.length = 0;
+  cancelPrefetchCount = 0;
+}
+
+const nativeHostMock = {
+  attachHost(
+    engineId: number,
+    scrollViewTag: number,
+    stickyViewTag: number,
+    horizontal: boolean,
+    userHasOnScroll: boolean,
+    onSlotRebinds: MockNativeHostSession['onSlotRebinds'],
+    onContentSize: MockNativeHostSession['onContentSize'],
+  ): number {
+    const hostId = nextMockHostId++;
+    mockHostSessions.set(hostId, {
+      hostId,
+      engineId,
+      scrollViewTag,
+      stickyViewTag,
+      horizontal,
+      userHasOnScroll,
+      mvcpEnabled: false,
+      paddingStartDp: 0,
+      mainAxisGapDp: 0,
+      registeredSlots: new Map(),
+      onSlotRebinds,
+      onContentSize,
+      detached: false,
+    });
+    return hostId;
+  },
+  detachHost(hostId: number): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.detached = true;
+  },
+  registerSlotView(hostId: number, slotId: number, viewTag: number, measures: boolean): void {
+    mockHostSessions.get(hostId)?.registeredSlots.set(slotId, {viewTag, measures});
+  },
+  unregisterSlotView(hostId: number, slotId: number): void {
+    mockHostSessions.get(hostId)?.registeredSlots.delete(slotId);
+  },
+  setSlotMeasures(hostId: number, slotId: number, measures: boolean): void {
+    const entry = mockHostSessions.get(hostId)?.registeredSlots.get(slotId);
+    if (entry != null) entry.measures = measures;
+  },
+  setStickyViewTag(hostId: number, stickyViewTag: number): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.stickyViewTag = stickyViewTag;
+  },
+  setUserHasOnScroll(hostId: number, hasOnScroll: boolean): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.userHasOnScroll = hasOnScroll;
+  },
+  setMvcpEnabled(hostId: number, enabled: boolean): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) s.mvcpEnabled = enabled;
+  },
+  applyMvcpShift(_hostId: number, _deltaDp: number): void {},
+  notifyDataCommit(hostId: number, paddingStartDp: number, mainAxisGapDp: number): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) {
+      s.paddingStartDp = paddingStartDp;
+      s.mainAxisGapDp = mainAxisGapDp;
+    }
+  },
+  syncNow(_hostId: number): void {},
+  prefetchImages(uris: string[], widthPx: number, heightPx: number): void {
+    prefetchCalls.push({uris: [...uris], widthPx, heightPx});
+  },
+  cancelImagePrefetch(): void {
+    cancelPrefetchCount++;
+  },
+};
+
 export const NitroModules = {
   createNativeArrayBuffer(size: number): ArrayBuffer {
     const buffer = new ArrayBuffer(size);
@@ -90,6 +219,12 @@ export const NitroModules = {
   },
   createHybridObject(name: string): unknown {
     if (name === 'NitroListScrollView') return nativeScrollView;
+    if (name === 'NitroListNativeHost') {
+      if (!mockNativeHostEnabled) {
+        throw new Error('NitroListNativeHost mock disabled by default in jest');
+      }
+      return nativeHostMock;
+    }
     throw new Error(
       'createHybridObject must not be reached in jest — NitroListHost is mapped to its mock',
     );

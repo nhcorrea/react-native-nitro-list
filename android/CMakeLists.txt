@@ -12,6 +12,7 @@ file(GLOB_RECURSE android_files RELATIVE ${CMAKE_SOURCE_DIR}
 add_library(${PACKAGE_NAME} SHARED
             ${android_files}
             ../cpp/LayoutCore.cpp
+            ../cpp/SlotPool.cpp
             ../cpp/HybridNitroListEngine.cpp
 )
 

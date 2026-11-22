@@ -38,7 +38,7 @@ export interface ScrollToIndexCtx {
   lastScrollOffsetRef: Ref<number>;
   lastPrewarmRangeRef: Ref<RangeState | null>;
   isPrewarmingRangeRef: Ref<boolean>;
-  prewarmFocusRef: Ref<{focus: {start: number; end: number}; direction: 1 | -1} | null>;
+  prewarmFocusRef: Ref<{focus: {start: number; end: number}; direction: 1 | -1; targetIndex?: number} | null>;
   mainViewportRef: Ref<number>;
   effectivePaddingStartRef: Ref<number>;
   effectiveDrawDistanceRef: Ref<number>;
@@ -200,6 +200,7 @@ export function createScrollToIndex(ctx: ScrollToIndexCtx): ScrollToIndexApi {
         ctx.prewarmFocusRef.current = {
           focus: {start: focusStart, end: focusEnd},
           direction: targetOffset >= ctx.lastScrollOffsetRef.current ? 1 : -1,
+          targetIndex: index,
         };
       };
       try {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EngineRegistry.hpp"
 #include "HybridNitroListEngineSpec.hpp"
 #include "LayoutCore.hpp"
 
@@ -8,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 namespace margelo::nitro::nitrolist {
 
@@ -16,7 +18,7 @@ public:
   using RangeCallback = std::function<void(double, double, double, double)>;
 
   HybridNitroListEngine();
-  ~HybridNitroListEngine() override = default;
+  ~HybridNitroListEngine() override;
 
   std::optional<RangeCallback> getOnRangeChange() override;
   void setOnRangeChange(const std::optional<RangeCallback>& onRangeChange) override;
@@ -54,29 +56,28 @@ public:
   double getTotalSize() override;
   double readLayout(double start, double count, const std::shared_ptr<ArrayBuffer>& out) override;
 
+  double getEngineId() override;
+  void configureSlots(double maxParked, double mainAxisGap, double paddingStart) override;
+  void setStickyConfig(const std::shared_ptr<ArrayBuffer>& indices, double stickyOffset,
+                       double stickySize) override;
+  void setMvcpConfig(bool enabled, double anchorIndex) override;
+  double reconcileSlots(const std::shared_ptr<ArrayBuffer>& extraIndices, double budgetSlots,
+                        const std::shared_ptr<ArrayBuffer>& outDeltas) override;
+
   size_t getExternalMemorySize() noexcept override;
   void dispose() override;
 
 private:
-  double mainViewportLocked() const;
   void maybeEmitRange();
-  double fillSnapshotLocked(double* out, int32_t capacity, double anchorDelta = 0.0);
+  double fillSnapshotLocked(double* out, int32_t capacity, double anchorDelta = 0.0,
+                            bool allowSkipBody = false);
+  void mirrorTypesLocked(int32_t start, const uint16_t* types, int32_t count, bool replaceAll);
+
+  std::shared_ptr<EngineCoreState> state_;
+  int64_t engineId_ = 0;
   double sequence_ = 0;
   std::vector<double> pendingSnapshot_;
-
-  LayoutCore core_;
-  int32_t itemCount_ = 0;
-  double dataRevision_ = 0;
-  std::mutex stateMutex_;
-  double scrollOffset_ = 0.0;
-  double viewportWidth_ = 0.0;
-  double viewportHeight_ = 0.0;
-  double drawDistance_ = 0.0;
-  bool horizontal_ = false;
-  int32_t lastStart_ = -1;
-  int32_t lastEnd_ = -2;
-  int32_t lastVersion_ = -1;
   std::optional<RangeCallback> onRangeChange_;
 };
 
-}
+} // namespace margelo::nitro::nitrolist

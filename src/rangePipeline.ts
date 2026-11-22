@@ -30,7 +30,8 @@ export interface RangePipelineCtx {
   lastLiveEngineOffsetRef: Ref<number>;
   isPrewarmingRangeRef: Ref<boolean>;
   uiThreadDriverActiveRef: Ref<boolean>;
-  prewarmFocusRef: Ref<{focus: {start: number; end: number}; direction: 1 | -1} | null>;
+  nativeHostEligibleRef?: Ref<boolean>;
+  prewarmFocusRef: Ref<{focus: {start: number; end: number}; direction: 1 | -1; targetIndex?: number} | null>;
   prewarmAdmissionRef: Ref<{
     target: AdmissionRange;
     focus: AdmissionRange;
@@ -102,6 +103,7 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
     const focusInfo = ctx.prewarmFocusRef.current;
     const count = end - start + 1;
     if (
+      ctx.nativeHostEligibleRef?.current ||
       !NitroListDevFlags.stiLandingAdmission ||
       focusInfo == null ||
       count <= PREWARM_ADMISSION_BUDGET_ITEMS
@@ -252,9 +254,7 @@ export function createRangePipeline(ctx: RangePipelineCtx): RangePipelineApi {
       end = slab[3],
       offset = slab[8];
     const versionChanged = version !== ctx.lastSeenLayoutVersionRef.current;
-    const rangeChanged = NitroListDevFlags.experimentalSlot03
-      ? start !== lastRawStart || end !== lastRawEnd
-      : start !== ctx.latestRangeRef.current.start || end !== ctx.latestRangeRef.current.end;
+    const rangeChanged = start !== lastRawStart || end !== lastRawEnd;
     lastRawStart = start;
     lastRawEnd = end;
     if (commitRange && (versionChanged || rangeChanged) && NITRO_LIST_PERF_COMPILED) {

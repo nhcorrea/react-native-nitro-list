@@ -11,6 +11,7 @@
 #import <type_traits>
 
 #include "HybridNitroListEngine.hpp"
+#include "HybridNitroListNativeHost.hpp"
 
 @interface NitroListAutolinking : NSObject
 @end
@@ -28,6 +29,15 @@
                     "The HybridObject \"HybridNitroListEngine\" is not default-constructible! "
                     "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
       return std::make_shared<HybridNitroListEngine>();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "NitroListNativeHost",
+    []() -> std::shared_ptr<HybridObject> {
+      static_assert(std::is_default_constructible_v<HybridNitroListNativeHost>,
+                    "The HybridObject \"HybridNitroListNativeHost\" is not default-constructible! "
+                    "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
+      return std::make_shared<HybridNitroListNativeHost>();
     }
   );
 }

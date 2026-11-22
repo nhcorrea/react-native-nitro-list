@@ -153,6 +153,12 @@ export type NitroListPrepareItem<T> = (info: {
   signal: AbortSignal;
 }) => void | Promise<void>;
 
+export interface NitroListImagePrefetchConfig {
+  lookaheadItems?: number;
+  width?: number;
+  height?: number;
+}
+
 export interface NitroListProps<T> {
   data: ReadonlyArray<T> | null | undefined;
   renderItem: NitroListRenderItem<T>;
@@ -166,6 +172,8 @@ export interface NitroListProps<T> {
   drawDistance?: number;
   recycleItems?: boolean;
   prepareItem?: NitroListPrepareItem<T>;
+  getImageUris?: (item: T, index: number) => string | ReadonlyArray<string> | null | undefined;
+  imagePrefetchConfig?: NitroListImagePrefetchConfig;
   clipItemsToBounds?: boolean;
   experimentalEagerMount?: boolean;
   horizontal?: boolean;

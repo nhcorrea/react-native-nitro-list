@@ -15,8 +15,10 @@
 #include <fbjni/fbjni.h>
 #include <NitroModules/HybridObjectRegistry.hpp>
 
-#include "JHybridNitroListScrollViewSpec.hpp"
+#include "JHybridNitroListNativeHostSpec.hpp"
+#include "JFunc_void_double_double_double_double_double_double_double_std__shared_ptr_ArrayBuffer_.hpp"
 #include "JFunc_void_double_double.hpp"
+#include "JHybridNitroListScrollViewSpec.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 #include "HybridNitroListEngine.hpp"
 
@@ -36,14 +38,24 @@ struct JHybridNitroListScrollViewSpecImpl: public jni::JavaClass<JHybridNitroLis
     return javaPart->getJHybridNitroListScrollViewSpec();
   }
 };
+struct JHybridNitroListNativeHostSpecImpl: public jni::JavaClass<JHybridNitroListNativeHostSpecImpl, JHybridNitroListNativeHostSpec::JavaPart> {
+  static constexpr auto kJavaDescriptor = "Lcom/margelo/nitro/nitrolist/HybridNitroListNativeHost;";
+  static std::shared_ptr<JHybridNitroListNativeHostSpec> create() {
+    static const auto constructorFn = javaClassStatic()->getConstructor<JHybridNitroListNativeHostSpecImpl::javaobject()>();
+    jni::local_ref<JHybridNitroListNativeHostSpec::JavaPart> javaPart = javaClassStatic()->newObject(constructorFn);
+    return javaPart->getJHybridNitroListNativeHostSpec();
+  }
+};
 
 void registerAllNatives() {
   using namespace margelo::nitro;
   using namespace margelo::nitro::nitrolist;
 
   // Register native JNI methods
-  margelo::nitro::nitrolist::JHybridNitroListScrollViewSpec::CxxPart::registerNatives();
+  margelo::nitro::nitrolist::JHybridNitroListNativeHostSpec::CxxPart::registerNatives();
+  margelo::nitro::nitrolist::JFunc_void_double_double_double_double_double_double_double_std__shared_ptr_ArrayBuffer__cxx::registerNatives();
   margelo::nitro::nitrolist::JFunc_void_double_double_cxx::registerNatives();
+  margelo::nitro::nitrolist::JHybridNitroListScrollViewSpec::CxxPart::registerNatives();
 
   // Register Nitro Hybrid Objects
   HybridObjectRegistry::registerHybridObjectConstructor(
@@ -59,6 +71,12 @@ void registerAllNatives() {
                     "The HybridObject \"HybridNitroListEngine\" is not default-constructible! "
                     "Create a public constructor that takes zero arguments to be able to autolink this HybridObject.");
       return std::make_shared<HybridNitroListEngine>();
+    }
+  );
+  HybridObjectRegistry::registerHybridObjectConstructor(
+    "NitroListNativeHost",
+    []() -> std::shared_ptr<HybridObject> {
+      return JHybridNitroListNativeHostSpecImpl::create();
     }
   );
 }

@@ -38,4 +38,11 @@ export interface NitroListEngine extends HybridObject<{ios: 'c++'; android: 'c++
   getItemSize(index: number): number;
   getTotalSize(): number;
   readLayout(start: number, count: number, out: ArrayBuffer): number;
+
+  // Level 1 + 2: Native Host Engine Registry & C++ SlotPool
+  getEngineId(): number;
+  configureSlots(maxParked: number, mainAxisGap: number, paddingStart: number): void;
+  setStickyConfig(indices: ArrayBuffer, stickyOffset: number, stickySize: number): void;
+  setMvcpConfig(enabled: boolean, anchorIndex: number): void;
+  reconcileSlots(extraIndices: ArrayBuffer, budgetSlots: number, outDeltas: ArrayBuffer): number;
 }

@@ -24,6 +24,16 @@
         "language": "c++",
         "implementationClassName": "HybridNitroListEngine"
       }
+    },
+    "NitroListNativeHost": {
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridNitroListNativeHost"
+      },
+      "ios": {
+        "language": "c++",
+        "implementationClassName": "HybridNitroListNativeHost"
+      }
     }
   },
   "ignorePaths": [

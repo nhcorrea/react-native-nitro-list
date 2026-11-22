@@ -41,6 +41,11 @@ namespace margelo::nitro::nitrolist {
       prototype.registerHybridMethod("getItemSize", &HybridNitroListEngineSpec::getItemSize);
       prototype.registerHybridMethod("getTotalSize", &HybridNitroListEngineSpec::getTotalSize);
       prototype.registerHybridMethod("readLayout", &HybridNitroListEngineSpec::readLayout);
+      prototype.registerHybridMethod("getEngineId", &HybridNitroListEngineSpec::getEngineId);
+      prototype.registerHybridMethod("configureSlots", &HybridNitroListEngineSpec::configureSlots);
+      prototype.registerHybridMethod("setStickyConfig", &HybridNitroListEngineSpec::setStickyConfig);
+      prototype.registerHybridMethod("setMvcpConfig", &HybridNitroListEngineSpec::setMvcpConfig);
+      prototype.registerHybridMethod("reconcileSlots", &HybridNitroListEngineSpec::reconcileSlots);
     });
   }
 

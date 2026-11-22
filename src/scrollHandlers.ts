@@ -78,6 +78,7 @@ export interface ScrollHandlersCtx {
   scrollVelocityRef: Ref<{offset: number; time: number; velocity: number}>;
   suppressEdgeRearmRef: Ref<boolean>;
   uiThreadDriverActiveRef: Ref<boolean>;
+  nativeHostIdRef: Ref<number>;
   updateAlignPadRef: Ref<() => void>;
   updateEndSpaceRef: Ref<() => void>;
   velocityRingRef: Ref<VelocityRing>;
@@ -313,6 +314,12 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   };
 
   const handleScrollBeginDrag = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
+    const rawOffset = ctx.isHorizontalRef.current
+      ? e?.nativeEvent?.contentOffset?.x
+      : e?.nativeEvent?.contentOffset?.y;
+    if (typeof rawOffset === 'number' && Number.isFinite(rawOffset)) {
+      ctx.lastScrollOffsetRef.current = rawOffset;
+    }
     const interruptsCommand = ctx.scrollActivityRef.current.programmaticAnimated;
     ctx.endProgrammaticAnimatedScroll();
     ctx.pendingScrollCommandRef.current = null;
@@ -344,10 +351,29 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     const activity = ctx.scrollActivityRef.current;
     activity.dragging = false;
     if (rhythm.slow) endScrollRhythmGesture();
+    const rawOffset = ctx.isHorizontalRef.current
+      ? e?.nativeEvent?.contentOffset?.x
+      : e?.nativeEvent?.contentOffset?.y;
+    const nativeDriven = ctx.nativeHostIdRef.current > 0;
     if (ctx.uiThreadDriverActiveRef.current) {
-      ctx.lastScrollOffsetRef.current = ctx.isHorizontalRef.current
-        ? e.nativeEvent.contentOffset.x
-        : e.nativeEvent.contentOffset.y;
+      if (typeof rawOffset === 'number' && Number.isFinite(rawOffset)) {
+        ctx.lastScrollOffsetRef.current = rawOffset;
+      }
+    } else if (nativeDriven) {
+      if (typeof rawOffset === 'number' && Number.isFinite(rawOffset)) {
+        ctx.lastScrollOffsetRef.current = rawOffset;
+      }
+      const nativeVel = ctx.isHorizontalRef.current
+        ? e?.nativeEvent?.velocity?.x
+        : e?.nativeEvent?.velocity?.y;
+      const hostVel = ctx.scrollVelocityRef.current.velocity;
+      const isFling =
+        Math.abs(hostVel) >= FLING_MIN_VELOCITY_DP_S ||
+        (typeof nativeVel === 'number' && Number.isFinite(nativeVel) && Math.abs(nativeVel) >= 0.15);
+      if (!isFling) {
+        flushPendingMvcpAdjust();
+        ctx.releaseGestureEstimates();
+      }
     } else {
       const launchVelocity = estimateDirectionalVelocity(ctx.velocityRingRef.current, Date.now());
       ctx.scrollVelocityRef.current.velocity = launchVelocity;
@@ -362,6 +388,12 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
   };
 
   const handleMomentumScrollBegin = (e: NativeSyntheticEvent<NativeScrollEvent>): void => {
+    const rawOffset = ctx.isHorizontalRef.current
+      ? e?.nativeEvent?.contentOffset?.x
+      : e?.nativeEvent?.contentOffset?.y;
+    if (typeof rawOffset === 'number' && Number.isFinite(rawOffset)) {
+      ctx.lastScrollOffsetRef.current = rawOffset;
+    }
     ctx.scrollActivityRef.current.momentum = true;
     ctx.holdGestureEstimates();
     ctx.onMomentumScrollBegin?.(e);
@@ -377,13 +409,15 @@ export function createScrollHandlers(ctx: ScrollHandlersCtx): ScrollHandlersApi 
     ctx.endProgrammaticAnimatedScroll();
     if (settleProgrammatic) settleProgrammaticAnimatedScroll(momentumOffset);
     ctx.noteVelocityForAdaptive(0);
+    ctx.scrollVelocityRef.current.velocity = 0;
     ctx.recordFlingOutcomeRef.current(momentumOffset);
     ctx.cancelFlingPrewarm();
     if (!ctx.isPrewarmingRangeRef.current) {
       ctx.setPrewarmRangeTracked(null);
     }
     const uiDriven = ctx.uiThreadDriverActiveRef.current;
-    if (uiDriven) {
+    const nativeDriven = ctx.nativeHostIdRef.current > 0;
+    if (uiDriven || nativeDriven) {
       ctx.lastScrollOffsetRef.current = momentumOffset;
     }
     flushPendingMvcpAdjust();

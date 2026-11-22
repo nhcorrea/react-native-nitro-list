@@ -76,6 +76,11 @@ namespace margelo::nitro::nitrolist {
       virtual double getItemSize(double index) = 0;
       virtual double getTotalSize() = 0;
       virtual double readLayout(double start, double count, const std::shared_ptr<ArrayBuffer>& out) = 0;
+      virtual double getEngineId() = 0;
+      virtual void configureSlots(double maxParked, double mainAxisGap, double paddingStart) = 0;
+      virtual void setStickyConfig(const std::shared_ptr<ArrayBuffer>& indices, double stickyOffset, double stickySize) = 0;
+      virtual void setMvcpConfig(bool enabled, double anchorIndex) = 0;
+      virtual double reconcileSlots(const std::shared_ptr<ArrayBuffer>& extraIndices, double budgetSlots, const std::shared_ptr<ArrayBuffer>& outDeltas) = 0;
 
     protected:
       // Hybrid Setup
