@@ -2,20 +2,58 @@
 
 [![npm version](https://img.shields.io/npm/v/@nhcorrea/react-native-nitro-list)](https://www.npmjs.com/package/@nhcorrea/react-native-nitro-list)
 [![license](https://img.shields.io/npm/l/@nhcorrea/react-native-nitro-list)](./LICENSE)
+[![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-blue)](#requirements)
+[![new architecture](https://img.shields.io/badge/React%20Native-New%20Architecture%20(Fabric)-61dafb)](#requirements)
+[![powered by nitro](https://img.shields.io/badge/powered%20by-Nitro%20Modules-ff6b35)](https://nitro.margelo.com)
+[![typescript](https://img.shields.io/badge/TypeScript-strict-3178c6)](#exported-types)
 
-High-performance drop-in `FlatList` replacement for React Native, powered by [Nitro Modules](https://nitro.margelo.com).
+**Ultra-fast C++ drop-in `FlatList` replacement for React Native — powered by [Nitro Modules](https://nitro.margelo.com).**
 
-The layout engine is shared C++ compiled into both platforms and exposed to JavaScript as a single Nitro `HybridObject`, with a thin React layer on top. Scroll offsets, engaged-range resolution and layout math run outside the React render loop — React is only asked to render the cells that are actually needed.
+Built as a high-performance alternative to `FlatList`, `FlashList`, and `LegendList` for React Native's New Architecture (iOS & Android). The layout engine, prefix-sum index, and cell recycling pool run in shared **C++** with a lightweight **UI-thread Native Host** — plus an **opt-in zero-JS native template renderer** (`nativeTemplate`) for feeds, chats, and grids that stay at **0.0% blank frames even when the JS thread freezes for 100 ms**.
 
-- [Why it's fast](#why-its-fast)
+### Highlights
+
+- **Faster out of the box with any React JSX (`renderItem`):** 2.5×–59× fewer JS instructions, #1 CPU in 20/21 real-device scenarios on low-end Android hardware, faster first-viewport paint, and zero parent container re-renders on scroll.
+- **Opt-in Zero-JS Native Templates (`nativeTemplate`):** Render recycled native Android Views (`ViewGroup` + `TextView` + Fresco) and iOS UIKit Views (`UIView` + `UILabel` + `UIImageView`) directly on the UI thread — **10×–31× fewer JS instructions**, **30%–53% less UI-thread work**, and **0.0% blank frames under 100 ms JS stalls**. Toggle on/off per list or via a feature flag (`enabled: true | false`).
+- **Only one required peer dependency:** Requires only `react-native-nitro-modules` — **no Reanimated or Worklets required** unless you opt into `experimentalUiThreadScroll` / worklet callbacks.
+- **100k+ items & pixel-exact `scrollToIndex`:** Double-precision C++ prefix sums resolve ranges in O(log n) and converge to **0 px error** on dynamic-height 100k lists — every scroll command returns a `Promise`.
+- **Production chat, grids & sections:** Native UI-thread `maintainVisibleContentPosition` (**0 px drift** on prepends), `anchoredEndSpace`, [`/keyboard`](#keyboard-aware-chat-keyboard), [`/section-list`](#sections-section-list), multi-column grids with custom `span`, UI-thread sticky headers (`0 dp` lag), and native image prefetching (`getImageUris`).
+
+---
+
+- [Benchmarks](#benchmarks) · [Why it's fast](#why-its-fast)
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
-- [Coming from FlatList](#coming-from-flatlist)
-- [Props](#props) · [Imperative handle](#imperative-handle) · [Exported types](#exported-types)
 - [Native templates (opt-in)](#native-templates-opt-in) · [Native image prefetching](#native-image-prefetching)
-- [Sections](#sections-section-list) · [Keyboard-aware chat](#keyboard-aware-chat-keyboard)
-- [UI-thread scroll mode](#ui-thread-scroll-mode-experimental)
-- [Performance monitoring](#performance-monitoring-dev) · [Development warnings](#development-warnings)
-- [Recipes](#recipes) · [Troubleshooting](#troubleshooting)
+- [Coming from FlatList](#coming-from-flatlist) · [Props](#props) · [Imperative handle](#imperative-handle)
+- [Sections](#sections-section-list) · [Keyboard-aware chat](#keyboard-aware-chat-keyboard) · [UI-thread scroll mode](#ui-thread-scroll-mode-experimental)
+- [Exported types](#exported-types) · [Performance monitoring](#performance-monitoring-dev) · [Recipes](#recipes) · [Troubleshooting](#troubleshooting)
+
+## Benchmarks
+
+Measured on real low-end Android hardware (**Redmi 10C**, Snapdragon 680, Android 13, `arm64-v8a` release APK) across **5 paired alternating repetitions** per scenario using Linux `simpleperf` hardware instruction counters (`JS`, `UI`, `Total` in millions of retired instructions), process CPU time (`cpuMs`), Android `FrameTimeline` (`hitchTimeRatio`), and mounted-row visual coverage (`blank%`). Competitors: **FlashList 2.3.3** and **LegendList 3.7.1** configured with each library's recommended props (`recycleItems`, `getItemType`, `estimatedItemSize`).
+
+| Scenario | NitroList *(JSX default)* | NitroList *(`nativeTemplate` opt-in)* | FlashList 2.3.3 | LegendList 3.7.1 |
+| --- | --- | --- | --- | --- |
+| **Dynamic feed fling** *(1k mixed text + photos)* | **120 M JS** · 798 M tot · 1,700 ms CPU · **0.0% blank** | **26 M JS** · **566 M tot** · **1,490 ms CPU** · **0.0% blank** | 474 M JS · 1,208 M tot · 2,020 ms CPU · 0.0% blank | 478 M JS · 1,184 M tot · 2,010 ms CPU · 0.0% blank |
+| **Feed under 100 ms JS freeze** *(`busy100`)* | **2,494 M JS** · 3,190 M tot · 2,530 ms CPU · **2.6% blank** | **2,386 M JS** · **2,932 M tot** · **2,360 ms CPU** · **0.0% blank (5/5)** | 2,714 M JS · 3,426 M tot · 2,660 ms CPU · 2.6%–3.9% blank | 2,768 M JS · 3,466 M tot · 2,690 ms CPU · 3.2% blank |
+| **3-column photo grid fling** *(dynamic captions)* | **324 M JS** · 1,312 M tot · 2,180 ms CPU · **0.0% blank** | **30 M JS** · **932 M tot** · **1,900 ms CPU** · **0.0% blank** | 778 M JS · 1,674 M tot · 2,290 ms CPU · 0.0% blank | 932 M JS · 1,862 M tot · 2,390 ms CPU · 0.0% blank |
+| **Chat reversal fling** *(variable bubbles)* | **52 M JS** · 394 M tot · 740 ms CPU · **17.5 hitch** | **16 M JS** · **310 M tot** · **670 ms CPU** · **17.8 hitch** | 312 M JS · 608 M tot · 880 ms CPU · 35.0 hitch | 156 M JS · 480 M tot · 810 ms CPU · 38.3 hitch |
+| **Live chat prepend** *(MVCP anchored)* | **70 M JS** · **446 M tot** · 1,080 ms CPU · **0.0% blank** | 286 M JS · 646 M tot · **1,060 ms CPU** · **0.0% blank (5/5)** | 460 M JS · 828 M tot · 1,120 ms CPU · 0.0% blank | 412 M JS · 896 M tot · 1,790 ms CPU · 0.0% blank |
+| **100,000-item dynamic jump** *(`g8`)* | **92 M JS** · **486 M tot** · **890 ms CPU** · **5/5 PASS (0 px)** | 820 M JS · **106 M UI** · 900 ms CPU · **5/5 PASS (0 px)** | 2,080 M JS · 2,454 M tot · 1,340 ms CPU · 5/5 PASS (0 px) | 5,870 M JS · 6,336 M tot · 3,160 ms CPU · 0/5 FAIL *(1,596 px off)* |
+| **Multi-target `scrollToIndex`** *(20 targets)* | **166 M JS** · **1.29 s** · **330 ms CPU** · **0 px (5/5 PASS)** | — | 876 M JS · 2.22 s · 910 ms CPU · 0 px (5/5 PASS) | 556 M JS · 1.11 s · 390 ms CPU · 0/5 FAIL *(300 px off)* |
+
+> **Lower is better** for instructions, CPU, hitch ratio, blank%, and target error. Even in standard JSX mode (`renderItem`), NitroList beats FlashList and LegendList across **20/21 hardware scenarios** in JS instructions and CPU while cutting first-viewport paint (`mount-dynamic`) by a full 16.6 ms frame.
+
+### Architecture at a glance
+
+| Capability | NitroList | FlashList v2 | LegendList | FlatList |
+| --- | :---: | :---: | :---: | :---: |
+| C++ layout engine & recycling pool (JSI / Nitro) | Yes | JS / native view | JS | JS |
+| UI-thread scroll, measurement, MVCP & sticky host | Yes (built-in) | Partial | Partial | No |
+| Opt-in Zero-JS native cell templates (`nativeTemplate`) | **Yes (Android + iOS)** | No | No | No |
+| Native directional image prefetch (`getImageUris`) | Yes (Fresco / URLSession) | No | No | No |
+| Works without Reanimated / Worklets | **Yes** | Yes | Yes | Yes |
+| Convergent `Promise` `scrollToIndex` on 100k dynamic items | **Yes (0 px)** | Yes | Approximate | Needs `getItemLayout` |
 
 ## Why it's fast
 
