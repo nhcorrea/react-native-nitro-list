@@ -15,6 +15,13 @@ public:
     int32_t version;
   };
 
+  struct SlabResult {
+    EngagedRange range;
+    double totalSize;
+    int32_t count;
+    bool insufficient;
+  };
+
   bool setItemCount(int32_t count);
 
   bool setEstimate(double value);
@@ -32,6 +39,9 @@ public:
 
   void invalidateItemSizesFrom(int32_t start, bool clearPriors, const double* keptPairs = nullptr,
                                int32_t keptCount = 0);
+
+  void invalidateItemSizesRange(int32_t start, int32_t end, bool clearPriors,
+                                const double* keptPairs = nullptr, int32_t keptCount = 0);
 
   bool remapItemSizes(const double* pairs, int32_t pairCount);
 
@@ -52,6 +62,12 @@ public:
 
   int32_t fillLayoutSlab(double* out, int32_t capacityDoubles, double scrollOffset,
                          double viewportHeight, double drawDistance, double outputScale);
+
+  SlabResult fillSnapshotSlab(double* bodyOut, int32_t bodyCapacityDoubles, double scrollOffset,
+                              double viewportHeight, double drawDistance, double outputScale,
+                              bool canSkipIfMatching, int32_t matchStart, int32_t matchEnd,
+                              int32_t matchVersion, std::vector<double>* overflowOut,
+                              int32_t overflowHeaderDoubles);
 
   void setColumnCount(int32_t columns);
 
@@ -90,11 +106,14 @@ private:
   void ensureClean();
   void ensureCleanBlocksLocked(bool& anyChanged);
   void rebuildBlockLocked(int32_t block, bool& anyChanged);
+  void ensureBlockMaterializedLocked(int32_t block);
+  void materializeBlockLocked(int32_t block, bool recordGeometryChange = false);
+  void materializeAllDirtyBlocksLocked();
   void markItemDirtyLocked(int32_t index);
   void markWideDirtyLocked(int32_t index);
-  double offsetAtLocked(int32_t index) const;
-  int32_t lastIndexAtOrBelowLocked(double value) const;
-  int32_t lastIndexBelowLocked(double value, int32_t from) const;
+  double offsetAtLocked(int32_t index);
+  int32_t lastIndexAtOrBelowLocked(double value);
+  int32_t lastIndexBelowLocked(double value, int32_t from);
 
   EngagedRange computeEngagedRangeLocked(double scrollOffset, double viewportHeight,
                                          double drawDistance);
@@ -104,8 +123,7 @@ private:
   void updateTypeMeanLocked(int32_t index, bool wasMeasured, float prevSize, float newSize);
 
   bool applyTypeMeansLocked();
-  float sizeWithPendingMeanLocked(int32_t index) const;
-  void materializeTypeMeansLocked();
+  float currentSizeLocked(int32_t index) const;
   void recordMeasurementLocked(int32_t index, float size);
   void pruneFrozenLocked();
   void remapFrozenLocked(const double* pairs, int32_t pairCount);
@@ -141,10 +159,12 @@ private:
   bool estimatesFrozen_ = false;
   std::vector<TypeStats> typeStats_;
   bool lazyTypeMeans_ = false;
-  bool hasPendingTypeMeans_ = false;
+  bool hasDirtyItemBlocks_ = false;
   std::vector<uint8_t> pendingTypeMeans_;
 #ifdef NITROLIST_LAYOUT_TEST_COUNTERS
   uint64_t typeMeanVisits_ = 0;
+  uint64_t blockRebuilds_ = 0;
+  uint64_t blockMaterializations_ = 0;
 #endif
 
   int32_t itemCount_ = 0;
@@ -154,8 +174,15 @@ private:
 
   int32_t minDirtyIndex_ = INT32_MAX;
   int32_t wideDirtyIndex_ = INT32_MAX;
+  int32_t minRebaseBlock_ = INT32_MAX;
   std::vector<double> blockBase_;
   std::vector<double> blockSum_;
+  std::vector<double> blockMeasuredSum_;
+  std::vector<uint8_t> blockUnmeasuredCount_;
+  std::vector<int32_t> blockUniformType_;
+  std::vector<uint8_t> blockItemDirty_;
+  std::vector<uint8_t> blockStatsValid_;
+  std::unordered_map<int32_t, std::vector<std::pair<uint16_t, uint8_t>>> blockMixedCounts_;
   std::vector<uint8_t> blockDirty_;
   std::vector<int32_t> dirtyBlocks_;
 

@@ -1207,6 +1207,73 @@ export class HybridNitroListEngineMirror implements NitroListEngine {
     return this.core.getTotalSize();
   }
 
+  private static nextMirrorEngineId = 1;
+  private readonly mirrorEngineId = HybridNitroListEngineMirror.nextMirrorEngineId++;
+  private slotMaxParked = 12;
+  private slotMainAxisGap = 0;
+  private slotPaddingStart = 0;
+  private stickyIndices: number[] = [];
+  private stickyOffset = 0;
+  private stickySize = 0;
+  private mvcpEnabled = false;
+  private mvcpAnchorIndex = -1;
+
+  getEngineId(): number {
+    return this.mirrorEngineId;
+  }
+
+  configureSlots(maxParked: number, mainAxisGap: number, paddingStart: number): void {
+    this.callLog.push('configureSlots');
+    this.slotMaxParked = maxParked;
+    this.slotMainAxisGap = mainAxisGap;
+    this.slotPaddingStart = paddingStart;
+  }
+
+  setStickyConfig(indices: ArrayBuffer, stickyOffset: number, stickySize: number): void {
+    this.callLog.push('setStickyConfig');
+    this.stickyIndices = Array.from(new Int32Array(indices));
+    this.stickyOffset = stickyOffset;
+    this.stickySize = stickySize;
+  }
+
+  setMvcpConfig(enabled: boolean, anchorIndex: number): void {
+    this.callLog.push('setMvcpConfig');
+    this.mvcpEnabled = enabled;
+    this.mvcpAnchorIndex = anchorIndex;
+  }
+
+  reconcileSlots(_extraIndices: ArrayBuffer, _budgetSlots: number, outDeltas: ArrayBuffer): number {
+    this.callLog.push('reconcileSlots');
+    const out = new Int32Array(outDeltas);
+    if (out.length < 8) return -1;
+    const range = this.core.getEngagedRange(this.scrollOffset, this.mainViewport(), this.drawDistance);
+    const count = Math.max(0, range.end - range.start + 1);
+    out[0] = count;
+    out[1] = count;
+    out[2] = range.start;
+    out[3] = range.end;
+    out[4] = range.version;
+    out[5] = this.stickyIndices.length > 0 ? this.stickyIndices[0] : -1;
+    out[6] = 0;
+    out[7] = 8 + count * 4;
+    if (out.length < 8 + count * 4) return -1;
+    for (let k = 0; k < count; k++) {
+      const base = 8 + k * 4;
+      out[base] = k;
+      out[base + 1] = range.start + k;
+      out[base + 2] = k + 1;
+      out[base + 3] = 1 | 2 | 4;
+    }
+    void this.slotMaxParked;
+    void this.slotMainAxisGap;
+    void this.slotPaddingStart;
+    void this.stickyOffset;
+    void this.stickySize;
+    void this.mvcpEnabled;
+    void this.mvcpAnchorIndex;
+    return count;
+  }
+
   private maybeEmitRange(): void {
     const cb = this.rangeCallback;
     if (cb == null || this.isUpdatingProps) return;

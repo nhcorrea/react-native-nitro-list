@@ -16,6 +16,8 @@ namespace margelo::nitro::nitrolist {
 struct LayoutCoreTestAccess {
 #ifdef NITROLIST_LAYOUT_TEST_COUNTERS
   static uint64_t meanVisits(LayoutCore& core) { return core.typeMeanVisits_; }
+  static uint64_t blockRebuilds(LayoutCore& core) { return core.blockRebuilds_; }
+  static uint64_t blockMaterializations(LayoutCore& core) { return core.blockMaterializations_; }
 #endif
   static size_t frozenNodes(LayoutCore& core) {
     std::lock_guard<std::mutex> guard(core.mutex_);
@@ -1864,12 +1866,38 @@ static void testLazyTypeMeansDifferential() {
   const auto a = LayoutCoreTestAccess::meanVisits(eager);
   const auto b = LayoutCoreTestAccess::meanVisits(lazy);
   CHECK(a == 100000 && b == 782);
+  const auto rebuildsBefore = LayoutCoreTestAccess::blockRebuilds(lazy);
+  const auto matBefore = LayoutCoreTestAccess::blockMaterializations(lazy);
   CHECK(eager.getSize(99999) == lazy.getSize(99999));
   CHECK(eager.getTotalSize() == lazy.getTotalSize());
+  // True block-level lazy means: getTotalSize() only rebuilt block 0 (1 block, NOT 782!) and materialized 0 blocks.
+  CHECK(LayoutCoreTestAccess::blockRebuilds(lazy) - rebuildsBefore == 1);
+  CHECK(LayoutCoreTestAccess::blockMaterializations(lazy) - matBefore == 0);
+  const auto rEager = eager.getEngagedRange(0, 600, 250);
+  const auto rLazy = lazy.getEngagedRange(0, 600, 250);
+  CHECK(rEager.start == rLazy.start && rEager.end == rLazy.end && rEager.version == rLazy.version);
+  CHECK(LayoutCoreTestAccess::blockMaterializations(lazy) - matBefore == 0);
   CHECK(eager.getOffset(99999) == lazy.getOffset(99999));
-  std::printf("lazy means T1: eager=%llu item visits, lazy=%llu block visits\n",
-              static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+  // Reading item 99999 materializes only its single block (block 781).
+  CHECK(LayoutCoreTestAccess::blockMaterializations(lazy) - matBefore == 1);
+  std::printf("lazy means T1: eager=%llu item visits, lazy=%llu block visits, rebuilds=%llu, mat=%llu\n",
+              static_cast<unsigned long long>(a), static_cast<unsigned long long>(b),
+              static_cast<unsigned long long>(LayoutCoreTestAccess::blockRebuilds(lazy) - rebuildsBefore),
+              static_cast<unsigned long long>(LayoutCoreTestAccess::blockMaterializations(lazy) - matBefore));
 #endif
+  // Verify invalidateItemSizesRange preserves measurements outside [start, end)
+  {
+    LayoutCore core;
+    core.setEstimate(50);
+    core.setItemCount(100);
+    core.setItemSize(10, 120);
+    core.setItemSize(20, 140);
+    core.setItemSize(80, 160);
+    core.invalidateItemSizesRange(15, 30, false);
+    CHECK(core.getSize(10) == 120);
+    CHECK(core.getSize(20) == 50);
+    CHECK(core.getSize(80) == 160);
+  }
 }
 
 int main(int argc, char** argv) {

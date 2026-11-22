@@ -272,7 +272,7 @@ export type CellPool = {
   next: number;
 };
 
-export const MAX_PARKED_CELLS = 32;
+export const MAX_PARKED_CELLS = 12;
 const PARKED_AWAY_OFFSET = -(2 ** 20);
 const CELLS_STORE_KEYS = [
   'momentumWindowPaused',
@@ -970,21 +970,16 @@ export const NitroListCells = React.memo(function NitroListCells({
     explicitFixedSize: number | undefined;
   };
   const idle = NitroListDevFlags.experimentalSlot03;
-  const lazyRefs = NitroListDevFlags.experimentalLazyCellRefs || idle;
   const slotPlanRef = useRef<SlotPlan | null>(null);
   let nextPlan: SlotPlan | null = null;
   const renderedTops: number[] | null =
     idle && alwaysRender == null && alwaysRenderKeyIndices == null && firstPaintLimit <= 0 ? [] : null;
-  const metadataRef = useRef<Map<number, CellMetadata> | null>(
-    lazyRefs ? null : new Map<number, CellMetadata>(),
-  );
+  const metadataRef = useRef<Map<number, CellMetadata> | null>(null);
   if (metadataRef.current === null) metadataRef.current = new Map<number, CellMetadata>();
   const nextMetadata = new Map<number, CellMetadata>();
-  const poolRef = useRef<CellPool | null>(lazyRefs ? null : emptyCellPool());
+  const poolRef = useRef<CellPool | null>(null);
   if (poolRef.current === null) poolRef.current = emptyCellPool();
-  const elementCacheRef = useRef<CellElementCache | null>(
-    lazyRefs ? null : {shared: null, elements: new Map()},
-  );
+  const elementCacheRef = useRef<CellElementCache | null>(null);
   if (elementCacheRef.current === null) elementCacheRef.current = {shared: null, elements: new Map()};
   const shared: CellSharedProps = {
     recycled: recycleItems,

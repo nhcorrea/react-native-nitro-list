@@ -55,7 +55,7 @@ double defaultClockMs() {
 
 bool LayoutCore::setItemCount(int32_t count) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   if (count == itemCount_ || count < 0) {
     return false;
   }
@@ -88,19 +88,31 @@ bool LayoutCore::setItemCount(int32_t count) {
   geometryChanged_ = true;
   const bool shrank = count < itemCount_;
   itemCount_ = count;
+  const auto blocks = static_cast<size_t>(blockCountFor(count));
+  if (blockBase_.size() < blocks) {
+    blockBase_.resize(blocks, 0.0);
+    blockSum_.resize(blocks, 0.0);
+    blockMeasuredSum_.resize(blocks, 0.0);
+    blockUnmeasuredCount_.resize(blocks, 0);
+    blockUniformType_.resize(blocks, 0);
+    blockItemDirty_.resize(blocks, 0);
+    blockStatsValid_.resize(blocks, 0);
+    blockDirty_.resize(blocks, 0);
+  }
+  markWideDirtyLocked(dirtyStart);
   if (shrank) {
+    if (!blockMixedCounts_.empty()) {
+      const int32_t maxBlock = static_cast<int32_t>(blocks);
+      for (auto it = blockMixedCounts_.begin(); it != blockMixedCounts_.end();) {
+        if (it->first >= maxBlock) it = blockMixedCounts_.erase(it);
+        else ++it;
+      }
+    }
     releaseCapacityLocked();
     pruneFrozenLocked();
     rebuildTypeObservationsLocked();
     applyTypeMeansLocked();
   }
-  const auto blocks = static_cast<size_t>(blockCountFor(count));
-  if (blockBase_.size() < blocks) {
-    blockBase_.resize(blocks, 0.0);
-    blockSum_.resize(blocks, 0.0);
-    blockDirty_.resize(blocks, 0);
-  }
-  markWideDirtyLocked(dirtyStart);
   hasRangeWindow_ = false;
   return true;
 }
@@ -157,7 +169,7 @@ void LayoutCore::setClockForTesting(ClockFn clock) {
 
 bool LayoutCore::setEstimate(double value) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   if (!std::isfinite(value)) {
     return false;
   }
@@ -195,7 +207,8 @@ bool LayoutCore::setItemSize(int32_t index, double size) {
   if (measured_[index] != 0 && std::abs(sizes_[index] - rounded) <= measurementEpsilon_) {
     return false;
   }
-  const float previousSize = hasPendingTypeMeans_ ? sizeWithPendingMeanLocked(index) : sizes_[index];
+  if (hasDirtyItemBlocks_) ensureBlockMaterializedLocked(index >> kBlockShift);
+  const float previousSize = sizes_[index];
   recordMeasurementLocked(index, rounded);
   geometryChanged_ = geometryChanged_ || previousSize != rounded;
   sizes_[index] = rounded;
@@ -246,7 +259,8 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
     if (measured_[idx] != 0 && std::abs(sizes_[idx] - rounded) <= measurementEpsilon_) {
       continue;
     }
-    const float previousSize = hasPendingTypeMeans_ ? sizeWithPendingMeanLocked(idx) : sizes_[idx];
+    if (hasDirtyItemBlocks_) ensureBlockMaterializedLocked(idx >> kBlockShift);
+    const float previousSize = sizes_[idx];
     recordMeasurementLocked(idx, rounded);
     geometryChanged_ = geometryChanged_ || previousSize != rounded;
     sizes_[idx] = rounded;
@@ -261,7 +275,7 @@ bool LayoutCore::applyItemSizesLocked(const double* pairs, int32_t pairCount, do
 
 bool LayoutCore::resetItemSizes() {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   resetTypeObservationsLocked();
   frozen_.clear();
   bool anyChanged = false;
@@ -286,36 +300,48 @@ bool LayoutCore::resetItemSizes() {
 
 void LayoutCore::invalidateItemSizesFrom(int32_t start, bool clearPriors, const double* keptPairs,
                                          int32_t keptCount) {
+  invalidateItemSizesRange(start, itemCount_, clearPriors, keptPairs, keptCount);
+}
+
+void LayoutCore::invalidateItemSizesRange(int32_t start, int32_t end, bool clearPriors,
+                                          const double* keptPairs, int32_t keptCount) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   start = std::clamp(start, 0, itemCount_);
+  end = std::clamp(end, start, itemCount_);
   if (clearPriors) typeStats_.clear();
   std::vector<bool> kept;
-  if (!clearPriors && keptPairs != nullptr && keptCount > 0 && start < itemCount_) {
-    kept.assign(static_cast<size_t>(itemCount_ - start), false);
+  if (!clearPriors && keptPairs != nullptr && keptCount > 0 && start < end) {
+    kept.assign(static_cast<size_t>(end - start), false);
     for (int32_t p = 0; p < keptCount; ++p) {
       const double raw = keptPairs[p * 2];
-      if (!std::isfinite(raw) || raw < start || raw >= itemCount_ || raw != std::floor(raw)) continue;
+      if (!std::isfinite(raw) || raw < start || raw >= end || raw != std::floor(raw)) continue;
       kept[static_cast<size_t>(raw) - start] = true;
     }
   }
   bool removedObservation = false;
-  for (int32_t i = start; i < itemCount_; ++i) {
+  for (int32_t i = start; i < end; ++i) {
     if (!kept.empty() && kept[i - start] && measured_[i] != 0) continue;
     removedObservation = removedObservation || measured_[i] != 0;
     measured_[i] = 0;
-    geometryChanged_ = geometryChanged_ || sizes_[i] != estimateForTypeLocked(types_[i]);
-    sizes_[i] = estimateForTypeLocked(types_[i]);
+    const float target = estimateForTypeLocked(types_[i]);
+    geometryChanged_ = geometryChanged_ || sizes_[i] != target;
+    sizes_[i] = target;
+    if (columnCount_ == 1 && end < itemCount_) {
+      markItemDirtyLocked(i);
+    }
   }
   pruneFrozenLocked();
   if (removedObservation || clearPriors) rebuildTypeObservationsLocked();
-  markWideDirtyLocked(start);
+  if (columnCount_ > 1 || end >= itemCount_) {
+    markWideDirtyLocked(start);
+  }
   hasRangeWindow_ = false;
 }
 
 bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   if (pairs == nullptr || pairCount <= 0 || itemCount_ == 0) {
     return false;
   }
@@ -340,6 +366,10 @@ bool LayoutCore::remapItemSizes(const double* pairs, int32_t pairCount) {
     if (measured_[i] != measured) {
       measured_[i] = measured;
       anyChanged = true;
+      const int32_t block = i >> kBlockShift;
+      if (block < static_cast<int32_t>(blockStatsValid_.size())) {
+        blockStatsValid_[block] = 0;
+      }
     }
     if (sizes_[i] != size) {
       geometryChanged_ = true;
@@ -408,7 +438,15 @@ void LayoutCore::releaseCapacityLocked() {
   const auto blocks = static_cast<size_t>(blockCountFor(itemCount_));
   truncateCapacity(blockBase_, blocks);
   truncateCapacity(blockSum_, blocks);
+  truncateCapacity(blockMeasuredSum_, blocks);
+  truncateCapacity(blockUnmeasuredCount_, blocks);
+  truncateCapacity(blockUniformType_, blocks);
+  truncateCapacity(blockItemDirty_, blocks);
+  truncateCapacity(blockStatsValid_, blocks);
   truncateCapacity(blockDirty_, blocks);
+  if (blockMixedCounts_.empty()) {
+    std::unordered_map<int32_t, std::vector<std::pair<uint16_t, uint8_t>>>().swap(blockMixedCounts_);
+  }
   std::vector<float>().swap(remapSizes_);
   std::vector<uint8_t>().swap(remapMeasured_);
 }
@@ -426,7 +464,7 @@ void LayoutCore::resetAll() {
   std::vector<int32_t>().swap(rowStart_);
   std::vector<TypeStats>().swap(typeStats_);
   std::vector<uint8_t>().swap(pendingTypeMeans_);
-  hasPendingTypeMeans_ = false;
+  hasDirtyItemBlocks_ = false;
   columnCount_ = 1;
   itemCount_ = 0;
   estimate_ = 0.0f;
@@ -434,8 +472,15 @@ void LayoutCore::resetAll() {
   estimatesFrozen_ = false;
   minDirtyIndex_ = INT32_MAX;
   wideDirtyIndex_ = INT32_MAX;
+  minRebaseBlock_ = INT32_MAX;
   std::vector<double>().swap(blockBase_);
   std::vector<double>().swap(blockSum_);
+  std::vector<double>().swap(blockMeasuredSum_);
+  std::vector<uint8_t>().swap(blockUnmeasuredCount_);
+  std::vector<int32_t>().swap(blockUniformType_);
+  std::vector<uint8_t>().swap(blockItemDirty_);
+  std::vector<uint8_t>().swap(blockStatsValid_);
+  std::unordered_map<int32_t, std::vector<std::pair<uint16_t, uint8_t>>>().swap(blockMixedCounts_);
   std::vector<uint8_t>().swap(blockDirty_);
   std::vector<int32_t>().swap(dirtyBlocks_);
   layoutVersion_ = 0;
@@ -464,13 +509,26 @@ void LayoutCore::resetAll() {
 size_t LayoutCore::getMemoryFootprint() {
   std::lock_guard<std::mutex> guard(mutex_);
   const size_t frozenBuckets = frozen_.bucket_count() > 1 ? frozen_.bucket_count() : 0;
+  const size_t mixedBuckets = blockMixedCounts_.bucket_count() > 1 ? blockMixedCounts_.bucket_count() : 0;
+  size_t mixedBytes = mixedBuckets * sizeof(void*) +
+                      blockMixedCounts_.size() *
+                          (sizeof(std::pair<const int32_t, std::vector<std::pair<uint16_t, uint8_t>>>) +
+                           2 * sizeof(void*));
+  for (const auto& entry : blockMixedCounts_) {
+    mixedBytes += entry.second.capacity() * sizeof(std::pair<uint16_t, uint8_t>);
+  }
   return sizes_.capacity() * sizeof(float) + offsets_.capacity() * sizeof(double) +
          measured_.capacity() * sizeof(uint8_t) + types_.capacity() * sizeof(uint16_t) +
          spans_.capacity() * sizeof(uint16_t) + rowStart_.capacity() * sizeof(int32_t) +
          typeStats_.capacity() * sizeof(TypeStats) + pendingTypeMeans_.capacity() * sizeof(uint8_t) +
          remapSizes_.capacity() * sizeof(float) +
          remapMeasured_.capacity() * sizeof(uint8_t) + blockBase_.capacity() * sizeof(double) +
-         blockSum_.capacity() * sizeof(double) + blockDirty_.capacity() * sizeof(uint8_t) +
+         blockSum_.capacity() * sizeof(double) + blockMeasuredSum_.capacity() * sizeof(double) +
+         blockUnmeasuredCount_.capacity() * sizeof(uint8_t) +
+         blockUniformType_.capacity() * sizeof(int32_t) +
+         blockItemDirty_.capacity() * sizeof(uint8_t) +
+         blockStatsValid_.capacity() * sizeof(uint8_t) + mixedBytes +
+         blockDirty_.capacity() * sizeof(uint8_t) +
          dirtyBlocks_.capacity() * sizeof(int32_t) +
          frozen_.size() * (sizeof(std::pair<const int32_t, float>) + 2 * sizeof(void*)) +
          frozenBuckets * sizeof(void*);
@@ -490,7 +548,7 @@ bool LayoutCore::setItemTypesRange(int32_t start, const uint16_t* types, int32_t
 }
 
 bool LayoutCore::assignTypesLocked(int32_t start, const uint16_t* types, int32_t count, bool replaceAll) {
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   if (static_cast<int32_t>(types_.size()) < itemCount_) {
     types_.resize(itemCount_, 0);
   }
@@ -503,8 +561,14 @@ bool LayoutCore::assignTypesLocked(int32_t start, const uint16_t* types, int32_t
     if (type >= kMaxTypeStats) {
       allTracked = false;
     }
-    measuredTypeChanged = measuredTypeChanged || (types_[i] != type && measured_[i] != 0);
-    types_[i] = type;
+    if (types_[i] != type) {
+      if (measured_[i] != 0) measuredTypeChanged = true;
+      const int32_t block = i >> kBlockShift;
+      if (block < static_cast<int32_t>(blockStatsValid_.size())) {
+        blockStatsValid_[block] = 0;
+      }
+      types_[i] = type;
+    }
   }
   if (measuredTypeChanged) rebuildTypeObservationsLocked();
   for (int32_t i = start; i < end; i++) {
@@ -537,7 +601,7 @@ int32_t LayoutCore::countUnmeasured(int32_t from, int32_t to) {
 
 bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double scale) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   if (!typeAverages_ || pairs == nullptr || pairCount <= 0) {
     return false;
   }
@@ -586,7 +650,7 @@ bool LayoutCore::seedTypeMeans(const double* pairs, int32_t pairCount, double sc
 
 void LayoutCore::setTypeAverages(bool enabled) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   if (typeAverages_ == enabled) {
     return;
   }
@@ -642,7 +706,7 @@ double LayoutCore::getSize(int32_t index) {
   if (index < 0 || index >= itemCount_) {
     return 0.0;
   }
-  return hasPendingTypeMeans_ ? sizeWithPendingMeanLocked(index) : sizes_[index];
+  return currentSizeLocked(index);
 }
 
 int32_t LayoutCore::getLayoutVersion() {
@@ -669,7 +733,8 @@ int32_t LayoutCore::readLayout(int32_t start, int32_t count, double* out, int32_
   }
   double* cursor = out + 4;
   for (int32_t i = first; i < first + available; i++) {
-    *cursor++ = offsetAtLocked(i);
+    const double off = offsetAtLocked(i);
+    *cursor++ = off;
     *cursor++ = static_cast<double>(sizes_[i]);
   }
   return available;
@@ -700,10 +765,46 @@ int32_t LayoutCore::fillLayoutSlab(double* out, int32_t capacityDoubles, double 
   out[3] = range.end;
   double* cursor = out + 4;
   for (int32_t i = range.start; i < range.start + count; i++) {
-    *cursor++ = offsetAtLocked(i) * outputScale;
+    const double off = offsetAtLocked(i);
+    *cursor++ = off * outputScale;
     *cursor++ = static_cast<double>(sizes_[i]) * outputScale;
   }
   return count;
+}
+
+LayoutCore::SlabResult LayoutCore::fillSnapshotSlab(
+    double* bodyOut, int32_t bodyCapacityDoubles, double scrollOffset, double viewportHeight,
+    double drawDistance, double outputScale, bool canSkipIfMatching, int32_t matchStart,
+    int32_t matchEnd, int32_t matchVersion, std::vector<double>* overflowOut,
+    int32_t overflowHeaderDoubles) {
+  std::lock_guard<std::mutex> guard(mutex_);
+  const EngagedRange range = computeEngagedRangeLocked(scrollOffset, viewportHeight, drawDistance);
+  const int32_t count = range.end >= range.start ? range.end - range.start + 1 : 0;
+  const int32_t bodyDoubles = count * 2;
+  const bool insufficient = bodyOut == nullptr || bodyCapacityDoubles < bodyDoubles;
+  if (insufficient) {
+    if (overflowOut != nullptr) {
+      overflowOut->resize(static_cast<size_t>(overflowHeaderDoubles + bodyDoubles));
+      double* cursor = overflowOut->data() + overflowHeaderDoubles;
+      for (int32_t i = range.start; i < range.start + count; i++) {
+        const double off = offsetAtLocked(i);
+        *cursor++ = off * outputScale;
+        *cursor++ = static_cast<double>(sizes_[i]) * outputScale;
+      }
+    }
+    return SlabResult{range, totalSize_ * outputScale, count, true};
+  }
+  const bool skipBody = canSkipIfMatching && range.start == matchStart && range.end == matchEnd &&
+                        range.version == matchVersion;
+  if (!skipBody && count > 0) {
+    double* cursor = bodyOut;
+    for (int32_t i = range.start; i < range.start + count; i++) {
+      const double off = offsetAtLocked(i);
+      *cursor++ = off * outputScale;
+      *cursor++ = static_cast<double>(sizes_[i]) * outputScale;
+    }
+  }
+  return SlabResult{range, totalSize_ * outputScale, count, false};
 }
 
 LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffset,
@@ -823,9 +924,11 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
   }
   double lower = offsetAtLocked(end) - viewportHeight - bottomBuffer;
   if (start > 0) {
-    lower = std::max(lower, offsetAtLocked(start - 1) + sizes_[start - 1] + topBuffer);
+    const double prevOff = offsetAtLocked(start - 1);
+    lower = std::max(lower, prevOff + sizes_[start - 1] + topBuffer);
   }
-  double upper = offsetAtLocked(start) + sizes_[start] + topBuffer;
+  const double startOff = offsetAtLocked(start);
+  double upper = startOff + sizes_[start] + topBuffer;
   if (end < itemCount_ - 1) {
     upper = std::min(upper, offsetAtLocked(end + 1) - viewportHeight - bottomBuffer);
   }
@@ -844,7 +947,7 @@ LayoutCore::EngagedRange LayoutCore::computeEngagedRangeLocked(double scrollOffs
 
 void LayoutCore::setColumnCount(int32_t columns) {
   std::lock_guard<std::mutex> guard(mutex_);
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   const int32_t clamped = std::max(1, columns);
   if (clamped == columnCount_) {
     return;
@@ -852,6 +955,7 @@ void LayoutCore::setColumnCount(int32_t columns) {
   columnCount_ = clamped;
   typeStats_.clear();
   frozen_.clear();
+  std::fill(blockStatsValid_.begin(), blockStatsValid_.end(), 0);
   for (int32_t i = 0; i < itemCount_; i++) {
     measured_[i] = 0;
     geometryChanged_ = geometryChanged_ || sizes_[i] != estimate_;
@@ -921,32 +1025,126 @@ void LayoutCore::markWideDirtyLocked(int32_t index) {
 }
 
 void LayoutCore::rebuildBlockLocked(int32_t block, bool& anyChanged) {
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+  ++blockRebuilds_;
+#endif
   const int32_t first = block << kBlockShift;
   const int32_t last = std::min(itemCount_, first + kBlockSize);
+  const bool applyPending =
+      block < static_cast<int32_t>(blockItemDirty_.size()) && blockItemDirty_[block] != 0;
   double local = 0.0;
+  double measuredSum = 0.0;
+  uint8_t unmeasuredCount = 0;
+  int32_t uniformType = -2;
+  bool statsSafe = true;
   for (int32_t i = first; i < last; i++) {
-    if (hasPendingTypeMeans_) {
-      const float next = sizeWithPendingMeanLocked(i);
-      anyChanged = anyChanged || sizes_[i] != next;
-      sizes_[i] = next;
+    if (applyPending && measured_[i] == 0) {
+      const float next = estimateForTypeLocked(types_[i]);
+      if (sizes_[i] != next) {
+        sizes_[i] = next;
+        anyChanged = true;
+      }
     }
     if (offsets_[i] != local) {
       offsets_[i] = local;
       anyChanged = true;
     }
-    local += sizes_[i];
+    const float sz = sizes_[i];
+    if (sz > 1e10f) statsSafe = false;
+    local += sz;
+    if (measured_[i] != 0) {
+      measuredSum += sz;
+    } else {
+      ++unmeasuredCount;
+      const int32_t t = static_cast<int32_t>(types_[i]);
+      if (uniformType == -2) uniformType = t;
+      else if (uniformType != t) uniformType = -1;
+    }
   }
   blockSum_[block] = local;
+  if (block < static_cast<int32_t>(blockMeasuredSum_.size())) {
+    blockMeasuredSum_[block] = measuredSum;
+    blockUnmeasuredCount_[block] = unmeasuredCount;
+    blockUniformType_[block] = uniformType == -2 ? 0 : uniformType;
+    blockItemDirty_[block] = 0;
+    blockStatsValid_[block] = statsSafe ? 1 : 0;
+    if (uniformType == -1 && statsSafe) {
+      auto& counts = blockMixedCounts_[block];
+      counts.clear();
+      for (int32_t i = first; i < last; ++i) {
+        if (measured_[i] != 0) continue;
+        const uint16_t t = types_[i];
+        bool found = false;
+        for (auto& kv : counts) {
+          if (kv.first == t) {
+            ++kv.second;
+            found = true;
+            break;
+          }
+        }
+        if (!found) counts.emplace_back(t, static_cast<uint8_t>(1));
+      }
+    } else if (!blockMixedCounts_.empty()) {
+      blockMixedCounts_.erase(block);
+    }
+  }
+}
+
+void LayoutCore::ensureBlockMaterializedLocked(int32_t block) {
+  if (columnCount_ > 1 || block < 0 ||
+      block >= static_cast<int32_t>(blockItemDirty_.size()) || blockItemDirty_[block] == 0) {
+    return;
+  }
+  materializeBlockLocked(block);
+}
+
+void LayoutCore::materializeBlockLocked(int32_t block, bool recordGeometryChange) {
+#ifdef NITROLIST_LAYOUT_TEST_COUNTERS
+  ++blockMaterializations_;
+#endif
+  const int32_t first = block << kBlockShift;
+  const int32_t last = std::min(itemCount_, first + kBlockSize);
+  double local = 0.0;
+  for (int32_t i = first; i < last; ++i) {
+    if (measured_[i] == 0) {
+      const float next = estimateForTypeLocked(types_[i]);
+      if (recordGeometryChange && sizes_[i] != next) {
+        geometryChanged_ = true;
+      }
+      sizes_[i] = next;
+    }
+    offsets_[i] = local;
+    local += sizes_[i];
+  }
+  blockItemDirty_[block] = 0;
+}
+
+void LayoutCore::materializeAllDirtyBlocksLocked() {
+  if (!hasDirtyItemBlocks_) return;
+  const int32_t blocks = std::min(blockCountFor(itemCount_), static_cast<int32_t>(blockItemDirty_.size()));
+  const int32_t wideFrom =
+      wideDirtyIndex_ != INT32_MAX
+          ? (std::min(wideDirtyIndex_, std::max(0, itemCount_ - 1)) >> kBlockShift)
+          : INT32_MAX;
+  for (int32_t b = 0; b < blocks; ++b) {
+    if (blockItemDirty_[b] != 0) {
+      const bool dirty = b >= wideFrom || (b < static_cast<int32_t>(blockDirty_.size()) && blockDirty_[b] != 0);
+      materializeBlockLocked(b, dirty);
+    }
+  }
+  hasDirtyItemBlocks_ = false;
 }
 
 void LayoutCore::ensureCleanBlocksLocked(bool& anyChanged) {
   const int32_t blocks = blockCountFor(itemCount_);
-  int32_t rebase = INT32_MAX;
+  int32_t rebase = minRebaseBlock_;
+  minRebaseBlock_ = INT32_MAX;
   int32_t wideFrom = INT32_MAX;
   if (wideDirtyIndex_ != INT32_MAX) {
     wideFrom = std::min(wideDirtyIndex_, std::max(0, itemCount_ - 1)) >> kBlockShift;
     for (int32_t block = wideFrom; block < blocks; block++) rebuildBlockLocked(block, anyChanged);
-    rebase = wideFrom;
+    rebase = std::min(rebase, wideFrom);
+    if (wideFrom == 0) hasDirtyItemBlocks_ = false;
   }
   for (const int32_t block : dirtyBlocks_) {
     if (block >= static_cast<int32_t>(blockDirty_.size())) continue;
@@ -972,12 +1170,14 @@ void LayoutCore::ensureCleanBlocksLocked(bool& anyChanged) {
   }
 }
 
-double LayoutCore::offsetAtLocked(int32_t index) const {
+double LayoutCore::offsetAtLocked(int32_t index) {
   if (columnCount_ > 1) return offsets_[index];
-  return blockBase_[index >> kBlockShift] + offsets_[index];
+  const int32_t block = index >> kBlockShift;
+  if (hasDirtyItemBlocks_) ensureBlockMaterializedLocked(block);
+  return blockBase_[block] + offsets_[index];
 }
 
-int32_t LayoutCore::lastIndexAtOrBelowLocked(double value) const {
+int32_t LayoutCore::lastIndexAtOrBelowLocked(double value) {
   if (itemCount_ <= 0) return 0;
   if (columnCount_ > 1) {
     const auto it = std::upper_bound(offsets_.begin() + 1, offsets_.begin() + itemCount_, value);
@@ -986,13 +1186,14 @@ int32_t LayoutCore::lastIndexAtOrBelowLocked(double value) const {
   const int32_t blocks = blockCountFor(itemCount_);
   const auto blockIt = std::upper_bound(blockBase_.begin() + 1, blockBase_.begin() + blocks, value);
   const int32_t block = static_cast<int32_t>(blockIt - blockBase_.begin()) - 1;
+  if (hasDirtyItemBlocks_) ensureBlockMaterializedLocked(block);
   const int32_t first = block << kBlockShift;
   const int32_t last = std::min(itemCount_, first + kBlockSize);
   const auto it = std::upper_bound(offsets_.begin() + first + 1, offsets_.begin() + last, value - blockBase_[block]);
   return static_cast<int32_t>(it - offsets_.begin()) - 1;
 }
 
-int32_t LayoutCore::lastIndexBelowLocked(double value, int32_t from) const {
+int32_t LayoutCore::lastIndexBelowLocked(double value, int32_t from) {
   if (columnCount_ > 1) {
     const auto it = std::lower_bound(offsets_.begin() + from, offsets_.begin() + itemCount_, value);
     return static_cast<int32_t>(it - offsets_.begin()) - 1;
@@ -1002,6 +1203,7 @@ int32_t LayoutCore::lastIndexBelowLocked(double value, int32_t from) const {
   const auto blockIt = std::lower_bound(blockBase_.begin() + fromBlock, blockBase_.begin() + blocks, value);
   int32_t block = static_cast<int32_t>(blockIt - blockBase_.begin()) - 1;
   if (block < fromBlock) return from - 1;
+  if (hasDirtyItemBlocks_) ensureBlockMaterializedLocked(block);
   const int32_t first = std::max(from, block << kBlockShift);
   const int32_t last = std::min(itemCount_, (block << kBlockShift) + kBlockSize);
   const auto it = std::lower_bound(offsets_.begin() + first, offsets_.begin() + last, value - blockBase_[block]);
@@ -1017,6 +1219,7 @@ void LayoutCore::ensureClean() {
   if (columnCount_ <= 1) {
     ensureCleanBlocksLocked(anyChanged);
   } else {
+    if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
     if (static_cast<int32_t>(rowStart_.size()) < itemCount_) {
       rowStart_.resize(itemCount_, 0);
     }
@@ -1062,12 +1265,9 @@ void LayoutCore::ensureClean() {
       anyChanged = true;
     }
   }
-  if (hasPendingTypeMeans_) {
-    std::fill(pendingTypeMeans_.begin(), pendingTypeMeans_.end(), 0);
-    hasPendingTypeMeans_ = false;
-  }
   minDirtyIndex_ = INT32_MAX;
   wideDirtyIndex_ = INT32_MAX;
+  minRebaseBlock_ = INT32_MAX;
   for (const int32_t block : dirtyBlocks_) {
     if (block < static_cast<int32_t>(blockDirty_.size())) blockDirty_[block] = 0;
   }
@@ -1186,23 +1386,115 @@ bool LayoutCore::applyTypeMeansLocked() {
     return false;
   }
   if (lazyTypeMeans_ && columnCount_ == 1) {
-    pendingTypeMeans_.resize(typeStats_.size(), 0);
+    // Bring already-queued dirty blocks up to pre-drift estimates so rebuildBlockLocked
+    // detects exact geometry diffs when the new mean is applied.
+    if (hasDirtyItemBlocks_) {
+      const int32_t wideFromPre =
+          wideDirtyIndex_ != INT32_MAX
+              ? (std::min(wideDirtyIndex_, std::max(0, itemCount_ - 1)) >> kBlockShift)
+              : INT32_MAX;
+      for (const int32_t b : dirtyBlocks_) {
+        if (b >= 0 && b < static_cast<int32_t>(blockItemDirty_.size()) && blockItemDirty_[b] != 0) {
+          materializeBlockLocked(b, true);
+        }
+      }
+      if (wideFromPre < static_cast<int32_t>(blockItemDirty_.size())) {
+        const int32_t blocksPre = blockCountFor(itemCount_);
+        for (int32_t b = wideFromPre; b < blocksPre; ++b) {
+          if (blockItemDirty_[b] != 0) materializeBlockLocked(b, true);
+        }
+      }
+    }
+    pendingTypeMeans_.assign(typeStats_.size(), 0);
+    bool anyEstChanged = false;
     for (size_t type = 0; type < typeStats_.size(); ++type) {
       auto& stats = typeStats_[type];
       if (stats.num > 0 && std::abs(stats.mean - stats.appliedMean) > typeMeanSweepBar(stats.appliedMean)) {
-        pendingTypeMeans_[type] = 1;
+        const float oldEst = estimateForTypeLocked(static_cast<uint16_t>(type));
         stats.appliedMean = stats.mean;
+        const float newEst = estimateForTypeLocked(static_cast<uint16_t>(type));
+        if (newEst != oldEst) {
+          pendingTypeMeans_[type] = 1;
+          anyEstChanged = true;
+        }
       }
     }
-    hasPendingTypeMeans_ = true;
-    for (int32_t first = 0; first < itemCount_; first += kBlockSize) {
+    if (!anyEstChanged || itemCount_ == 0) {
+      return false;
+    }
+    const int32_t blocks = blockCountFor(itemCount_);
+    const int32_t wideFrom =
+        wideDirtyIndex_ != INT32_MAX
+            ? (std::min(wideDirtyIndex_, std::max(0, itemCount_ - 1)) >> kBlockShift)
+            : INT32_MAX;
+    bool anyUpdated = false;
+    for (int32_t b = 0; b < blocks; ++b) {
 #ifdef NITROLIST_LAYOUT_TEST_COUNTERS
       ++typeMeanVisits_;
 #endif
-      markItemDirtyLocked(first);
+      if (b >= wideFrom) {
+        blockItemDirty_[b] = 1;
+        hasDirtyItemBlocks_ = true;
+        anyUpdated = true;
+        continue;
+      }
+      if (blockDirty_[b] != 0 || blockStatsValid_[b] == 0) {
+        blockItemDirty_[b] = 1;
+        hasDirtyItemBlocks_ = true;
+        markItemDirtyLocked(b << kBlockShift);
+        anyUpdated = true;
+        continue;
+      }
+      if (blockUnmeasuredCount_[b] == 0) {
+        continue;
+      }
+      if (blockUniformType_[b] >= 0) {
+        const auto t = static_cast<uint16_t>(blockUniformType_[b]);
+        if (t >= pendingTypeMeans_.size() || pendingTypeMeans_[t] == 0) continue;
+        blockSum_[b] = blockMeasuredSum_[b] +
+                       static_cast<double>(blockUnmeasuredCount_[b]) *
+                           static_cast<double>(estimateForTypeLocked(t));
+        blockItemDirty_[b] = 1;
+        hasDirtyItemBlocks_ = true;
+        geometryChanged_ = true;
+        anyUpdated = true;
+        minRebaseBlock_ = std::min(minRebaseBlock_, b);
+        minDirtyIndex_ = std::min(minDirtyIndex_, b << kBlockShift);
+      } else {
+        const auto it = blockMixedCounts_.find(b);
+        if (it == blockMixedCounts_.end()) {
+          blockItemDirty_[b] = 1;
+          hasDirtyItemBlocks_ = true;
+          markItemDirtyLocked(b << kBlockShift);
+          anyUpdated = true;
+          continue;
+        }
+        bool affected = false;
+        for (const auto& kv : it->second) {
+          if (kv.first < pendingTypeMeans_.size() && pendingTypeMeans_[kv.first] != 0) {
+            affected = true;
+            break;
+          }
+        }
+        if (!affected) continue;
+        double nextSum = blockMeasuredSum_[b];
+        for (const auto& kv : it->second) {
+          nextSum += static_cast<double>(kv.second) *
+                     static_cast<double>(estimateForTypeLocked(kv.first));
+        }
+        blockSum_[b] = nextSum;
+        blockItemDirty_[b] = 1;
+        hasDirtyItemBlocks_ = true;
+        geometryChanged_ = true;
+        anyUpdated = true;
+        minRebaseBlock_ = std::min(minRebaseBlock_, b);
+        minDirtyIndex_ = std::min(minDirtyIndex_, b << kBlockShift);
+      }
     }
-    // A dirty block establishes whether geometry actually changed when read.
-    return itemCount_ > 0;
+    if (anyUpdated) {
+      hasRangeWindow_ = false;
+    }
+    return anyUpdated;
   }
   bool anyChanged = false;
   for (int32_t i = 0; i < itemCount_; i++) {
@@ -1240,27 +1532,20 @@ bool LayoutCore::applyTypeMeansLocked() {
 void LayoutCore::setLazyTypeMeans(bool enabled) {
   std::lock_guard<std::mutex> guard(mutex_);
   if (lazyTypeMeans_ == enabled) return;
-  if (hasPendingTypeMeans_) materializeTypeMeansLocked();
+  if (hasDirtyItemBlocks_) materializeAllDirtyBlocksLocked();
   lazyTypeMeans_ = enabled;
   if (!enabled) std::vector<uint8_t>().swap(pendingTypeMeans_);
 }
 
-float LayoutCore::sizeWithPendingMeanLocked(int32_t index) const {
-  const auto type = types_[index];
-  if (measured_[index] == 0 && type < pendingTypeMeans_.size() && pendingTypeMeans_[type]) {
-    return roundToOctave(typeStats_[type].appliedMean);
+float LayoutCore::currentSizeLocked(int32_t index) const {
+  if (measured_[index] != 0) return sizes_[index];
+  if (columnCount_ == 1 && hasDirtyItemBlocks_) {
+    const int32_t block = index >> kBlockShift;
+    if (block < static_cast<int32_t>(blockItemDirty_.size()) && blockItemDirty_[block] != 0) {
+      return estimateForTypeLocked(types_[index]);
+    }
   }
   return sizes_[index];
-}
-
-void LayoutCore::materializeTypeMeansLocked() {
-  for (int32_t i = 0; i < itemCount_; ++i) {
-    const float next = sizeWithPendingMeanLocked(i);
-    geometryChanged_ = geometryChanged_ || sizes_[i] != next;
-    sizes_[i] = next;
-  }
-  std::fill(pendingTypeMeans_.begin(), pendingTypeMeans_.end(), 0);
-  hasPendingTypeMeans_ = false;
 }
 
 float LayoutCore::estimateForTypeLocked(uint16_t type) const {

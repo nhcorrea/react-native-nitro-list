@@ -122,7 +122,6 @@ export function createItemTypes<T>(ctx: ItemTypesCtx<T>): ItemTypesApi {
     let changedFrom = sentCount < 0 ? 0 : ctx.itemCount;
     const map = ctx.typeIdMapRef.current;
     const initializedUniformTypes =
-      NitroListDevFlags.experimentalUniformTypePreparation &&
       typedItems == null &&
       ctx.getItemType == null;
     for (let i = initializedUniformTypes ? ctx.itemCount : from; i < ctx.itemCount; ++i) {
