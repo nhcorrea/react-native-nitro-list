@@ -11,6 +11,7 @@ The layout engine is shared C++ compiled into both platforms and exposed to Java
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
 - [Coming from FlatList](#coming-from-flatlist)
 - [Props](#props) · [Imperative handle](#imperative-handle) · [Exported types](#exported-types)
+- [Native templates (opt-in)](#native-templates-opt-in) · [Native image prefetching](#native-image-prefetching)
 - [Sections](#sections-section-list) · [Keyboard-aware chat](#keyboard-aware-chat-keyboard)
 - [UI-thread scroll mode](#ui-thread-scroll-mode-experimental)
 - [Performance monitoring](#performance-monitoring-dev) · [Development warnings](#development-warnings)
@@ -18,35 +19,35 @@ The layout engine is shared C++ compiled into both platforms and exposed to Java
 
 ## Why it's fast
 
-**The layout lives in C++, not in React.** Item sizes, prefix offsets, total size and the engaged range live in a single native structure shared by iOS and Android. Resolving "which items are on screen" is a binary search over the offset prefix (O(log n)), and repeated queries inside the same window are answered from a cached range — so a 100k-item list resolves its range in the same time as a 1k-item list. Offsets and the running total are kept in double precision, so that same 100k-item list positions its last item to the pixel (a float prefix sum drifts by thousands of dp at that size). React never walks the data array to find out what to draw.
+**The layout and recycling pool live in C++, not in React.** Item sizes, prefix offsets, total size, sticky headers, and the slot recycling pool live in a shared C++ core compiled into both iOS and Android (`LayoutCore` + `SlotPool`). Resolving "which items are on screen" is a binary search over block-indexed double-precision prefix sums (O(log n)), so a 100k-item list resolves its range in the same time as a 1k-item list and positions its last item to the exact pixel.
 
-**JavaScript talks to the engine directly.** The engine is a pure C++ Nitro `HybridObject`: every call from the JS thread and from the UI-thread scroll worklet lands in C++ with no JNI hop on Android and no Swift/ObjC bridge on iOS. The list container is a plain React `View` sized from the engine's total, so there is no custom native view in the tree.
+**Native UI-thread scroll host (zero extra dependencies).** With `recycleItems`, `NitroList` automatically attaches a lightweight Nitro Native Host directly to the platform `ScrollView` (`View.OnScrollChangeListener` + `OnPreDrawListener` on Android, `UIScrollView` KVO + `CADisplayLink` on iOS). Scroll events, slot measurements, `maintainVisibleContentPosition` anchoring, sticky header transforms, and cell positioning all execute synchronously on the UI thread before draw. JavaScript only wakes when a slot actually needs to rebind — and only that individual slot re-renders (zero parent re-renders).
 
-**Measurements are batched into one native call.** Cells report their real size through a batched bridge: a whole batch of freshly mounted cells is flushed as a single JSI call per frame instead of one call per cell. Offsets are corrected in place, and only the items after the first changed index are recomputed.
+**Opt-in zero-JS native templates (`nativeTemplate`).** For ultra-hot feeds, chats, and grids where even React cell reconciliation is too much (or where JS stalls would otherwise cause blank frames), you can pass an opt-in `nativeTemplate` config with a simple `enabled` boolean flag. Cells render directly as recycled native Android Views (Fresco + `TextView`) and iOS UIKit Views (`UIImageView` + `UILabel`) on the UI thread with **zero JS calls during scroll** and **0.0% blank frames even under 100 ms JS stalls**, falling back seamlessly to `renderItem` whenever `enabled: false` or omitted.
 
 **Cells that don't need to change don't re-render.** Cell content is memoized per key, so scrolling reuses mounted cells instead of re-rendering them. With `itemsAreEqual`, a brand-new data array whose items are recreated-but-equal re-renders zero rows.
 
-**Known sizes avoid the initial measurement correction.** `getFixedItemSize` supplies explicit cell sizes. Opt-in `autoFixedItemSizes` learns stable sizes within a list/template and keeps `onLayout` verification so later changes can correct the estimate.
+**Known sizes avoid the initial measurement correction.** `getFixedItemSize` supplies explicit cell sizes. Opt-in `autoFixedItemSizes` learns stable sizes within a list/template and keeps layout verification so later changes can correct the estimate.
 
-**Scrolling doesn't have to wake JS.** With `experimentalUiThreadScroll`, a Reanimated worklet feeds the engine and positions sticky headers on the UI thread, and the JS thread is woken **only when the rendered range actually changes** — not once per scroll frame.
+**The window is kept ahead of the finger.** The engaged range is extended in the direction of travel, a fling is projected ahead so its landing zone is already mounted, and range edges have hysteresis so a jittery boundary doesn't churn cells every frame. Native image prefetching (`getImageUris`) warms the Fresco/`NSURLSession` bitmap cache ahead of the scroll direction and cancels stale requests on reversal.
 
-**The window is kept ahead of the finger.** The engaged range is extended in the direction of travel, a fling is projected ahead so its landing zone is already mounted, and range edges have hysteresis so a jittery boundary doesn't unmount and remount the same cell every frame.
-
-**Scroll commands converge instead of guessing.** `scrollToIndex` renders the destination window first, then measures and corrects until the target offset is exact — so it lands precisely even on lists whose heights are only known after layout, and every scroll command returns a `Promise` that settles when the scroll actually lands.
+**Scroll commands converge instead of guessing.** `scrollToIndex` renders the destination window first, then measures and corrects until the target offset is exact — so it lands precisely even on 100k-item lists with dynamic heights, and every scroll command returns a `Promise` that settles when the scroll actually lands.
 
 ## Requirements
 
 - React Native with the **new architecture** enabled (developed against RN 0.86)
 - [`react-native-nitro-modules`](https://www.npmjs.com/package/react-native-nitro-modules) 0.37.1+ (the generated bindings come from `nitrogen` 0.37.1)
-- [`react-native-reanimated`](https://www.npmjs.com/package/react-native-reanimated) 4+ with its peer [`react-native-worklets`](https://www.npmjs.com/package/react-native-worklets) 0.10+ — make sure the worklets Babel plugin is in your `babel.config.js`, as Reanimated itself requires
-- Optional: [`react-native-keyboard-controller`](https://www.npmjs.com/package/react-native-keyboard-controller) 1.21.7+, only for the [`/keyboard`](#keyboard-aware-chat-keyboard) entry point
+- Optional: [`react-native-reanimated`](https://www.npmjs.com/package/react-native-reanimated) 4+ and [`react-native-worklets`](https://www.npmjs.com/package/react-native-worklets) 0.10+, **only** if you use `experimentalUiThreadScroll` or `onScrollWorklet` / `scrollOffsetSharedValue`
+- Optional: [`react-native-keyboard-controller`](https://www.npmjs.com/package/react-native-keyboard-controller) 1.21.7+, **only** for the [`/keyboard`](#keyboard-aware-chat-keyboard) entry point
 
 ## Installation
 
 ```sh
-npm install @nhcorrea/react-native-nitro-list react-native-nitro-modules react-native-reanimated react-native-worklets
+npm install @nhcorrea/react-native-nitro-list react-native-nitro-modules
 cd ios && pod install
 ```
+
+> If you also want `experimentalUiThreadScroll`, `onScrollWorklet`, or `scrollOffsetSharedValue`, install the optional peers `react-native-reanimated` and `react-native-worklets` (with the worklets Babel plugin in `babel.config.js`).
 
 ## Quick start
 
@@ -109,6 +110,9 @@ The differences worth knowing:
 | `autoFixedItemSizes` | `boolean` | Opt-in; needs `getItemType`. After at least 32 near-identical samples, a type can use a learned fixed size. The cache distinguishes tagged types, exact cross-axis constraints, font scale and the list/template. It does not share trust across list instances. `onLayout` verifies subsequent sizes and unfreezes a mismatch. Disabled with `overrideItemLayout`, where one type can span different widths. |
 | `itemsAreEqual` | `(prev, next, index) => boolean` | A new data array whose items are recreated-but-equal re-renders zero rows. The latest function is used, so it does not need a stable reference. Compare visual content only — the key is already equal by construction. |
 | `dataVersion` | `unknown` | Escape hatch for in-place mutation: change this value to force the list to treat `data` as changed even when the array identity did not. |
+| `getImageUris` | `(item, index) => string \| readonly string[] \| null \| undefined` | Optional. Supplies image URIs for each item so the native host automatically prefetches lookahead images into Fresco (Android) / `NSURLSession` cache (iOS) in the scroll direction and cancels stale requests on reversal. |
+| `imagePrefetchConfig` | `{ lookaheadItems?, width?, height? }` | Optional tuning for `getImageUris` (`lookaheadItems` defaults to `8`; `width`/`height` in dp set native resize bounds). |
+| `nativeTemplate` | `NativeTemplateConfig<T>` | **Opt-in** zero-JS native declarative cell renderer (requires `recycleItems`). Renders recycled native Android Views / iOS UIKit views on the UI thread with 0 JS calls during scroll. Toggle on/off at runtime via `nativeTemplate.enabled`. See [Native templates (opt-in)](#native-templates-opt-in). |
 | `prepareItem` | `({ item, index, key, signal }) => void \| Promise<void>` | Experimental; needs `recycleItems`. Called for the items just past the rendered window once the list is idle, so the app can warm up what they will need (an `Image.prefetch`, for example). With the prop set, the list calls it instead of mounting those items ahead of time, so they mount when they scroll into the window. At most two calls run at once and 32 items are tracked. `signal` aborts when an item leaves that range, when its data changes or when the list unmounts. Keep the function reference stable: a new function prepares every item again. |
 
 ### Callbacks
@@ -244,7 +248,148 @@ All of them return a `Promise<void>` that settles when the scroll lands. A super
 
 From the root entry point:
 
-`NitroListProps`, `NitroListHandle`, `NitroListRenderItem`, `NitroListRenderTarget`, `NitroListRenderMode`, `NitroListScrollToIndexParams`, `NitroListScrollToOffsetParams`, `NitroListItemLayout`, `NitroListWindowSize`, `NitroListStickyHeaderConfig`, `NitroListMaintainVisibleContentPositionConfig`, `NitroListAlwaysRenderConfig`, `NitroListAnchoredEndSpaceConfig`, `NitroListViewabilityConfig`, `NitroListViewToken`, `NitroListOnViewableItemsChanged`, `NitroListRenderScrollComponent`, `NitroListRenderScrollComponentProps`, `NitroListRangeChangeEvent`, `NitroListPerfSnapshot`, `NitroListScrollToIndexStats`, `LatencyDistributionSnapshot`.
+`NitroListProps`, `NitroListHandle`, `NitroListRenderItem`, `NitroListRenderTarget`, `NitroListRenderMode`, `NitroListScrollToIndexParams`, `NitroListScrollToOffsetParams`, `NitroListItemLayout`, `NitroListWindowSize`, `NitroListStickyHeaderConfig`, `NitroListMaintainVisibleContentPositionConfig`, `NitroListAlwaysRenderConfig`, `NitroListAnchoredEndSpaceConfig`, `NitroListViewabilityConfig`, `NitroListViewToken`, `NitroListOnViewableItemsChanged`, `NitroListRenderScrollComponent`, `NitroListRenderScrollComponentProps`, `NitroListRangeChangeEvent`, `NitroListImagePrefetchConfig`, `NitroListPerfSnapshot`, `NitroListScrollToIndexStats`, `LatencyDistributionSnapshot`, `NativeTemplateConfig`, `NativeTemplateNode`, `NativeTemplateBoxNode`, `NativeTemplateTextNode`, `NativeTemplateImageNode`, `NativeTemplateFieldValue`, `NativeTemplateAlign`, `NativeTemplateFontWeight`, `NativeTemplateResizeMode`.
+
+Also exported from the root entry point: `resolveNativeImageUri`, `prefetchNitroListImages`, `cancelNitroListImagePrefetch`.
+
+## Native templates (opt-in)
+
+By default, `NitroList` renders any arbitrary React JSX through `renderItem` while running layout, recycling, measurements, MVCP, and positioning natively via the Nitro Native Host.
+
+When you want **maximum native throughput** on data-driven feeds, chats, or photo grids — **zero React/JS calls during scroll** and **0.0% blank frames even when the JS thread is blocked for 100 ms** — you can opt into `nativeTemplate` (requires `recycleItems`).
+
+### Feature-flag toggle (`enabled`)
+
+`nativeTemplate` is completely **opt-in** and includes a built-in `enabled` flag (defaults to `true`). You can toggle it per list, via remote config, or with a simple feature flag — whenever `enabled` is `false` (or `nativeTemplate` is omitted), `NitroList` falls back seamlessly to your standard React `renderItem`:
+
+```tsx
+import { useMemo } from 'react';
+import {
+  NitroList,
+  resolveNativeImageUri,
+  type NativeTemplateConfig,
+} from '@nhcorrea/react-native-nitro-list';
+
+const USE_NATIVE_TEMPLATES = true; // toggle on/off per screen or via feature flag
+
+type Post = {
+  id: string;
+  author: string;
+  avatar: string;
+  body: string;
+  photo?: string;
+  aspectRatio?: number;
+};
+
+function Feed({ posts, onOpenPost }: { posts: Post[]; onOpenPost: (post: Post) => void }) {
+  const nativeTemplate = useMemo<NativeTemplateConfig<Post>>(
+    () => ({
+      enabled: USE_NATIVE_TEMPLATES,
+      getTemplateKey: (item) => (item.photo ? 'photo' : 'text'),
+      onPress: (index, action) => {
+        if (action === 'open') onOpenPost(posts[index]!);
+      },
+      templates: {
+        text: {
+          type: 'column',
+          backgroundColor: '#ffffff',
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          gap: 8,
+          borderBottomWidth: 1,
+          borderBottomColor: '#e3e8ee',
+          pressAction: 'open',
+          children: [
+            {
+              type: 'row',
+              alignItems: 'center',
+              gap: 10,
+              children: [
+                { type: 'image', uriField: 'avatar', width: 40, height: 40, borderRadius: 20 },
+                { type: 'text', textField: 'author', fontSize: 15, fontWeight: '600', color: '#14232f' },
+              ],
+            },
+            { type: 'text', textField: 'body', fontSize: 15, lineHeight: 21, color: '#22313d' },
+          ],
+        },
+        photo: {
+          type: 'column',
+          backgroundColor: '#ffffff',
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          gap: 8,
+          borderBottomWidth: 1,
+          borderBottomColor: '#e3e8ee',
+          pressAction: 'open',
+          children: [
+            {
+              type: 'row',
+              alignItems: 'center',
+              gap: 10,
+              children: [
+                { type: 'image', uriField: 'avatar', width: 40, height: 40, borderRadius: 20 },
+                { type: 'text', textField: 'author', fontSize: 15, fontWeight: '600', color: '#14232f' },
+              ],
+            },
+            { type: 'text', textField: 'body', fontSize: 15, lineHeight: 21, color: '#22313d' },
+            {
+              type: 'image',
+              uriField: 'photo',
+              aspectRatioField: 'aspectRatio',
+              borderRadius: 10,
+              backgroundColor: '#d6dde4',
+              resizeMode: 'cover',
+            },
+          ],
+        },
+      },
+      extractFields: (item) => ({
+        author: item.author,
+        avatar: resolveNativeImageUri(item.avatar),
+        body: item.body,
+        photo: item.photo ? resolveNativeImageUri(item.photo) : null,
+        aspectRatio: item.aspectRatio ?? 16 / 9,
+      }),
+    }),
+    [posts, onOpenPost],
+  );
+
+  return (
+    <NitroList
+      data={posts}
+      renderItem={renderPostFallback}
+      nativeTemplate={nativeTemplate}
+      estimatedItemSize={220}
+      keyExtractor={(p) => p.id}
+      getItemType={(p) => (p.photo ? 'photo' : 'text')}
+      recycleItems
+    />
+  );
+}
+```
+
+How it works under the hood:
+- **Zero JS during scroll:** Template nodes (`column`, `row`, `box`, `text`, `image`) are compiled once into a compact schema and flat data fields are packed into little-endian binary `ArrayBuffer` chunks with string deduplication. Native Android (`ViewGroup` + `TextView` + Fresco `GenericDraweeView`) and iOS UIKit (`UIView` + `UILabel` + `UIImageView` + `NSCache`) recycle, bind, measure, run MVCP, prefetch images, and position cells synchronously on the UI thread before draw.
+- **Scales to 100k+ items & live chat prepends:** Lists up to 4,096 items pack synchronously in ~2 ms; larger datasets pack only the head and tail synchronously and pull middle chunks on-demand with bounded memory. Pure prepends and appends shift existing native chunks in O(1) and pack only the newly inserted items.
+- **When to use `renderItem` vs `nativeTemplate`:** Keep standard `renderItem` JSX for cells with interactive inputs, complex animations, SVG/custom native modules, or third-party React components. Opt into `nativeTemplate` for high-volume data-driven feeds, chat timelines, and image grids where you want native RecyclerView/UICollectionView-class efficiency and immunity to JS-thread stalls.
+
+> **Verified on real low-end Android hardware (Redmi 10C, Android 13, 5 paired repetitions):** With `nativeTemplate` enabled on dynamic feed, 3-column photo grid, chat reversal, chat prepend, and 100k jump scenarios, `NitroList` cuts JS instructions **10×–31×** (to 16–30 M during flings), cuts UI-thread work **30%–53%**, cuts total process instructions **1.8×–6.1×**, and maintains **0.0% blank frames (5/5)** even under 100 ms JS-thread freezes.
+
+## Native image prefetching
+
+When rendering standard React cells (`renderItem`) with `recycleItems`, you can pass `getImageUris` (and optional `imagePrefetchConfig`) so the native host prefetches lookahead images into Fresco (Android) / `NSURLSession` cache (iOS) in the direction of scroll and cancels obsolete fetches when the user reverses direction:
+
+```tsx
+<NitroList
+  data={photos}
+  renderItem={renderPhoto}
+  estimatedItemSize={240}
+  keyExtractor={(p) => p.id}
+  recycleItems
+  getImageUris={(item) => [item.avatarUrl, item.photoUrl]}
+  imagePrefetchConfig={{ lookaheadItems: 10, width: 360, height: 240 }}
+/>
+```
 
 ## Sections (`/section-list`)
 
