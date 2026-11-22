@@ -1,3 +1,15 @@
+## [2.6.0](https://github.com/[secure]/react-native-nitro-list/compare/v2.5.1...v2.6.0) (2026-11-22)
+
+### ✨ Features
+
+* **list:** add prepareItem to warm up items instead of mounting them early ([b44048f](https://github.com/[secure]/react-native-nitro-list/commit/b44048ff1d162eb538994f09b57730e27c38fecc))
+* **native-host:** add C++ slot pool, UI-thread native host, and image prefetching ([0dfe1dc](https://github.com/[secure]/react-native-nitro-list/commit/0dfe1dccafa1282cb1a045d8a118baab41399e72))
+* **native-template:** add opt-in zero-js declarative native cell templates ([ca2700a](https://github.com/[secure]/react-native-nitro-list/commit/ca2700a69df04c8d9102f759c4711557863f2843))
+
+### 💨 Performance Improvements
+
+* **core:** optimize layout core block stats, defaults, and optional peer deps ([a6049bd](https://github.com/[secure]/react-native-nitro-list/commit/a6049bd18f3e1b7bede924b0e295b7ceb890bcb7))
+
 ## [2.5.1](https://github.com/[secure]/react-native-nitro-list/compare/v2.5.0...v2.5.1) (2026-11-03)
 
 ### 🐛 Bug Fixes
