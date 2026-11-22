@@ -14,10 +14,11 @@ Pod::Spec.new do |s|
   s.source       = { :git => package["repository"], :tag => "#{s.version}" }
 
   s.source_files = [
-    "ios/**/*.{swift,h,m,mm}",
+    "ios/**/*.{swift,h,hpp,m,mm}",
     "cpp/*.{hpp,cpp}",
   ]
   s.private_header_files = [
+    "ios/**/*.{h,hpp}",
     "cpp/*.hpp",
   ]
 

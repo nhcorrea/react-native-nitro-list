@@ -99,6 +99,7 @@
     "android/src",
     "!android/src/test",
     "ios/**/*.h",
+    "ios/**/*.hpp",
     "ios/**/*.m",
     "ios/**/*.mm",
     "ios/**/*.cpp",
