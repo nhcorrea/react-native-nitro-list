@@ -1,3 +1,9 @@
+## [2.6.3](https://github.com/[secure]/react-native-nitro-list/compare/v2.6.2...v2.6.3) (2026-11-26)
+
+### 🐛 Bug Fixes
+
+* **list:** fix native-host reveal, fabric offsets, and in-place flash ([1ee0c4a](https://github.com/[secure]/react-native-nitro-list/commit/1ee0c4a5027abeb07edb484f39c2ab7b00fb206e))
+
 ## [2.6.2](https://github.com/[secure]/react-native-nitro-list/compare/v2.6.1...v2.6.2) (2026-11-22)
 
 ### 🐛 Bug Fixes

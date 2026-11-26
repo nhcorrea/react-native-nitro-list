@@ -1,6 +1,6 @@
 {
   "name": "@nhcorrea/react-native-nitro-list",
-  "version": "2.6.2",
+  "version": "2.6.3",
   "description": "Ultra-fast C++ drop-in FlatList replacement for React Native powered by Nitro Modules — UI-thread scroll/recycling host, native image prefetching, and opt-in zero-JS native cell templates for iOS and Android.",
   "main": "./lib/commonjs/index.js",
   "module": "./lib/module/index.js",
