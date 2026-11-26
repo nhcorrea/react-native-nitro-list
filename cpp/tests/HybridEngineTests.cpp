@@ -422,6 +422,123 @@ static void testLevel3GridReadTemplateSlotsAndNativeSync() {
   engine.dispose();
 }
 
+static void testSlotPoolInPlaceUpdateFlag() {
+  HybridNitroListEngine engine;
+  const int64_t id = static_cast<int64_t>(engine.getEngineId());
+  auto state = EngineRegistry::instance().find(id);
+  assert(state != nullptr);
+
+  auto empty = std::make_shared<ArrayBuffer>(0);
+  engine.updateData(doubles({1, 100, 100, 100, 0, 1, 0, 1, 1, -1, -1, 0, 0, 0, 0, 0, 0}),
+                    empty, empty, empty, empty);
+  engine.setViewport(400, 300);
+  engine.configureSlots(6, 0, 0);
+
+  std::vector<SlotDelta> deltas;
+  auto init = state->onNativeScroll(0.0, 0.0, 0, true, deltas);
+  assert(init.slotCount >= 4);
+  for (const auto& d : deltas) {
+    if ((d.flags & SlotDelta::kFlagActive) != 0) {
+      state->markSlotCommitted(d.slotId, d.generation);
+    }
+  }
+
+  double offsetsOut[64];
+  int32_t metaOut[64 * 3];
+  double totalOut = 0.0;
+  int32_t stickyOut = -1;
+  double stickyTransOut = 0.0;
+
+  // Normal active slots encode meta[s*3+0] == 1 (active, not inPlaceUpdate).
+  int32_t nSlots = state->readSlotTransforms(
+      offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  assert(nSlots == init.slotCount);
+  for (int32_t s = 0; s < nSlots; ++s) {
+    assert(metaOut[s * 3 + 0] == 1);
+  }
+
+  // In-place data update (invalidateFrom = 0, same itemCount, reset = 0) marks retained slots
+  // with inPlaceUpdate == true -> outMeta[s*3+0] == 3.
+  engine.updateData(doubles({1, 100, 100, 100, 0, 1, 0, 0, 2, 0, -1, 0, 0, 0, 0, 0, 0}),
+                    empty, empty, empty, empty);
+  auto inPlace = state->onNativeScroll(0.0, 0.0, 0, true, deltas);
+  assert(inPlace.deltaCount == nSlots);
+  int32_t nAfterInPlace = state->readSlotTransforms(
+      offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  assert(nAfterInPlace == nSlots);
+  for (int32_t s = 0; s < nAfterInPlace; ++s) {
+    assert(metaOut[s * 3 + 0] == 3);
+  }
+
+  // Stale generation in onNativeSlotSizes must NOT clear inPlaceUpdate.
+  const int32_t slot0Id[1] = {0};
+  const double slot0Size[1] = {115.0};
+  const uint32_t slot0Gen = static_cast<uint32_t>(metaOut[1]);
+  const uint32_t staleGen[1] = {slot0Gen > 1 ? slot0Gen - 1 : 0};
+  state->onNativeSlotSizes(slot0Id, slot0Size, staleGen, 1, false);
+  state->readSlotTransforms(offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  assert(metaOut[0] == 3);
+
+  // Matching generation in onNativeSlotSizes MUST clear inPlaceUpdate -> meta becomes 1.
+  const uint32_t freshGen[1] = {slot0Gen};
+  state->onNativeSlotSizes(slot0Id, slot0Size, freshGen, 1, false);
+  state->readSlotTransforms(offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  assert(metaOut[0] == 1);
+  assert(metaOut[3] == 3); // slot 1 still pending commit
+
+  // markSlotCommitted with matching generation also clears inPlaceUpdate -> meta becomes 1.
+  const uint32_t slot1Gen = static_cast<uint32_t>(metaOut[3 + 1]);
+  state->markSlotCommitted(1, slot1Gen);
+  state->readSlotTransforms(offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  assert(metaOut[3] == 1);
+
+  // Scrolling far away recycles slots to new items (meta == 1) and parks/deactivates unused (meta == 0).
+  state->onNativeScroll(5000.0, 0.0, 0, true, deltas);
+  int32_t nScrolled = state->readSlotTransforms(
+      offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  int activeAfterScroll = 0;
+  for (int32_t s = 0; s < nScrolled; ++s) {
+    assert(metaOut[s * 3 + 0] == 0 || metaOut[s * 3 + 0] == 1);
+    if (metaOut[s * 3 + 0] == 1) ++activeAfterScroll;
+  }
+  assert(activeAfterScroll > 0);
+
+  // Another in-place update followed by a full reset clears inPlaceUpdate on all slots.
+  engine.updateData(doubles({1, 100, 100, 100, 0, 1, 0, 0, 3, 0, -1, 0, 0, 0, 0, 0, 0}),
+                    empty, empty, empty, empty);
+  state->onNativeScroll(5000.0, 0.0, 0, true, deltas);
+  state->readSlotTransforms(offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  bool sawInPlaceBeforeReset = false;
+  for (int32_t s = 0; s < nScrolled; ++s) {
+    if (metaOut[s * 3 + 0] == 3) sawInPlaceBeforeReset = true;
+  }
+  assert(sawInPlaceBeforeReset);
+
+  engine.updateData(doubles({1, 100, 100, 100, 0, 1, 0, 1, 4, -1, -1, 0, 0, 0, 0, 0, 0}),
+                    empty, empty, empty, empty);
+  state->onNativeScroll(5000.0, 0.0, 0, true, deltas);
+  int32_t nReset = state->readSlotTransforms(
+      offsetsOut, metaOut, 64, totalOut, stickyOut, stickyTransOut);
+  for (int32_t s = 0; s < nReset; ++s) {
+    assert(metaOut[s * 3 + 0] != 3);
+  }
+
+  // Unmapped slots deactivated by remapIndices also clear inPlaceUpdate.
+  engine.updateData(doubles({1, 100, 100, 100, 0, 1, 0, 0, 5, 0, -1, 0, 0, 0, 0, 0, 0}),
+                    empty, empty, empty, empty);
+  state->onNativeScroll(5000.0, 0.0, 0, true, deltas);
+  // Remap only item 0 -> 0 so slots around offset 5000 become unmapped and inactive.
+  engine.updateData(doubles({1, 10, 100, 100, 0, 1, 0, 0, 6, -1, -1, 0, 0, 1, 0, 0, 0}),
+                    empty, empty, empty, doubles({0, 0}));
+  for (const auto& slot : state->slotPool.slots()) {
+    if (!slot.active) {
+      assert(!slot.inPlaceUpdate);
+    }
+  }
+
+  engine.dispose();
+}
+
 int main() {
   HybridNitroListEngine engine;
   auto empty = std::make_shared<ArrayBuffer>(0);
@@ -498,5 +615,6 @@ int main() {
   testNonFiniteIndicesDoNotAliasItemZero();
   testSlotPoolAndEngineRegistryNativeFlow();
   testLevel3GridReadTemplateSlotsAndNativeSync();
+  testSlotPoolInPlaceUpdateFlag();
   std::cout << "Hybrid engine tests passed\n";
 }

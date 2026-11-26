@@ -118,6 +118,8 @@ export interface MockNativeHostSession {
   onNativeDataRequest: ((startIndex: number, count: number) => void) | null;
   templateShifts: Array<{delta: number; totalCount: number}>;
   templateClearCount: number;
+  notifyDataCommitCount: number;
+  syncNowCount: number;
 }
 
 let mockNativeHostEnabled = false;
@@ -187,6 +189,8 @@ const nativeHostMock = {
       onNativeDataRequest: null,
       templateShifts: [],
       templateClearCount: 0,
+      notifyDataCommitCount: 0,
+      syncNowCount: 0,
     });
     return hostId;
   },
@@ -222,9 +226,15 @@ const nativeHostMock = {
     if (s != null) {
       s.paddingStartDp = paddingStartDp;
       s.mainAxisGapDp = mainAxisGapDp;
+      s.notifyDataCommitCount++;
     }
   },
-  syncNow(_hostId: number): void {},
+  syncNow(hostId: number): void {
+    const s = mockHostSessions.get(hostId);
+    if (s != null) {
+      s.syncNowCount++;
+    }
+  },
   prefetchImages(uris: string[], widthPx: number, heightPx: number): void {
     prefetchCalls.push({uris: [...uris], widthPx, heightPx});
   },

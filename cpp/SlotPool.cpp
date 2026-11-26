@@ -19,6 +19,7 @@ void SlotPool::reset() {
     slot.parked = false;
     slot.measuredSize = -1.0;
     slot.invalidated = true;
+    slot.inPlaceUpdate = false;
     slot.generation = nextGen_++;
   }
   hasMorePending_ = false;
@@ -115,6 +116,7 @@ void SlotPool::remapIndices(const double* pairs, int32_t pairCount, int32_t newI
         slot.active = false;
         slot.parked = false;
         slot.invalidated = true;
+        slot.inPlaceUpdate = false;
         slot.measuredSize = -1.0;
       }
     } else if (slot.parked) {
@@ -149,6 +151,9 @@ void SlotPool::setSlotMeasures(int32_t slotId, bool measures) {
 void SlotPool::markSlotCommitted(int32_t slotId, uint32_t generation) {
   if (slotId < 0 || slotId >= static_cast<int32_t>(slots_.size())) return;
   slots_[slotId].committedGen = generation;
+  if (slots_[slotId].committedGen == slots_[slotId].generation) {
+    slots_[slotId].inPlaceUpdate = false;
+  }
 }
 
 int32_t SlotPool::distanceToRange(int32_t index, int32_t low, int32_t high) const {
@@ -253,6 +258,7 @@ int32_t SlotPool::reconcile(int32_t itemCount,
       scratchDesiredFlag_[slotId] = 1;
       if (slot.invalidated) {
         slot.invalidated = false;
+        slot.inPlaceUpdate = true;
         slot.generation = nextGen_++;
         slot.measuredSize = -1.0;
         slot.itemType = typeOf ? typeOf(idx) : 0;
@@ -314,6 +320,7 @@ int32_t SlotPool::reconcile(int32_t itemCount,
       slot.active = true;
       slot.parked = false;
       slot.invalidated = false;
+      slot.inPlaceUpdate = false;
       slot.itemIndex = idx;
       slot.lastItemIndex = idx;
       slot.itemType = wantType;
@@ -352,6 +359,7 @@ int32_t SlotPool::reconcile(int32_t itemCount,
       activeByIndex_.erase(slot.itemIndex);
     }
     slot.active = false;
+    slot.inPlaceUpdate = false;
     slot.itemIndex = -1;
     if (parkedCount < maxParked_ && !slot.invalidated && slot.lastItemIndex >= 0) {
       slot.parked = true;

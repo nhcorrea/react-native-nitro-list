@@ -2012,10 +2012,22 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         previous,
       );
     }
+    let allRangeFixed = getFixedItemSize != null;
+    let existingFixedSizeChanged = false;
     if (getFixedItemSize != null || autoFixedTypesRef.current.size > 0) {
       for (let i = fixedFrom; i < itemCount; ++i) {
         const size = resolveFixedSize(items[i], i, getItemType?.(items[i], i));
-        if (size == null || !Number.isFinite(size) || size < 0) continue;
+        if (size == null || !Number.isFinite(size) || size < 0) {
+          allRangeFixed = false;
+          continue;
+        }
+        if (
+          previous != null &&
+          i < previous.length &&
+          Math.abs(size - readItemSize(i)) > MEASUREMENT_EPSILON_DP
+        ) {
+          existingFixedSizeChanged = true;
+        }
         fixedData = growNativeFloat64Array(fixedData, (fixedCount + 1) * 2);
         fixedData[fixedCount * 2] = i;
         fixedData[fixedCount * 2 + 1] = size;
@@ -2053,6 +2065,22 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     }
     const config = dataConfigBufferRef.current!;
     const spansPending = columnLayout != null && (reset || columnLayout !== sentColumnLayoutRef.current);
+    const isInPlaceFixedUpdate =
+      nativeHostEligible &&
+      !nativeTemplateActiveRef.current &&
+      !reset &&
+      remap == null &&
+      previous != null &&
+      itemCount >= previous.length &&
+      !dataAnalysis.keysChanged &&
+      !dataAnalysis.versionChanged &&
+      prepared.count === 0 &&
+      !spansPending &&
+      allRangeFixed &&
+      !existingFixedSizeChanged;
+    if (isInPlaceFixedUpdate) {
+      invalidateFrom = -1;
+    }
     if (
       !reset &&
       remap == null &&
@@ -2068,6 +2096,10 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       config[6] === MEASUREMENT_EPSILON_DP &&
       (config.length === DATA_CONFIG_LENGTH || config[17] === Number(lazyTypeMeans))
     ) {
+      if (nativeHostEligible) {
+        lastDataRemappedRef.current = false;
+        lastInPlaceFixedUpdateRef.current = isInPlaceFixedUpdate;
+      }
       return;
     }
     sentColumnLayoutRef.current = columnLayout;
@@ -2084,10 +2116,12 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       fixedData.buffer, (remap?.pairs.buffer as ArrayBuffer | undefined) ?? emptyNativeBuffer());
     if (nativeHostEligible) {
       if (remap != null && remap.mappedCount > 0) {
-        slotStoreRef.current?.remapIndices(remap.pairs, remap.mappedCount, itemCount);
+        slotStoreRef.current?.remapIndices(remap.pairs, remap.mappedCount, itemCount, readItemOffset);
         lastDataRemappedRef.current = true;
+        lastInPlaceFixedUpdateRef.current = false;
       } else {
         lastDataRemappedRef.current = false;
+        lastInPlaceFixedUpdateRef.current = isInPlaceFixedUpdate;
       }
     }
     const reportedCount = reportedMemoryCountRef.current;
@@ -3267,6 +3301,18 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
 
   const nativeHostIdRef = useRef<number>(-1);
   const lastDataRemappedRef = useRef(false);
+  const lastInPlaceFixedUpdateRef = useRef(false);
+  const pendingOffsetSyncRef = useRef(false);
+  const scheduleOffsetSync = useStableCallback(stableCallbacks, () => {
+    if (pendingOffsetSyncRef.current) return;
+    const hostId = nativeHostIdRef.current;
+    if (hostId <= 0) return;
+    pendingOffsetSyncRef.current = true;
+    syncNativeHostNow(hostId);
+    queueMicrotask(() => {
+      pendingOffsetSyncRef.current = false;
+    });
+  });
   const nativeSlotsCtxRef = useRef<NitroListSlotsSharedContext | null>(null);
   if (nativeSlotsCtxRef.current == null) {
     nativeSlotsCtxRef.current = {
@@ -3289,6 +3335,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       hideRelatedCell,
       store,
       hostIdRef: nativeHostIdRef,
+      readItemOffset,
+      scheduleOffsetSync,
     };
   }
   commitBindings.push(() => {
@@ -3310,6 +3358,8 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       itemsAreEqual: itemsAreEqual as ItemsAreEqualFn | undefined,
       adaptiveRenderMode: adaptiveRenderMode === true,
       hideRelatedCell,
+      readItemOffset,
+      scheduleOffsetSync,
     });
   });
 
@@ -3325,13 +3375,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       velocityDpS: number,
       deltas: ArrayBuffer,
     ) => {
-      slotStore.applyNativeDeltas(slotCount, deltas);
-      latestRangeRef.current = {start: rangeStart, end: rangeEnd};
-      committedRangeRef.current = {start: rangeStart, end: rangeEnd, layoutVersion};
-      if (layoutVersion !== lastSeenLayoutVersionRef.current) {
+      const layoutVersionChanged = layoutVersion !== lastSeenLayoutVersionRef.current;
+      if (layoutVersionChanged) {
         lastSeenLayoutVersionRef.current = layoutVersion;
         invalidateLayoutCache();
       }
+      slotStore.applyNativeDeltas(slotCount, deltas, 0, undefined, readItemOffset);
+      if (layoutVersionChanged) {
+        slotStore.syncActiveSlotOffsets(readItemOffset, itemCount);
+      }
+      latestRangeRef.current = {start: rangeStart, end: rangeEnd};
+      committedRangeRef.current = {start: rangeStart, end: rangeEnd, layoutVersion};
       if (!userWantsJsScrollRef.current && rangeEnd >= rangeStart) {
         const rangeStartOff = readItemOffset(rangeStart) + effectivePaddingStartRef.current;
         const rangeEndOff = readItemOffset(rangeEnd) + effectivePaddingStartRef.current;
@@ -3365,6 +3419,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       evaluateViewabilityRef.current();
       checkEdgeCallbacksRef.current();
       emitFirstVisibleRef.current();
+      settleInitialTargetRef.current();
     };
   });
   const handleNativeSlotRebindsRef = useRef<NativeSlotRebindsFn | null>(null);
@@ -3379,6 +3434,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
     evaluateViewabilityRef.current();
     checkEdgeCallbacksRef.current();
     emitFirstVisibleRef.current();
+    settleInitialTargetRef.current();
     fireOnLoadIfReadyRef.current();
     maybeExpandDrawDistanceRef.current();
   });
@@ -3448,13 +3504,17 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       const stickyIndex = buf[5];
       if (slotCount <= 0) return;
 
-      slotStore.applyNativeDeltas(slotCount, buf.buffer, 8, deltaCount);
-      latestRangeRef.current = {start: rangeStart, end: rangeEnd};
-      committedRangeRef.current = {start: rangeStart, end: rangeEnd, layoutVersion};
-      if (layoutVersion !== lastSeenLayoutVersionRef.current) {
+      const layoutVersionChanged = layoutVersion !== lastSeenLayoutVersionRef.current;
+      if (layoutVersionChanged) {
         lastSeenLayoutVersionRef.current = layoutVersion;
         invalidateLayoutCache();
       }
+      slotStore.applyNativeDeltas(slotCount, buf.buffer, 8, deltaCount, readItemOffset);
+      if (layoutVersionChanged) {
+        slotStore.syncActiveSlotOffsets(readItemOffset, itemCount);
+      }
+      latestRangeRef.current = {start: rangeStart, end: rangeEnd};
+      committedRangeRef.current = {start: rangeStart, end: rangeEnd, layoutVersion};
       const totalSize = engine.getTotalSize();
       store.set(
         'containerSize',
@@ -3514,17 +3574,21 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       const stickyIndex = buf[5];
       if (slotCount <= 0) return;
 
+      const layoutVersionChanged = layoutVersion !== lastSeenLayoutVersionRef.current;
+      if (layoutVersionChanged) {
+        lastSeenLayoutVersionRef.current = layoutVersion;
+        invalidateLayoutCache();
+      }
       if (!nativeTemplateActiveRef.current) {
-        slotStore.applyNativeDeltas(slotCount, buf.buffer, 8, deltaCount);
+        slotStore.applyNativeDeltas(slotCount, buf.buffer, 8, deltaCount, readItemOffset);
+        if (layoutVersionChanged) {
+          slotStore.syncActiveSlotOffsets(readItemOffset, itemCountRef.current);
+        }
       } else {
         packNativeTemplateAroundIndexRef.current(targetIndex);
       }
       latestRangeRef.current = {start: rangeStart, end: rangeEnd};
       committedRangeRef.current = {start: rangeStart, end: rangeEnd, layoutVersion};
-      if (layoutVersion !== lastSeenLayoutVersionRef.current) {
-        lastSeenLayoutVersionRef.current = layoutVersion;
-        invalidateLayoutCache();
-      }
       store.set('containerSize', engine.getTotalSize());
       applyStickyIndex(stickyIndex);
       bumpCommitCounter();
@@ -3543,6 +3607,9 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
       if (layoutVersion !== lastSeenLayoutVersionRef.current) {
         lastSeenLayoutVersionRef.current = layoutVersion;
         invalidateLayoutCache();
+        if (nativeHostEligibleRef.current && !nativeTemplateActiveRef.current) {
+          slotStore.syncActiveSlotOffsets(readItemOffset, itemCountRef.current);
+        }
       }
       store.set(
         'containerSize',
@@ -3559,6 +3626,7 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
         if (committedRangeRef.current.end < committedRangeRef.current.start) {
           committedRangeRef.current = {start: 0, end: 0, layoutVersion};
         }
+        settleInitialTargetRef.current();
         fireOnLoadIfReadyRef.current();
         maybeExpandDrawDistanceRef.current();
       }
@@ -3867,17 +3935,26 @@ function NitroListInner<T>(props: NitroListProps<T>, ref: React.Ref<NitroListHan
           // Defer UI-thread sync until syncNativeTemplateEffect (next layout effect in the same
           // commit) shifts/uploads the updated DataStore chunks so C++ indices never race ahead!
           lastDataRemappedRef.current = false;
+          lastInPlaceFixedUpdateRef.current = false;
         } else if (lastDataRemappedRef.current && !geometryChanged) {
           // Key-preserving remap (prepend/shift): untouched slots keep identical heights & items;
           // syncNativeHostNow drains the atomic C++ MVCP shift without forcing full re-measurement!
           lastDataRemappedRef.current = false;
+          lastInPlaceFixedUpdateRef.current = false;
+          syncNativeHostNow(hostId);
+        } else if (lastInPlaceFixedUpdateRef.current && !geometryChanged) {
+          // Fixed-size in-place update or tail append: existing slots keep identical geometry &
+          // generations; refresh React content in-place without hiding onscreen views!
+          lastInPlaceFixedUpdateRef.current = false;
+          slotStore.bumpAllActiveSlots(readItemOffset);
           syncNativeHostNow(hostId);
         } else {
+          lastInPlaceFixedUpdateRef.current = false;
           notifyNativeHostDataCommit(hostId, effectivePaddingStart, mainAxisGap);
           if (lastDataRemappedRef.current) {
             lastDataRemappedRef.current = false;
           } else {
-            slotStore.bumpAllActiveSlots();
+            slotStore.bumpAllActiveSlots(readItemOffset);
           }
         }
       } else if (drawDistanceChanged) {

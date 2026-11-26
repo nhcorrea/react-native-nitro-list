@@ -284,6 +284,7 @@ struct IosSlotRecord {
   int32_t _lastStickyIndex;
   std::vector<double> _offsetsBuf;
   std::vector<int32_t> _metaBuf;
+  CFRunLoopObserverRef _beforeWaitingObserver;
 }
 
 - (instancetype)initWithId:(int32_t)hostId
@@ -339,6 +340,66 @@ struct IosSlotRecord {
   _displayLinkProxy.target = self;
   _displayLink = [CADisplayLink displayLinkWithTarget:_displayLinkProxy selector:@selector(tick:)];
   [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)ensureBeforeWaitingObserver {
+  if (_detached || _beforeWaitingObserver != NULL) return;
+  __weak NLHostSessionObjC* weakSelf = self;
+  _beforeWaitingObserver = CFRunLoopObserverCreateWithHandler(
+      kCFAllocatorDefault,
+      kCFRunLoopBeforeWaiting,
+      true,
+      1000000,
+      ^(__unused CFRunLoopObserverRef observer, __unused CFRunLoopActivity activity) {
+        NLHostSessionObjC* strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf->_detached) return;
+        [strongSelf syncBeforeCoreAnimationCommit];
+      });
+  if (_beforeWaitingObserver != NULL) {
+    CFRunLoopAddObserver(CFRunLoopGetMain(), _beforeWaitingObserver, kCFRunLoopCommonModes);
+  }
+}
+
+- (void)invalidateBeforeWaitingObserver {
+  if (_beforeWaitingObserver != NULL) {
+    CFRunLoopRemoveObserver(CFRunLoopGetMain(), _beforeWaitingObserver, kCFRunLoopCommonModes);
+    CFRunLoopObserverInvalidate(_beforeWaitingObserver);
+    CFRelease(_beforeWaitingObserver);
+    _beforeWaitingObserver = NULL;
+  }
+}
+
+- (void)dealloc {
+  if (_beforeWaitingObserver != NULL) {
+    CFRunLoopObserverInvalidate(_beforeWaitingObserver);
+    CFRelease(_beforeWaitingObserver);
+    _beforeWaitingObserver = NULL;
+  }
+}
+
+- (void)syncBeforeCoreAnimationCommit {
+  if (_detached || _inPreDraw || _templateEngine.isActive) return;
+  BOOL baseOriginChanged = NO;
+  for (const auto& kv : _slotViews) {
+    if (kv.second.appliedVisible != 1 || std::isnan(kv.second.appliedBaseOrigin)) continue;
+    auto cacheIt = _slotViewCache.find(kv.first);
+    if (cacheIt == _slotViewCache.end()) continue;
+    UIView* view = cacheIt->second;
+    if (view == nil || view.window == nil || view.tag != kv.second.viewTag) continue;
+    const double baseOrigin = viewBaseOrigin(view, _horizontal);
+    if (std::abs(baseOrigin - kv.second.appliedBaseOrigin) > 0.05) {
+      baseOriginChanged = YES;
+      break;
+    }
+  }
+  if (baseOriginChanged) {
+    _preDrawDirty = YES;
+    _transformsDirty = YES;
+  }
+  if (baseOriginChanged || _preDrawDirty || _pendingAwaitingGenCount > 0) {
+    [self applyPreDraw];
+    [self updateDisplayLinkState];
+  }
 }
 
 - (void)updateDisplayLinkState {
@@ -466,6 +527,7 @@ struct IosSlotRecord {
   if ((existingSlots <= 0 || _templateEngine.isActive || std::abs(curPt) > 1.0) && !prewarmBlocking) {
     [self handleScrollOffset:sv.contentOffset force:YES];
   }
+  [self ensureBeforeWaitingObserver];
   [self applyPreDraw];
   [self updateDisplayLinkState];
   return YES;
@@ -475,6 +537,7 @@ struct IosSlotRecord {
   _detached = YES;
   _needsAttach = NO;
   _needsPacing = NO;
+  [self invalidateBeforeWaitingObserver];
   if (_displayLink != nil) {
     [_displayLink invalidate];
     _displayLink = nil;
@@ -528,8 +591,6 @@ struct IosSlotRecord {
     kv.second.lastMeasuredGen = 0;
     kv.second.lastMeasuredSize = -1.0;
     kv.second.appliedGen = 0;
-    kv.second.appliedTargetPt = NAN;
-    kv.second.appliedBaseOrigin = NAN;
     kv.second.zeroMeasureFrames = 0;
   }
   _preDrawDirty = YES;
@@ -1093,7 +1154,9 @@ struct IosSlotRecord {
             [self foldMomentumMvcpShift];
           }
         }
-        if (_onContentSize && std::abs(szRes.totalSizeDp - _lastReportedTotal) > 0.5) {
+        if (_onContentSize &&
+            (std::abs(szRes.totalSizeDp - _lastReportedTotal) > 0.5 ||
+             szRes.layoutVersion != _lastReportedVersion)) {
           _lastReportedTotal = szRes.totalSizeDp;
           _lastReportedVersion = szRes.layoutVersion;
           _onContentSize(szRes.totalSizeDp, static_cast<double>(szRes.layoutVersion));
@@ -1108,7 +1171,9 @@ struct IosSlotRecord {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     for (int32_t s = 0; s < slotCount; ++s) {
-      const bool active = _metaBuf[static_cast<size_t>(s) * 3] != 0;
+      const int32_t activeMeta = _metaBuf[static_cast<size_t>(s) * 3];
+      const bool active = (activeMeta & 1) != 0;
+      const bool inPlaceUpdate = (activeMeta & 2) != 0;
       auto it = _slotViews.find(s);
       if (it == _slotViews.end()) {
         if (active) awaitingCount++;
@@ -1136,6 +1201,26 @@ struct IosSlotRecord {
               ? static_cast<uint32_t>(seenGens[static_cast<size_t>(s)])
               : parseGenerationFromView(view);
       if (seenGen != expectedGen) {
+        if (inPlaceUpdate && it->second.appliedVisible == 1) {
+          const double target = _offsetsBuf[static_cast<size_t>(s)] - _mvcpMomentumShift;
+          const double baseOrigin = viewBaseOrigin(view, _horizontal);
+          const double rel = target - baseOrigin;
+          const CGAffineTransform desiredTransform =
+              _horizontal ? CGAffineTransformMakeTranslation(rel, 0)
+                          : CGAffineTransformMakeTranslation(0, rel);
+          if (std::isnan(it->second.appliedTargetPt) ||
+              std::abs(it->second.appliedTargetPt - target) > 0.05 ||
+              std::isnan(it->second.appliedBaseOrigin) ||
+              std::abs(it->second.appliedBaseOrigin - baseOrigin) > 0.05 ||
+              !CGAffineTransformEqualToTransform(view.transform, desiredTransform)) {
+            markTransformManagedByNative(view);
+            view.transform = desiredTransform;
+            it->second.appliedTargetPt = target;
+            it->second.appliedBaseOrigin = baseOrigin;
+          }
+          awaitingCount++;
+          continue;
+        }
         // Keep already-offscreen awaiting slots untouched; hide onscreen or newly created ones.
         const double prevPt = it->second.appliedTargetPt;
         const double prevSize = _horizontal ? view.bounds.size.width : view.bounds.size.height;

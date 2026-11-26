@@ -291,6 +291,9 @@ struct EngineCoreState {
       auto& slot = slots[static_cast<size_t>(slotId)];
       if (seenGenerations != nullptr && seenGenerations[k] > 0) {
         slot.committedGen = seenGenerations[k];
+        if (slot.committedGen == slot.generation) {
+          slot.inPlaceUpdate = false;
+        }
       }
       if (!slot.active || !slot.measures || slot.itemIndex < 0 || slot.itemIndex >= itemCount) {
         continue;
@@ -331,7 +334,7 @@ struct EngineCoreState {
 
   // Writes per-slot transforms for PreDraw:
   // outOffsetsDp[s] = item offset in dp
-  // outMeta[s * 3 + 0] = active (1) / inactive (0)
+  // outMeta[s * 3 + 0] = bit 0: active (1), bit 1: inPlaceUpdate (2) (0=inactive, 1=active, 3=active in-place)
   // outMeta[s * 3 + 1] = expected generation
   // outMeta[s * 3 + 2] = measures (1) / fixed (0)
   int32_t readSlotTransforms(double* outOffsetsDp,
@@ -356,7 +359,7 @@ struct EngineCoreState {
       const auto& slot = slots[static_cast<size_t>(s)];
       const bool validActive = slot.active && slot.itemIndex >= 0 && slot.itemIndex < itemCount;
       outOffsetsDp[s] = validActive ? core.getOffset(slot.itemIndex) : 0.0;
-      outMeta[s * 3 + 0] = validActive ? 1 : 0;
+      outMeta[s * 3 + 0] = validActive ? (slot.inPlaceUpdate ? 3 : 1) : 0;
       outMeta[s * 3 + 1] = static_cast<int32_t>(slot.generation);
       outMeta[s * 3 + 2] = slot.measures ? 1 : 0;
     }

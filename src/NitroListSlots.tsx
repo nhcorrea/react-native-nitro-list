@@ -1,4 +1,11 @@
-import React, {useCallback, useEffect, useMemo, useRef, useSyncExternalStore} from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import {findNodeHandle, StyleSheet, View, type LayoutChangeEvent} from 'react-native';
 
 import {NitroListCellContent, type ItemsAreEqualFn, type ItemTypeKey} from './cells';
@@ -37,6 +44,8 @@ export interface NitroListSlotsSharedContext {
   hideRelatedCell: boolean;
   store: ListStore;
   hostIdRef: {current: number};
+  readItemOffset: (index: number) => number;
+  scheduleOffsetSync: () => void;
 }
 
 export interface NitroListSlotsProps {
@@ -154,15 +163,36 @@ const NitroListSlot = React.memo(function NitroListSlot({
       ? `${(ctx.columnLayout.spans[itemIndex] / ctx.resolvedColumns) * 100}%`
       : undefined;
 
+  const rawOffset = validIndex
+    ? Number.isFinite(slot.offset)
+      ? slot.offset
+      : ctx.readItemOffset(itemIndex)
+    : -10000;
+  const slotOffset = Number.isFinite(rawOffset) ? rawOffset : -10000;
+  const committedOffsetRef = useRef<number>(slotOffset);
+
+  useLayoutEffect(() => {
+    if (committedOffsetRef.current !== slotOffset) {
+      committedOffsetRef.current = slotOffset;
+      ctxRef.current.scheduleOffsetSync();
+    }
+  }, [slotOffset, ctxRef]);
+
   const slotStyle = useMemo(() => {
     if (columnLeft != null && columnWidth != null) {
       return [
         slotStyles.absoluteGridCell,
-        {left: columnLeft as unknown as number, width: columnWidth as unknown as number},
+        {
+          top: slotOffset,
+          left: columnLeft as unknown as number,
+          width: columnWidth as unknown as number,
+        },
       ];
     }
-    return ctx.horizontal ? slotStyles.absoluteColumn : slotStyles.absoluteRow;
-  }, [ctx.horizontal, columnLeft, columnWidth]);
+    return ctx.horizontal
+      ? [slotStyles.absoluteColumn, {left: slotOffset}]
+      : [slotStyles.absoluteRow, {top: slotOffset}];
+  }, [ctx.horizontal, columnLeft, columnWidth, slotOffset]);
 
   const nativeId = slot.generation > 0 ? `nl:${slot.generation}` : undefined;
 

@@ -1143,7 +1143,7 @@ private object NativeHostManager {
           pendingContentSize = false
           val total = pendingContentSizeTotal
           val ver = pendingContentSizeVersion
-          if (abs(total - lastReportedTotalSize) > 0.5) {
+          if (abs(total - lastReportedTotalSize) > 0.5 || ver != lastReportedVersion) {
             lastReportedTotalSize = total
             lastReportedVersion = ver
             onContentSize(total, ver.toDouble())
@@ -1198,7 +1198,7 @@ private object NativeHostManager {
         var measuredCount = 0
         var newlyReadyCount = 0
         for (s in 0 until slotCount) {
-          val active = metaBuf[s * 3] != 0
+          val active = (metaBuf[s * 3] and 1) != 0
           if (!active) {
             seenGenScratch[s] = 0
             continue
@@ -1280,8 +1280,8 @@ private object NativeHostManager {
             )
             cachedSlotCount = slotCount
             applyDrainedMvcpShift(sv, density)
-            // Notify JS ONLY when totalSizeDp actually changed; coalesce during performLayout().
-            if (abs(totalSizeDp - lastReportedTotalSize) > 0.5) {
+            // Notify JS when totalSizeDp or layoutVersion changed; coalesce during performLayout().
+            if (abs(totalSizeDp - lastReportedTotalSize) > 0.5 || layoutVersion != lastReportedVersion) {
               if (fromLayout) {
                 pendingContentSize = true
                 pendingContentSizeTotal = totalSizeDp
@@ -1302,7 +1302,9 @@ private object NativeHostManager {
         var awaitingCount = 0
         for (s in 0 until slotCount) {
           val binding = getSlotBinding(s)
-          val active = metaBuf[s * 3] != 0
+          val activeMeta = metaBuf[s * 3]
+          val active = (activeMeta and 1) != 0
+          val inPlaceUpdate = (activeMeta and 2) != 0
           if (binding == null) {
             if (active) awaitingCount++
             continue
@@ -1332,6 +1334,21 @@ private object NativeHostManager {
             parseGenerationTag(view)
           }
           if (seenGen != expectedGen) {
+            if (inPlaceUpdate && binding.appliedVisible == View.VISIBLE) {
+              val targetPx = offsetsBuf[s] * density - mvcpMomentumShiftPx
+              if (binding.appliedTargetPx != targetPx) {
+                if (horizontal) {
+                  val relPx = (targetPx - view.left).toFloat()
+                  if (view.translationX != relPx) view.translationX = relPx
+                } else {
+                  val relPx = (targetPx - view.top).toFloat()
+                  if (view.translationY != relPx) view.translationY = relPx
+                }
+                binding.appliedTargetPx = targetPx
+              }
+              awaitingCount++
+              continue
+            }
             // Awaiting Fabric mount of newly bound item: if the slot's previous position is ALREADY
             // offscreen, keep it VISIBLE at its offscreen translation to avoid invalidating parent
             // DisplayLists (View.setFlags -> invalidateParentCaches). Hide only if onscreen or new!
@@ -1478,13 +1495,12 @@ private object NativeHostManager {
     NativeHostBridge.nativeUpdateHostGeometry(session.engineId, paddingStartDp, mainAxisGapDp)
     UiThreadUtil.runOnUiThread {
       if (session.detached) return@runOnUiThread
-      // Reset cached pixel heights & applied offsets on data commit so rebound cells report fresh sizes.
+      // Reset cached pixel heights on data commit so rebound cells report fresh sizes.
       for (i in 0..session.maxSlotIndex) {
         val b = session.slotArray[i] ?: continue
         b.lastMeasuredGen = -1
         b.lastMeasuredPx = -1
         b.appliedGen = -1
-        b.appliedTargetPx = Double.NaN
       }
       session.preDrawDirty = true
       session.transformsDirty = true

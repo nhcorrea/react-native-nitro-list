@@ -19,7 +19,8 @@ import {
   SLOT_DELTA_FLAG_ITEM_CHANGED,
   SlotStore,
 } from '../slotStore';
-import {itemKey, makeItems, renderNitroList, type NitroListHarness} from './helpers/harness';
+import {itemKey, makeItems, renderNitroList} from './helpers/harness';
+import {getLastMirror} from './helpers/mockNitroListHost';
 import {
   getMockCancelPrefetchCountForTests,
   getMockNativeHostSessionsForTests,
@@ -100,6 +101,112 @@ describe('SlotStore delta subscriptions', () => {
     expect(store.getSlot(1).active).toBe(false);
     expect(store.getSlot(1).itemIndex).toBe(1); // preserved for affinity
   });
+
+  it('tracks slot offsets across applyNativeDeltas, affinity reuse, syncActiveSlotOffsets, and remapIndices', () => {
+    const store = new SlotStore();
+    const offsets = [0, 80, 160, 240, 320, 400];
+    const readOffset = (idx: number) => offsets[idx] ?? Number.NaN;
+    const slotNotifies = new Map<number, number>();
+    for (let s = 0; s < 3; s++) {
+      slotNotifies.set(s, 0);
+      store.subscribeSlot(s, () => slotNotifies.set(s, (slotNotifies.get(s) ?? 0) + 1));
+    }
+
+    const initFlags = SLOT_DELTA_FLAG_ACTIVE | SLOT_DELTA_FLAG_CREATED | SLOT_DELTA_FLAG_ITEM_CHANGED;
+    store.applyNativeDeltas(
+      3,
+      packDeltas([
+        {slotId: 0, itemIndex: 0, generation: 1, flags: initFlags},
+        {slotId: 1, itemIndex: 1, generation: 2, flags: initFlags},
+        {slotId: 2, itemIndex: 2, generation: 3, flags: initFlags},
+      ]),
+      0,
+      undefined,
+      readOffset,
+    );
+    expect(store.getSlot(0).offset).toBe(0);
+    expect(store.getSlot(1).offset).toBe(80);
+    expect(store.getSlot(2).offset).toBe(160);
+
+    // Park slot 1 (inactive), shift item 1's offset by +30dp, then reactivate by affinity
+    // (itemChanged === false): listener must fire because offset changed > 0.5dp.
+    slotNotifies.forEach((_, k) => slotNotifies.set(k, 0));
+    store.applyNativeDeltas(
+      3,
+      packDeltas([{slotId: 1, itemIndex: -1, generation: 2, flags: 0}]),
+      0,
+      undefined,
+      readOffset,
+    );
+    expect(slotNotifies.get(1)).toBe(0);
+
+    offsets[1] = 110;
+    const nAffinityMoved = store.applyNativeDeltas(
+      3,
+      packDeltas([{slotId: 1, itemIndex: 1, generation: 2, flags: SLOT_DELTA_FLAG_ACTIVE}]),
+      0,
+      undefined,
+      readOffset,
+    );
+    expect(nAffinityMoved).toBe(1);
+    expect(slotNotifies.get(1)).toBe(1);
+    expect(store.getSlot(1).offset).toBe(110);
+
+    // Reactivating a parked slot whose offset did NOT change emits zero notifications.
+    slotNotifies.forEach((_, k) => slotNotifies.set(k, 0));
+    store.applyNativeDeltas(
+      3,
+      packDeltas([{slotId: 2, itemIndex: -1, generation: 3, flags: 0}]),
+      0,
+      undefined,
+      readOffset,
+    );
+    const nAffinitySame = store.applyNativeDeltas(
+      3,
+      packDeltas([{slotId: 2, itemIndex: 2, generation: 3, flags: SLOT_DELTA_FLAG_ACTIVE}]),
+      0,
+      undefined,
+      readOffset,
+    );
+    expect(nAffinitySame).toBe(0);
+    expect(slotNotifies.get(2)).toBe(0);
+
+    // Park slot 2 again and shift offsets[0] (active, +0.2dp <= 0.5dp), offsets[1] (active, +25dp),
+    // and offsets[2] (parked, +50dp). syncActiveSlotOffsets notifies ONLY slot 1.
+    store.applyNativeDeltas(
+      3,
+      packDeltas([{slotId: 2, itemIndex: -1, generation: 3, flags: 0}]),
+      0,
+      undefined,
+      readOffset,
+    );
+    slotNotifies.forEach((_, k) => slotNotifies.set(k, 0));
+    offsets[0] = 0.2;
+    offsets[1] = 135;
+    offsets[2] = 210;
+    const synced = store.syncActiveSlotOffsets(readOffset, offsets.length);
+    expect(synced).toBe(true);
+    expect(slotNotifies.get(0)).toBe(0);
+    expect(slotNotifies.get(1)).toBe(1);
+    expect(slotNotifies.get(2)).toBe(0);
+    expect(store.getSlot(1).offset).toBe(135);
+    expect(store.syncActiveSlotOffsets(readOffset, offsets.length)).toBe(false);
+
+    // remapIndices updates both itemIndex and offset on prepend, and clears offset on unmapped slots.
+    slotNotifies.forEach((_, k) => slotNotifies.set(k, 0));
+    const prependedOffsets = [0, 80, 160, 295, 375, 455];
+    // Map old 0 -> new 2 (kept), old 1 unmapped (deactivated).
+    store.remapIndices(new Float64Array([0, 2]), 1, prependedOffsets.length, (idx) => prependedOffsets[idx]);
+    expect(store.getSlot(0)).toMatchObject({itemIndex: 2, active: true, offset: 160});
+    expect(slotNotifies.get(0)).toBe(1);
+    expect(store.getSlot(1).active).toBe(false);
+    expect(Number.isNaN(store.getSlot(1).offset)).toBe(true);
+
+    // bumpAllActiveSlots refreshes offset when readItemOffset is provided.
+    prependedOffsets[2] = 190;
+    store.bumpAllActiveSlots((idx) => prependedOffsets[idx]);
+    expect(store.getSlot(0).offset).toBe(190);
+  });
 });
 
 describe('ImagePrefetcher', () => {
@@ -152,7 +259,7 @@ describe('ImagePrefetcher', () => {
 
 describe('NitroList Native Host + NitroListSlots integration', () => {
   const originalOS = Platform.OS;
-  let harness: NitroListHarness | null = null;
+  let harness: {unmount: () => void} | null = null;
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -233,7 +340,7 @@ describe('NitroList Native Host + NitroListSlots integration', () => {
       expect(slotViews[s].props.onLayout).toBeUndefined();
       const flat = StyleSheet.flatten(slotViews[s].props.style) as Record<string, unknown>;
       expect(flat.position).toBe('absolute');
-      expect(flat.top).toBe(-10000);
+      expect(flat.top).toBe(s * 80);
     }
 
     // Now measure steady-state delta scroll: only 2 slots rebind (slot 0 -> item 6, slot 1 -> item 7)
@@ -680,5 +787,220 @@ describe('NitroList Native Host + NitroListSlots integration', () => {
     await mounted.settle(50);
     expect(session.templateChunks).toHaveLength(3);
     expect(session.templateChunks[2]).toMatchObject({startIndex: 250, count: 25, totalCount: 275, reset: false});
+  });
+
+  it('reveals initialScrollIndex > 0 promptly under Native Host instead of waiting for 1500ms timeout', async () => {
+    const items = makeItems(80);
+    const mounted = renderNitroList({
+      data: items,
+      recycleItems: true,
+      estimatedItemSize: 80,
+      getFixedItemSize: () => 80,
+      initialScrollIndex: 20,
+      keyExtractor: itemKey,
+      renderItem: ({item}) => <Text>{item}</Text>,
+    });
+    harness = mounted;
+    expect(mounted.wrapperOpacity()).toBe(0);
+
+    mounted.layout(360, 640);
+    await mounted.settle(20);
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    expect(session).toBeDefined();
+
+    const initFlags = SLOT_DELTA_FLAG_ACTIVE | SLOT_DELTA_FLAG_CREATED | SLOT_DELTA_FLAG_ITEM_CHANGED;
+    await act(async () => {
+      session.onSlotRebinds(
+        6,
+        20,
+        25,
+        1,
+        6400,
+        -1,
+        0,
+        packDeltas(
+          Array.from({length: 6}, (_, s) => ({
+            slotId: s,
+            itemIndex: 20 + s,
+            generation: s + 1,
+            flags: initFlags,
+          })),
+        ),
+      );
+    });
+    for (let i = 0; i < 6; i++) {
+      await mounted.settle(40);
+    }
+    expect(mounted.wrapperOpacity()).not.toBe(0);
+  });
+
+  it('reveals initialScrollIndex > 0 promptly under Native Template when onContentSize arrives', async () => {
+    const items = makeItems(80);
+    const mounted = renderNitroList({
+      data: items,
+      recycleItems: true,
+      estimatedItemSize: 80,
+      getFixedItemSize: () => 80,
+      initialScrollIndex: 20,
+      keyExtractor: itemKey,
+      nativeTemplate: {
+        templates: {default: {type: 'text', textField: 't'}},
+        extractFields: (item) => ({t: item}),
+      },
+      renderItem: ({item}) => <Text>{item}</Text>,
+    });
+    harness = mounted;
+    expect(mounted.wrapperOpacity()).toBe(0);
+
+    mounted.layout(360, 640);
+    await mounted.settle(20);
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    expect(session).toBeDefined();
+
+    await act(async () => {
+      session.onContentSize(6400, 1);
+    });
+    for (let i = 0; i < 6; i++) {
+      await mounted.settle(40);
+    }
+    expect(mounted.wrapperOpacity()).not.toBe(0);
+  });
+
+  it('keeps slot Shadow Tree top/left aligned with dynamic offset shifts, coalesces syncNow, and avoids user renderItem rerenders', async () => {
+    const renderCalls = new Map<number, number>();
+    const items = makeItems(40);
+    const mounted = renderNitroList({
+      data: items,
+      recycleItems: true,
+      estimatedItemSize: 80,
+      keyExtractor: itemKey,
+      renderItem: ({item, index}) => {
+        renderCalls.set(index, (renderCalls.get(index) ?? 0) + 1);
+        return <Text>{item}</Text>;
+      },
+    });
+    harness = mounted;
+    mounted.layout(360, 640);
+    await mounted.settle(50);
+
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    const mirror = getLastMirror();
+    const initFlags = SLOT_DELTA_FLAG_ACTIVE | SLOT_DELTA_FLAG_CREATED | SLOT_DELTA_FLAG_ITEM_CHANGED;
+    await act(async () => {
+      session.onSlotRebinds(
+        4,
+        0,
+        3,
+        mirror.core.getLayoutVersion(),
+        mirror.core.getTotalSize(),
+        -1,
+        0,
+        packDeltas(
+          Array.from({length: 4}, (_, s) => ({
+            slotId: s,
+            itemIndex: s,
+            generation: s + 1,
+            flags: initFlags,
+          })),
+        ),
+      );
+    });
+
+    // Simulate item 0 growing from 80dp -> 140dp on native UI thread (type-0 average propagates
+    // to unmeasured items 1..3 -> offsets become 0, 140, 280, 420).
+    renderCalls.clear();
+    const syncBefore = session.syncNowCount;
+    mirror.core.setItemSize(0, 140);
+    await act(async () => {
+      session.onContentSize(mirror.core.getTotalSize(), mirror.core.getLayoutVersion());
+    });
+
+    const slotViews = mounted.renderer.root.findAll(
+      (node) =>
+        (node.type as unknown) === 'View' &&
+        typeof node.props.nativeID === 'string' &&
+        node.props.nativeID.startsWith('nl:'),
+    );
+    expect(slotViews).toHaveLength(4);
+    for (let s = 0; s < 4; s++) {
+      expect((StyleSheet.flatten(slotViews[s].props.style) as Record<string, unknown>).top).toBe(
+        mirror.core.getOffset(s),
+      );
+    }
+    expect((StyleSheet.flatten(slotViews[1].props.style) as Record<string, unknown>).top).toBe(140);
+    expect((StyleSheet.flatten(slotViews[2].props.style) as Record<string, unknown>).top).toBe(280);
+    expect((StyleSheet.flatten(slotViews[3].props.style) as Record<string, unknown>).top).toBe(420);
+
+    // Multiple slot offset updates in the same commit coalesce into 1 syncNow call.
+    expect(session.syncNowCount - syncBefore).toBe(1);
+    // NitroListCellContent memoization prevents user renderItem re-renders on pure offset shifts.
+    expect(renderCalls.size).toBe(0);
+  });
+
+  it('uses in-place fixed update fast-path without notifyDataCommit for fixed-size updates and tail appends', async () => {
+    type Row = {id: string; label: string; height: number};
+    const makeRows = (count: number, suffix: string, height = 80): Row[] =>
+      Array.from({length: count}, (_, i) => ({id: `row-${i}`, label: `v-${suffix}-${i}`, height}));
+
+    const mounted = renderNitroList<Row>({
+      data: makeRows(10, 'a'),
+      recycleItems: true,
+      estimatedItemSize: 80,
+      getFixedItemSize: (item) => item.height,
+      keyExtractor: (item) => item.id,
+      renderItem: ({item}) => <Text>{item.label}</Text>,
+    });
+    harness = mounted;
+    mounted.layout(360, 640);
+    await mounted.settle(50);
+
+    const session = Array.from(getMockNativeHostSessionsForTests().values())[0];
+    const initFlags = SLOT_DELTA_FLAG_ACTIVE | SLOT_DELTA_FLAG_CREATED | SLOT_DELTA_FLAG_ITEM_CHANGED;
+    await act(async () => {
+      session.onSlotRebinds(
+        3,
+        0,
+        2,
+        1,
+        800,
+        -1,
+        0,
+        packDeltas(
+          Array.from({length: 3}, (_, s) => ({
+            slotId: s,
+            itemIndex: s,
+            generation: s + 1,
+            flags: initFlags,
+          })),
+        ),
+      );
+    });
+
+    const commitsBefore = session.notifyDataCommitCount;
+    const syncsBefore = session.syncNowCount;
+
+    // 1. In-place payload update with same keys & unchanged fixed sizes -> no notifyDataCommit!
+    mounted.update({data: makeRows(10, 'b')});
+    await mounted.settle(50);
+    expect(session.notifyDataCommitCount).toBe(commitsBefore);
+    expect(session.syncNowCount).toBeGreaterThan(syncsBefore);
+    const updatedTexts = mounted.renderer.root.findAll(
+      (node) => node.type === Text && node.props.children === 'v-b-0',
+    );
+    expect(updatedTexts).toHaveLength(1);
+
+    // 2. Tail append with same existing keys & unchanged fixed sizes -> still no notifyDataCommit!
+    const syncsBeforeAppend = session.syncNowCount;
+    mounted.update({data: makeRows(14, 'c')});
+    await mounted.settle(50);
+    expect(session.notifyDataCommitCount).toBe(commitsBefore);
+    expect(session.syncNowCount).toBeGreaterThan(syncsBeforeAppend);
+
+    // 3. Changing an existing item's fixed size exits the fast-path and calls notifyDataCommit.
+    const resized = makeRows(14, 'd');
+    resized[0] = {...resized[0], height: 120};
+    mounted.update({data: resized});
+    await mounted.settle(50);
+    expect(session.notifyDataCommitCount).toBe(commitsBefore + 1);
   });
 });

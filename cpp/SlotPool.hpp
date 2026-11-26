@@ -19,6 +19,7 @@ struct SlotRecord {
   bool parked = false;
   bool measures = true;
   bool invalidated = false;
+  bool inPlaceUpdate = false;
 };
 
 struct SlotDelta {

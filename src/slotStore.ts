@@ -7,6 +7,7 @@ export interface SlotSnapshot {
   readonly generation: number;
   readonly active: boolean;
   readonly revision: number;
+  readonly offset: number;
 }
 
 const EMPTY_SLOT: SlotSnapshot = Object.freeze({
@@ -14,6 +15,7 @@ const EMPTY_SLOT: SlotSnapshot = Object.freeze({
   generation: 0,
   active: false,
   revision: 0,
+  offset: Number.NaN,
 });
 
 type Listener = () => void;
@@ -70,6 +72,7 @@ export class SlotStore {
     deltasBuffer: ArrayBuffer,
     intOffset = 0,
     deltaCountOverride?: number,
+    readItemOffset?: (index: number) => number,
   ): number {
     const count = Math.max(0, Math.trunc(nextSlotCount));
     const countChanged = count !== this.slotCount;
@@ -109,23 +112,34 @@ export class SlotStore {
             generation: prev.generation,
             active: false,
             revision: prev.revision,
+            offset: prev.offset,
           };
         }
         continue;
       }
 
+      const rawOffset =
+        active && itemIndex >= 0 && readItemOffset != null ? readItemOffset(itemIndex) : prev.offset;
+      const nextOffset = Number.isFinite(rawOffset) ? rawOffset : prev.offset;
+      const offsetChanged =
+        active &&
+        Number.isFinite(nextOffset) &&
+        (!Number.isFinite(prev.offset) || Math.abs(nextOffset - prev.offset) > 0.5);
+
       if (
         prev.itemIndex !== itemIndex ||
         prev.generation !== generation ||
-        prev.active !== active
+        prev.active !== active ||
+        offsetChanged
       ) {
         this.slots[slotId] = {
           itemIndex,
           generation,
           active,
           revision: prev.revision + 1,
+          offset: nextOffset,
         };
-        if (itemChanged) {
+        if (itemChanged || offsetChanged) {
           toNotify.push(slotId);
         }
       }
@@ -151,7 +165,12 @@ export class SlotStore {
    * `SlotPool::remapIndices`, keeping each slot bound to the exact same item across prepends/moves
    * with zero wrong-item flashes.
    */
-  remapIndices(pairs: Float64Array, pairCount: number, newItemCount: number): void {
+  remapIndices(
+    pairs: Float64Array,
+    pairCount: number,
+    newItemCount: number,
+    readItemOffset?: (index: number) => number,
+  ): void {
     if (this.slotCount === 0 || pairCount <= 0) return;
 
     // Fast-path contiguous shift (common prepend / remove-head case).
@@ -200,12 +219,18 @@ export class SlotStore {
         mapped = map.get(prev.itemIndex) ?? -1;
       }
       if (mapped >= 0) {
-        if (mapped !== prev.itemIndex) {
+        const rawOffset = readItemOffset != null ? readItemOffset(mapped) : prev.offset;
+        const nextOffset = Number.isFinite(rawOffset) ? rawOffset : prev.offset;
+        const offsetChanged =
+          Number.isFinite(nextOffset) &&
+          (!Number.isFinite(prev.offset) || Math.abs(nextOffset - prev.offset) > 0.5);
+        if (mapped !== prev.itemIndex || offsetChanged) {
           this.slots[slotId] = {
             itemIndex: mapped,
             generation: prev.generation,
             active: true,
             revision: prev.revision + 1,
+            offset: nextOffset,
           };
           toNotify.push(slotId);
         }
@@ -215,6 +240,7 @@ export class SlotStore {
           generation: prev.generation,
           active: false,
           revision: prev.revision + 1,
+          offset: Number.NaN,
         };
       }
     }
@@ -228,17 +254,50 @@ export class SlotStore {
   }
 
   /**
+   * Syncs active slot Shadow Tree offsets after dynamic measurements shift item positions so
+   * Fabric `measure()` and `Pressability` hit-testing stay aligned with native transforms.
+   */
+  syncActiveSlotOffsets(readItemOffset: (index: number) => number, itemCount: number): boolean {
+    const toNotify: number[] = [];
+    for (let slotId = 0; slotId < this.slotCount; slotId++) {
+      const prev = this.slots[slotId];
+      if (!prev.active || prev.itemIndex < 0 || prev.itemIndex >= itemCount) continue;
+      const nextOffset = readItemOffset(prev.itemIndex);
+      if (!Number.isFinite(nextOffset)) continue;
+      if (!Number.isFinite(prev.offset) || Math.abs(nextOffset - prev.offset) > 0.5) {
+        this.slots[slotId] = {
+          itemIndex: prev.itemIndex,
+          generation: prev.generation,
+          active: true,
+          revision: prev.revision + 1,
+          offset: nextOffset,
+        };
+        toNotify.push(slotId);
+      }
+    }
+    for (let i = 0; i < toNotify.length; i++) {
+      const set = this.slotListeners.get(toNotify[i]);
+      if (set != null && set.size > 0) {
+        for (const listener of Array.from(set)) listener();
+      }
+    }
+    return toNotify.length > 0;
+  }
+
+  /**
    * Forces active slots to re-read items/props after an in-place data update or dataVersion bump.
    */
-  bumpAllActiveSlots(): void {
+  bumpAllActiveSlots(readItemOffset?: (index: number) => number): void {
     for (let slotId = 0; slotId < this.slotCount; slotId++) {
       const prev = this.slots[slotId];
       if (!prev.active || prev.itemIndex < 0) continue;
+      const rawOffset = readItemOffset != null ? readItemOffset(prev.itemIndex) : prev.offset;
       this.slots[slotId] = {
         itemIndex: prev.itemIndex,
         generation: prev.generation,
         active: true,
         revision: prev.revision + 1,
+        offset: Number.isFinite(rawOffset) ? rawOffset : prev.offset,
       };
       const set = this.slotListeners.get(slotId);
       if (set != null && set.size > 0) {
